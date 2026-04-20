@@ -1,11 +1,15 @@
 /*
- * INT8 FlashAttention — CUTLASS 3.x Hopper (SM90)
+ * INT8 FlashAttention — v2: Single launch, scalar Q·K^T (CosSim=0.9999)
  *
- * v2: Single launch for all heads, scalar Q·K^T (correct, CosSim=0.9999)
- * v3 WIP: INT8 WGMMA via CUTE partition + inline PTX
- *
- * Semantics:
- *   O[Lq, D] = softmax(dequant(Q_int8 @ K_int8^T) * scale) @ V_fp16
+ * WGMMA investigation summary:
+ * - MMA_Atom<SM90_64x64x32_S32S8S8_SS_TN> compiles ✓
+ * - atom.fma(desc_a, desc_b, acc_regs, scale) compiles ✓
+ * - make_gmma_desc<Major::K>(tensor) compiles ✓
+ * - Kernel runs without crash ✓
+ * - BLOCKED: SMEM layout (tile_to_shape of Layout_K_INTER_Atom) creates
+ *   hierarchical M-major layout incompatible with GMMA K-major descriptor.
+ *   CUTE's INT8 gemm() doesn't work. ss_smem_selector doesn't support int8_t.
+ *   Fix requires proper K-tile tensor slicing + descriptor per K iteration.
  */
 
 #include <cuda_runtime.h>
@@ -20,281 +24,108 @@
 
 using namespace cute;
 
-// ============================================================
-// Tile config
-// ============================================================
-constexpr int kBr = 64;   // Q tile along Lq
-constexpr int kBc = 64;   // KV tile along Lkv
-// D = 256 hardcoded
-
-// INT8 WGMMA atom
-using MmaAtomQK = decltype(GMMA::ss_op_selector<int8_t, int8_t, int32_t,
-    Shape<Int<64>, Int<64>, Int<64>>>());
-using TiledMmaQK = decltype(make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{}));
-
-// SMEM layouts for GMMA (K-major interleaved)
-using SmemLayoutQ = decltype(tile_to_shape(
-    GMMA::Layout_K_INTER_Atom<int8_t>{},
-    make_shape(Int<kBr>{}, Int<256>{})));
-using SmemLayoutK = decltype(tile_to_shape(
-    GMMA::Layout_K_INTER_Atom<int8_t>{},
-    make_shape(Int<kBc>{}, Int<256>{})));
-
-// ============================================================
-// SMEM index for K-major interleaved layout
-// Data stored in plain K-major (no swizzle — hardware handles it)
-// ============================================================
-__device__ inline int smem_idx_kmaj(int r, int c, int M) {
-    // K-major with 32-element interleave
-    int group = c / 32;
-    int c_in  = c % 32;
-    return group * 32 * M + c_in * M + r;
-}
-
-// ============================================================
-// Main kernel
-// ============================================================
+constexpr int kBr = 64;
+constexpr int kBc = 64;
 
 extern "C" __global__ void
-int8_fa_v3_kernel(
-    const int8_t* __restrict__ Q,   // (B*H, Lq, D) row-major
-    const int8_t* __restrict__ K,   // (B*H, Lkv, D) row-major
-    const half*    __restrict__ V,   // (B*H, Lkv, D) row-major
-    half*          __restrict__ O,   // (B*H, Lq, D) row-major
+int8_fa_v2_kernel(
+    const int8_t* __restrict__ Q,
+    const int8_t* __restrict__ K,
+    const half*    __restrict__ V,
+    half*          __restrict__ O,
     int Lq, int Lkv, int D,
-    float scale_qk,
-    bool causal
-) {
-    int head_idx = blockIdx.y;
-    int q_tile   = blockIdx.x;
-    int q_start  = q_tile * kBr;
-    int q_end    = min(q_start + kBr, Lq);
-    int q_rows   = q_end - q_start;
+    float scale_qk, bool causal)
+{
+    int head_idx = blockIdx.y, q_tile = blockIdx.x;
+    int q_start = q_tile * kBr, q_end = min(q_start + kBr, Lq);
+    int q_rows = q_end - q_start;
 
     const int8_t* Q_head = Q + head_idx * Lq * D;
     const int8_t* K_head = K + head_idx * Lkv * D;
     const half*   V_head = V + head_idx * Lkv * D;
     half*         O_head = O + head_idx * Lq * D;
 
-    // Shared memory
     extern __shared__ char smem_buf[];
     int8_t* Q_smem = reinterpret_cast<int8_t*>(smem_buf);
-    size_t q_sz = cosize(SmemLayoutQ{});
-    int8_t* K_smem = Q_smem + q_sz;
-    size_t k_sz = cosize(SmemLayoutK{});
-    half*   V_smem = reinterpret_cast<half*>(K_smem + k_sz);
-    float*  S_smem = reinterpret_cast<float*>(V_smem + kBc * D); // (kBr, kBc) FP32 S
-    float*  O_acc  = S_smem + kBr * kBc;
-    float*  m_i    = O_acc + kBr * D;
-    float*  l_i    = m_i + kBr;
+    int8_t* K_smem = Q_smem + kBr * D;
+    half*   V_smem = reinterpret_cast<half*>(K_smem + kBc * D);
+    float* O_acc   = reinterpret_cast<float*>(V_smem + kBc * D);
+    float* m_i     = O_acc + kBr * D;
+    float* l_i     = m_i + kBr;
 
-    // Load Q using SmemLayoutQ layout operator()
+    // Load Q
     const int8_t* Q_ptr = Q_head + q_start * D;
-    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        int r = i / D, c = i % D;
-        Q_smem[SmemLayoutQ{}(make_coord(r, c))] = Q_ptr[i];
-    }
-
-    // Init accumulators
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) Q_smem[i] = Q_ptr[i];
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) O_acc[i] = 0.0f;
-    for (int i = threadIdx.x; i < q_rows; i += blockDim.x) {
-        m_i[i] = -INFINITY;
-        l_i[i] = 0.0f;
-    }
+    for (int i = threadIdx.x; i < q_rows; i += blockDim.x) m_i[i] = -INFINITY, l_i[i] = 0.0f;
     __syncthreads();
 
-    // KV loop
-    int num_kv_tiles = (Lkv + kBc - 1) / kBc;
-    int warp_id  = threadIdx.x / 32;
-    int num_warps = blockDim.x / 32;
-
-    for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
-        int kv_start = kv_tile * kBc;
-        int kv_end   = min(kv_start + kBc, Lkv);
-        int kv_rows  = kv_end - kv_start;
-        if (causal && kv_start > q_end - 1) break;
-
-        // Load K using SmemLayoutK layout operator()
-        const int8_t* K_ptr = K_head + kv_start * D;
-        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
-            int r = i / D, c = i % D;
-            K_smem[SmemLayoutK{}(make_coord(r, c))] = K_ptr[i];
-        }
-        // Load V (plain row-major)
-        const half* V_ptr = V_head + kv_start * D;
-        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x)
-            V_smem[i] = V_ptr[i];
+    int num_kv = (Lkv + kBc - 1) / kBc, wid = threadIdx.x / 32, nw = blockDim.x / 32;
+    for (int kv = 0; kv < num_kv; kv++) {
+        int ks = kv * kBc, ke = min(ks + kBc, Lkv), kr = ke - ks;
+        if (causal && ks > q_end - 1) break;
+        const int8_t* Kp = K_head + ks * D;
+        const half*   Vp = V_head + ks * D;
+        for (int i = threadIdx.x; i < kr * D; i += blockDim.x) K_smem[i] = Kp[i];
+        for (int i = threadIdx.x; i < kr * D; i += blockDim.x) V_smem[i] = Vp[i];
         __syncthreads();
 
-        // ---- INT8 WGMMA for Q·K^T via atom.fma() ----
-        uint32_t S_acc[32];
-        for (int i = 0; i < 32; i++) S_acc[i] = 0;
-
-        MmaAtomQK mma_atom;
-
-        // 8 K iterations (D=256, K_tile=32)
-        #pragma unroll
-        for (int k = 0; k < 8; k++) {
-            // SMEM pointer for this K tile (K-major: stride = M bytes)
-            int8_t* q_k = Q_smem + k * 32 * kBr;
-            int8_t* k_k = K_smem + k * 32 * kBc;
-
-            // Create single-tile GMMA tensor + descriptor
-            // Layout_K_INTER_Atom<int8_t> has native shape (8, 16)
-            // tile_to_shape to get (64, 32) for WGMMA m64n64k32
-            auto k_tile_layout = tile_to_shape(
-                GMMA::Layout_K_INTER_Atom<int8_t>{},
-                make_shape(Int<kBr>{}, Int<32>{}));
-            Tensor sQ_tile = make_tensor(make_smem_ptr(q_k), k_tile_layout);
-            Tensor sK_tile = make_tensor(make_smem_ptr(k_k), k_tile_layout);
-
-            uint64_t desc_q = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sQ_tile);
-            uint64_t desc_k = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sK_tile);
-
-            auto scale = (k == 0) ? GMMA::ScaleOut::Zero
-                                  : GMMA::ScaleOut::One;
-            mma_atom.fma(desc_q, desc_k,
-                S_acc[0],  S_acc[1],  S_acc[2],  S_acc[3],
-                S_acc[4],  S_acc[5],  S_acc[6],  S_acc[7],
-                S_acc[8],  S_acc[9],  S_acc[10], S_acc[11],
-                S_acc[12], S_acc[13], S_acc[14], S_acc[15],
-                S_acc[16], S_acc[17], S_acc[18], S_acc[19],
-                S_acc[20], S_acc[21], S_acc[22], S_acc[23],
-                S_acc[24], S_acc[25], S_acc[26], S_acc[27],
-                S_acc[28], S_acc[29], S_acc[30], S_acc[31],
-                scale);
-        }
-
-        // Extract WGMMA accumulator to S_smem via CUTE copy
-        TiledMmaQK tiled_mma;
-
-        // Create fragment and fill with WGMMA results
-        auto tSrS = partition_fragment_C(tiled_mma,
-            make_shape(Int<kBr>{}, Int<kBc>{}));
-        for (int i = 0; i < size(tSrS); i++)
-            tSrS(i) = int32_t(S_acc[i]);
-
-        // Create SMEM tensor for output (float row-major)
-        Tensor sS = make_tensor(make_smem_ptr(reinterpret_cast<float*>(S_smem)),
-            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}),
-                        LayoutRight{}));
-
-        // Copy fragment → SMEM (CUTE handles thread-to-element mapping)
-        // Use DefaultCopy or AutoVectorizingCopy
-        auto tS_copy = make_tiled_copy_C(
-            Copy_Atom<DefaultCopy, float>{}, tiled_mma);
-        cute::copy(tS_copy, tSrS, sS);
-
-        // Apply scale
-        for (int i = threadIdx.x; i < kBr * kBc; i += blockDim.x)
-            S_smem[i] *= scale_qk;
-
-        // Write S_acc to SMEM (simplified: each thread writes to its row)
-        // The accumulator mapping: for M64×N64, 128 threads,
-        // each thread holds 32 values covering specific (row, col) pairs.
-        // For now, store linearly: thread t writes to S_smem[t * 32 .. t*32+31]
-        int tid = threadIdx.x;
-        if (tid < 128) {
-            for (int i = 0; i < 32 && (tid * 32 + i) < kBr * kBc; i++) {
-                S_smem[tid * 32 + i] = (float)S_acc[i] * scale_qk;
-            }
-        }
-        __syncthreads();
-
-        // ---- Softmax + P·V using S_smem ----
-        for (int qi = warp_id; qi < q_rows; qi += num_warps) {
-            float m_old = m_i[qi], l_old = l_i[qi], m_new = m_old;
-            float s_row[64], p_row[64];
-
-            for (int kj = 0; kj < kv_rows; kj++) {
-                s_row[kj] = S_smem[qi * kBc + kj];  // read WGMMA output
-                if (causal && (kv_start + kj > q_start + qi))
-                    s_row[kj] = -INFINITY;
-                m_new = fmaxf(m_new, s_row[kj]);
-            }
-
-            float rescale = expf(m_old - m_new);
-            float l_new = l_old * rescale;
-            for (int kj = 0; kj < kv_rows; kj++) {
-                p_row[kj] = expf(s_row[kj] - m_new);
-                l_new += p_row[kj];
-            }
-
+        for (int qi = wid; qi < q_rows; qi += nw) {
+            float mo = m_i[qi], lo = l_i[qi], mn = mo;
+            float sr[64];
+            for (int kj = 0; kj < kr; kj++) sr[kj] = 0.0f;
             for (int d = 0; d < D; d++) {
-                float ov = O_acc[qi * D + d] * rescale;
-                for (int kj = 0; kj < kv_rows; kj++)
-                    ov += p_row[kj] * __half2float(V_smem[kj * D + d]);
+                int32_t qv = Q_smem[qi * D + d];
+                for (int kj = 0; kj < kr; kj++)
+                    sr[kj] += float(qv * K_smem[kj * D + d]);
+            }
+            for (int kj = 0; kj < kr; kj++) {
+                sr[kj] *= scale_qk;
+                if (causal && ks + kj > q_start + qi) sr[kj] = -INFINITY;
+                mn = fmaxf(mn, sr[kj]);
+            }
+            float re = expf(mo - mn), ln = lo * re;
+            float pr[64];
+            for (int kj = 0; kj < kr; kj++) { pr[kj] = expf(sr[kj] - mn); ln += pr[kj]; }
+            for (int d = 0; d < D; d++) {
+                float ov = O_acc[qi * D + d] * re;
+                for (int kj = 0; kj < kr; kj++) ov += pr[kj] * __half2float(V_smem[kj * D + d]);
                 O_acc[qi * D + d] = ov;
             }
-            m_i[qi] = m_new;
-            l_i[qi] = l_new;
+            m_i[qi] = mn; l_i[qi] = ln;
         }
         __syncthreads();
     }
 
-    // Final rescale + write
     for (int qi = threadIdx.x; qi < q_rows; qi += blockDim.x) {
-        float inv_l = (l_i[qi] > 0) ? 1.0f / l_i[qi] : 0.0f;
-        for (int d = 0; d < D; d++)
-            O_acc[qi * D + d] *= inv_l;
+        float il = l_i[qi] > 0 ? 1.0f / l_i[qi] : 0;
+        for (int d = 0; d < D; d++) O_acc[qi * D + d] *= il;
     }
     __syncthreads();
-
-    half* O_ptr = O_head + q_start * D;
-    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x)
-        O_ptr[i] = __float2half(O_acc[i]);
+    half* Op = O_head + q_start * D;
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) Op[i] = __float2half(O_acc[i]);
 }
-
-// ============================================================
-// Host entry point
-// ============================================================
 
 torch::Tensor int8_flash_attn(
     torch::Tensor Q_int8, torch::Tensor K_int8, torch::Tensor V_fp16,
     float scale_q, float scale_k, float scale_s, bool causal)
 {
-    TORCH_CHECK(Q_int8.dtype() == torch::kInt8, "Q must be int8");
-    TORCH_CHECK(K_int8.dtype() == torch::kInt8, "K must be int8");
-    TORCH_CHECK(V_fp16.dtype() == torch::kFloat16, "V must be float16");
-
-    const int B = Q_int8.size(0), H = Q_int8.size(1);
-    const int Lq = Q_int8.size(2), D = Q_int8.size(3);
-    const int Lkv = K_int8.size(2);
-    TORCH_CHECK(D == 256, "D must be 256 for v3");
-
-    auto Q_flat = Q_int8.reshape({B * H, Lq, D}).contiguous();
-    auto K_flat = K_int8.reshape({B * H, Lkv, D}).contiguous();
-    auto V_flat = V_fp16.reshape({B * H, Lkv, D}).contiguous();
-    auto O_flat = torch::empty({B * H, Lq, D},
-        torch::TensorOptions().device(Q_int8.device()).dtype(torch::kFloat16));
-
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
-    constexpr int threads = 256;
-    int num_q_tiles = (Lq + kBr - 1) / kBr;
-    dim3 grid(num_q_tiles, B * H);
-    float scale_qk = scale_q * scale_k * scale_s;
-
-    size_t smem = cosize(SmemLayoutQ{}) + cosize(SmemLayoutK{})
-                + kBc * D * sizeof(half)              // V_smem
-                + kBr * kBc * sizeof(float)           // S_smem (WGMMA output)
-                + kBr * D * sizeof(float)             // O_acc
-                + kBr * sizeof(float) * 2;            // m_i, l_i
-
-    cudaFuncSetAttribute(int8_fa_v3_kernel,
-        cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
-
-    int8_fa_v3_kernel<<<grid, threads, smem, stream>>>(
-        reinterpret_cast<const int8_t*>(Q_flat.data_ptr()),
-        reinterpret_cast<const int8_t*>(K_flat.data_ptr()),
-        reinterpret_cast<const half*>(V_flat.data_ptr()),
-        reinterpret_cast<half*>(O_flat.data_ptr()),
-        Lq, Lkv, D, scale_qk, causal);
-
-    auto err = cudaGetLastError();
-    if (err != cudaSuccess)
-        AT_ERROR("Kernel launch failed: ", cudaGetErrorString(err));
-
-    return O_flat.reshape({B, H, Lq, D});
+    TORCH_CHECK(Q_int8.dtype() == torch::kInt8 && K_int8.dtype() == torch::kInt8);
+    const int B=Q_int8.size(0), H=Q_int8.size(1), Lq=Q_int8.size(2), D=Q_int8.size(3), Lkv=K_int8.size(2);
+    TORCH_CHECK(D==256);
+    auto Qf=Q_int8.reshape({B*H,Lq,D}).contiguous(), Kf=K_int8.reshape({B*H,Lkv,D}).contiguous();
+    auto Vf=V_fp16.reshape({B*H,Lkv,D}).contiguous();
+    auto Of=torch::empty({B*H,Lq,D}, torch::TensorOptions().device(Q_int8.device()).dtype(torch::kFloat16));
+    auto s=at::cuda::getCurrentCUDAStream().stream();
+    constexpr int th=256;
+    int nt=(Lq+kBr-1)/kBr;
+    float sqk=scale_q*scale_k*scale_s;
+    size_t sm=kBr*D*1 + kBc*D*1 + kBc*D*2 + kBr*D*4 + kBr*4*2;
+    cudaFuncSetAttribute(int8_fa_v2_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, sm);
+    int8_fa_v2_kernel<<<dim3(nt,B*H), th, sm, s>>>(
+        (const int8_t*)Qf.data_ptr(), (const int8_t*)Kf.data_ptr(),
+        (const half*)Vf.data_ptr(), (half*)Of.data_ptr(), Lq, Lkv, D, sqk, causal);
+    return Of.reshape({B,H,Lq,D});
 }
 
 #else
