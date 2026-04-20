@@ -164,12 +164,33 @@ int8_fa_v3_kernel(
                 scale);
         }
 
-        // Dequant + write S to SMEM (simplified linear mapping)
-        for (int i = 0; i < 32; i++) {
-            int tid = threadIdx.x;
-            int idx = tid * 32 + i;
-            if (tid < 128 && idx < kBr * kBc)
-                S_smem[idx] = float(int32_t(S_acc[i])) * scale_qk;
+        // Extract WGMMA accumulator to S_smem using fragment layout
+        // partition_fragment_C gives the correct (row, col) mapping
+        TiledMmaQK tiled_mma;
+        auto tSrS = partition_fragment_C(tiled_mma,
+            make_shape(Int<kBr>{}, Int<kBc>{}));
+
+        // Copy raw accumulator into fragment
+        for (int i = 0; i < size(tSrS); i++) {
+            float val = float(int32_t(S_acc[i])) * scale_qk;
+            // Store via fragment — the layout encodes (row, col)
+            // Each thread writes to its assigned positions in S_smem
+            tSrS(i) = int32_t(S_acc[i]);  // keep INT32 for now
+        }
+
+        // Write fragment values to S_smem at correct positions
+        // For each element in the fragment, compute (row, col) and store
+        // tSrS layout: each thread's values map to specific (r, c) in (kBr, kBc)
+        for (int i = 0; i < size(tSrS); i++) {
+            int32_t val = tSrS(i);
+            // Get the global (row, col) coordinate for this fragment element
+            // The fragment's layout encodes the position
+            auto coord = cute::idx2crd(i, tSrS.layout());
+            int r = cute::get<0>(coord);
+            int c = cute::get<1>(coord);
+            if (r < kBr && c < kBc) {
+                S_smem[r * kBc + c] = float(val) * scale_qk;
+            }
         }
 
         // Write S_acc to SMEM (simplified: each thread writes to its row)
