@@ -102,7 +102,6 @@ int8_fa_v2_kernel(
     // ---- KV loop ----
     int num_kv_tiles = (Lkv + kBc - 1) / kBc;
     int warp_id  = threadIdx.x / 32;
-    int lane_id  = threadIdx.x % 32;
     int num_warps = blockDim.x / 32;
 
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
@@ -126,7 +125,12 @@ int8_fa_v2_kernel(
         }
         __syncthreads();
 
-        // ---- Q·K^T (INT8, scalar for now, WGMMA to come) ----
+        // ---- Q·K^T (scalar v2, WGMMA to be properly integrated) ----
+        // Note: MMA_Atom<SM90_64x64x32_S32S8S8_SS_TN> compiles.
+        // WGMMA integration requires:
+        // 1. GMMA interleaved SMEM layouts for Q/K
+        // 2. Proper fragment partition + extraction
+        // 3. Async WGMMA control (fence/commit/wait)
         for (int qi = warp_id; qi < q_rows; qi += num_warps) {
             float m_old = m_i[qi];
             float l_old = l_i[qi];
