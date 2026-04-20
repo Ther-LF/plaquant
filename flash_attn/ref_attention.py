@@ -1,9 +1,11 @@
-"""Reference implementations and ResQ baseline for mixed-precision attention.
+"""Reference implementations and baselines for mixed-precision attention.
 
 Provides:
-  1. fp32_ref_attention  — PyTorch FP32 ground truth
-  2. resq_baseline_attention — ResQ's separate-kernel approach
-  3. compute_metrics — accuracy metrics (cosine sim, RMSE, etc.)
+  1. fp32_ref_attention        — PyTorch FP32 ground truth (accuracy)
+  2. fa_fp16_attention          — torch SDPA (FA2/FA3 backend, perf upper bound)
+  3. int8_only_attention        — INT8 Q·K^T + FP16 P·V (quantization benefit)
+  4. resq_baseline_attention    — INT8+INT4 mixed precision (ResQ approach)
+  5. compute_metrics            — accuracy metrics (cosine sim, RMSE, etc.)
 """
 
 import torch
@@ -111,6 +113,83 @@ def resq_baseline_attention(
     o = torch.bmm(p, v)  # (B*H, Lq, d_head) FP16
 
     return o.reshape(B, H, Lq, d_head)
+
+
+def fa_fp16_attention(q_fp16, k_fp16, v_fp16, scale=None, causal=False):
+    """FA FP16 baseline using torch SDPA (calls FA2/FA3 backend on H20).
+
+    This is the performance UPPER BOUND for any quantized attention.
+
+    Args:
+        q_fp16: (B, H, Lq, d_head) FP16
+        k_fp16: (B, H, Lkv, d_head) FP16
+        v_fp16: (B, H, Lkv, d_head) FP16
+        scale: softmax scale (optional)
+        causal: apply causal mask
+
+    Returns:
+        out: (B, H, Lq, d_head) FP16
+    """
+    if scale is None:
+        scale = 1.0 / (q_fp16.shape[-1] ** 0.5)
+
+    return F.scaled_dot_product_attention(
+        q_fp16.half(), k_fp16.half(), v_fp16.half(),
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=causal,
+        scale=scale,
+    )
+
+
+def int8_only_attention(
+    q_int8, k_int8, v_fp16,
+    scale_q8, scale_k8,
+    scale=None, causal=False,
+):
+    """INT8-only FlashAttention: Q·K^T in INT8, P·V in FP16.
+
+    Simulates what an INT8-native FlashAttention kernel would compute.
+    Used to isolate the overhead of INT4+INT8 mixed precision vs pure INT8.
+
+    Args:
+        q_int8:  (B, H, Lq, d_head) INT8 (full d_head, not split)
+        k_int8:  (B, H, Lkv, d_head) INT8
+        v_fp16:  (B, H, Lkv, d_head) FP16
+        scale_q8: scalar FP32
+        scale_k8: scalar FP32
+        scale:   softmax scale (optional)
+        causal:  apply causal mask
+
+    Returns:
+        out: (B, H, Lq, d_head) FP16
+    """
+    B, H, Lq, D = q_int8.shape
+    Lkv = k_int8.shape[2]
+
+    if scale is None:
+        scale = 1.0 / (D ** 0.5)
+
+    # ---- Q·K^T: INT8 ----
+    q8 = q_int8.float().reshape(B * H, Lq, D)
+    k8 = k_int8.float().reshape(B * H, Lkv, D)
+    s = torch.bmm(q8, k8.transpose(1, 2))  # (B*H, Lq, Lkv)
+    s = s * _to_tensor(scale_q8, q8) * _to_tensor(scale_k8, k8) * scale
+
+    if causal:
+        mask = torch.triu(
+            torch.ones(Lq, Lkv, device=s.device, dtype=torch.bool),
+            diagonal=Lkv - Lq + 1,
+        )
+        s.masked_fill_(mask, float('-inf'))
+
+    p = F.softmax(s, dim=-1, dtype=torch.float32).half()
+
+    # ---- P·V (FP16) ----
+    v = v_fp16.reshape(B * H, Lkv, D).half()
+    o = torch.bmm(p, v)
+
+    return o.reshape(B, H, Lq, D)
 
 
 def _to_tensor(s, ref):
