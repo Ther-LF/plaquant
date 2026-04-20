@@ -124,9 +124,15 @@ def bench_function(fn, warmup=5, repeat=100):
 
 
 def compute_flops(B, H, Lq, Lkv, d_head, causal):
-    """Compute theoretical FLOPs for attention forward."""
+    """Compute theoretical FLOPs for attention forward.
+
+    FA3 formula: FLOPs = B * H * 2 * Lq * avg_kv_len * (headdim + headdim_v)
+    = 4 * B * H * Lq * avg_kv_len * d_head  (when headdim_v = d_head)
+
+    This counts both Q·K^T (2*Lq*Lkv*d) and P·V (2*Lq*Lkv*d).
+    """
     avg_kv = Lkv / 2 if causal else Lkv
-    return 2 * B * H * Lq * avg_kv * d_head
+    return 4 * B * H * Lq * avg_kv * d_head
 
 
 # ============================================================
