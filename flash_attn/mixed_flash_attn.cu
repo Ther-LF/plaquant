@@ -42,6 +42,7 @@ using SmemLayoutK = decltype(tile_to_shape(
 
 // ============================================================
 // SMEM index for K-major interleaved layout
+// Data stored in plain K-major (no swizzle — hardware handles it)
 // ============================================================
 __device__ inline int smem_idx_kmaj(int r, int c, int M) {
     // K-major with 32-element interleave
@@ -87,11 +88,12 @@ int8_fa_v3_kernel(
     float*  m_i    = O_acc + kBr * D;
     float*  l_i    = m_i + kBr;
 
-    // Load Q into interleaved SMEM
+    // Load Q using CUTE SmemLayoutQ to compute correct GMMA offset
     const int8_t* Q_ptr = Q_head + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
         int r = i / D, c = i % D;
-        Q_smem[smem_idx_kmaj(r, c, kBr)] = Q_ptr[i];
+        int smem_off = cute::crd2idx(cute::make_tuple(r, c), SmemLayoutQ{});
+        Q_smem[smem_off] = Q_ptr[i];
     }
 
     // Init accumulators
@@ -113,11 +115,11 @@ int8_fa_v3_kernel(
         int kv_rows  = kv_end - kv_start;
         if (causal && kv_start > q_end - 1) break;
 
-        // Load K into interleaved SMEM
+        // Load K using CUTE SmemLayoutK
         const int8_t* K_ptr = K_head + kv_start * D;
         for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
             int r = i / D, c = i % D;
-            K_smem[smem_idx_kmaj(r, c, kBc)] = K_ptr[i];
+            K_smem[cute::crd2idx(cute::make_tuple(r, c), SmemLayoutK{})] = K_ptr[i];
         }
         // Load V (plain row-major)
         const half* V_ptr = V_head + kv_start * D;
