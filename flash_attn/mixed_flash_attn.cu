@@ -115,13 +115,19 @@ int8_fa_v3_kernel(
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
             auto tiled_copy = make_tiled_copy_C(
-                Copy_Atom<UniversalCopy<float>, float>{}, tiled_mma);
+                Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
             auto thr_copy = tiled_copy.get_slice(tid);
-            Tensor sS = make_tensor(make_smem_ptr(S_smem),
+            // Create INT32 SMEM view, then convert to float
+            int32_t* S_smem_i32 = reinterpret_cast<int32_t*>(S_smem);
+            Tensor sS_i32 = make_tensor(make_smem_ptr(S_smem_i32),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tSrD = thr_copy.partition_D(sS);
+            auto tSrD = thr_copy.partition_D(sS_i32);
+            // Write INT32 accumulator via TiledCopy
             for (int i = 0; i < size(tSrD); i++)
-                tSrD(i) = float(int32_t(S_acc[i])) * scale_qk;
+                tSrD(i) = int32_t(S_acc[i]);
+            // Convert to float + scale separately
+            for (int i = threadIdx.x; i < kBr * kBc; i += blockDim.x)
+                S_smem[i] = float(S_smem_i32[i]) * scale_qk;
         }
         __syncthreads();
 
