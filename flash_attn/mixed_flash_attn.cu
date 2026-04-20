@@ -16,6 +16,7 @@
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
+#include "cutlass/gemm/collective/builders/sm90_gmma_builder.inl"
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -28,25 +29,26 @@ constexpr int kBr = 64;   // Q tile along Lq
 constexpr int kBc = 64;   // KV tile along Lkv
 // D = head dim, runtime parameter (must be multiple of 32 for WGMMA)
 
-// INT8 WGMMA atom: M64×N64×K32
-using MmaAtomQK = SM90_64x64x32_S32S8S8_SS_TN;
+// INT8 WGMMA: use GMMA::ss_op_selector with new CUTLASS
 using TiledMmaQK = decltype(make_tiled_mma(
-    MMA_Atom<MmaAtomQK>{},
+    GMMA::ss_op_selector<int8_t, int8_t, int32_t, Shape<Int<64>, Int<64>, Int<32>>>{},
     Layout<Shape<_1, _1, _1>>{}));
 
 // ============================================================
 // GMMA interleaved SMEM layouts for INT8
 // ============================================================
-// Q: (M, K) row-major → MN_INTER_Atom
-// K: needs K^T → col-major → K_INTER_Atom
-
+// Use ss_smem_selector from new CUTLASS
+using SmemLayoutAtomQ = decltype(
+    cutlass::gemm::collective::detail::ss_smem_selector<
+        GMMA::Major::K, int8_t, Int<kBr>, Int<256>>());
 using SmemLayoutQ = decltype(tile_to_shape(
-    GMMA::Layout_MN_INTER_Atom<int8_t>{},
-    make_shape(Int<kBr>{}, Int<256>{})));  // D hardcoded to 256 for now
+    SmemLayoutAtomQ{}, make_shape(Int<kBr>{}, Int<256>{})));
 
+using SmemLayoutAtomK = decltype(
+    cutlass::gemm::collective::detail::ss_smem_selector<
+        GMMA::Major::K, int8_t, Int<kBc>, Int<256>>());
 using SmemLayoutK = decltype(tile_to_shape(
-    GMMA::Layout_K_INTER_Atom<int8_t>{},
-    make_shape(Int<kBc>{}, Int<256>{})));
+    SmemLayoutAtomK{}, make_shape(Int<kBc>{}, Int<256>{})));
 
 // ============================================================
 // Main kernel
