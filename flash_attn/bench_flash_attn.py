@@ -160,6 +160,8 @@ def backend_peak(name, k_high=128, k_low=128):
         return H20_PEAK['int8']
     elif name == 'resq_mixed':
         return mixed_peak(k_high, k_low)
+    elif name == 'our_int8':
+        return H20_PEAK['int8']
     return 0
 
 
@@ -185,7 +187,7 @@ def build_configs(seq_lens):
 # Backend Definitions
 # ============================================================
 
-BACKENDS = ['fa_fp16', 'int8_only', 'resq_mixed']
+BACKENDS = ['fa_fp16', 'int8_only', 'resq_mixed', 'our_int8']
 
 
 def run_backend(name, data, ref_out, scale, causal, accuracy_only,
@@ -242,6 +244,28 @@ def run_backend(name, data, ref_out, scale, causal, accuracy_only,
                         data['scale_q8'], data['scale_k8'],
                         data['scale_q4'], data['scale_k4'],
                         scale=scale, causal=causal)
+                result['latency_ms'] = bench_function(fn, warmup, repeat)
+
+        elif name == 'our_int8':
+            try:
+                import mixed_flash_attn
+            except ImportError:
+                result['error'] = 'mixed_flash_attn not built'
+                return result
+
+            sq = data['scale_q8_full']
+            sk = data['scale_k8_full']
+            causal_flag = causal
+
+            out = mixed_flash_attn.int8_flash_attn(
+                data['q_int8_full'], data['k_int8_full'], data['v_fp16'],
+                float(sq), float(sk), scale, causal_flag)
+
+            if not accuracy_only:
+                def fn():
+                    mixed_flash_attn.int8_flash_attn(
+                        data['q_int8_full'], data['k_int8_full'], data['v_fp16'],
+                        float(sq), float(sk), scale, causal_flag)
                 result['latency_ms'] = bench_function(fn, warmup, repeat)
 
         result['accuracy'] = compute_metrics(
