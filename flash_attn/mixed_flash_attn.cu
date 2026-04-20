@@ -98,32 +98,10 @@ int8_fa_v3_kernel(
     float* m_i = O_acc + kBr * D;
     float* l_i = m_i + kBr;
 
-    // ---- Load Q into interleaved SMEM ----
+    // ---- Load Q into SMEM ----
     const int8_t* Q_ptr = Q_head + q_start * D;
-    // Use CUTE copy: gmem (row-major) → smem (interleaved)
-    Tensor sQ = make_tensor(make_smem_ptr(Q_smem), SmemLayoutQ{});
-    Tensor gQ = make_tensor(make_gmem_ptr(Q_ptr),
-        make_layout(make_shape(q_rows, D), GenRowMajor{}));
-    // Copy with default copy atom
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        int r = i / D;
-        int c = i % D;
-        Q_smem[smem_idx(r, c)] = Q_ptr[r * D + c];
-    }
-
-    // Compute SMEM index for interleaved layout (simplified)
-    // For MN_INTER_Atom, the layout is: rows × cols interleaved in groups of 32
-    auto q_smem_idx = [&](int r, int c) -> int {
-        // Each row has D bytes, but interleaved: cols 0-31, then 32-63, etc.
-        // For simplicity in v3: just use row-major (same as scalar)
-        // TODO: proper interleaved indexing for WGMMA
-        return r * D + c;
-    };
-
-    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        int r = i / D;
-        int c = i % D;
-        Q_smem[r * D + c] = Q_ptr[r * D + c];
+        Q_smem[i] = Q_ptr[i];
     }
 
     // Init accumulators
@@ -167,14 +145,14 @@ int8_fa_v3_kernel(
             TiledMmaQK tiled_mma_qk;
             auto wg_slice = tiled_mma_qk.get_slice(threadIdx.x);
 
-            // Create SMEM views with interleaved layouts
+            // Create SMEM views with interleaved layouts (D=256 hardcoded)
             Tensor sQ_t = make_tensor(make_smem_ptr(Q_smem),
-                make_layout(make_shape(Int<kBr>{}, Int<D>{}),
+                make_layout(make_shape(Int<kBr>{}, Int<256>{}),
                             SmemLayoutQ{}));
-            // K is stored col-major → use K_INTER layout
+            // K stored col-major (D=256, kBc=64) for K^T access
             Tensor sK_t = make_tensor(make_smem_ptr(K_smem),
-                make_layout(make_shape(Int<D>{}, Int<kBc>{}),
-                            GenColMajor{}));
+                make_layout(make_shape(Int<256>{}, Int<kBc>{}),
+                            LayoutLeft{}));  // col-major
 
             Tensor tSrQ = wg_slice.partition_A(sQ_t);
             Tensor tSrK = wg_slice.partition_B(sK_t);
@@ -182,20 +160,16 @@ int8_fa_v3_kernel(
                 make_shape(Int<kBr>{}, Int<kBc>{}));
 
             // Clear accumulator
-            CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tSrS); i++) tSrS(i) = int32_t(0);
 
-            // INT8 WGMMA loop over K dimension
-            int k_iters = D / 32;
-            CUTLASS_PRAGMA_UNROLL
+            // INT8 WGMMA loop over K dimension (256/32 = 8 iters)
+            constexpr int k_iters = 256 / 32;
+            #pragma unroll
             for (int k = 0; k < k_iters; k++) {
                 cute::gemm(tiled_mma_qk, tSrS,
                     tSrQ(_, _, k), tSrK(_, _, k), tSrS);
             }
 
-            // Store S fragment to shared memory for softmax processing
-            // (Each thread writes its fragment elements to SMEM)
-            // For now, write results to a temporary buffer
             // tSrS has INT32 values for (kBr, kBc)
             // TODO: extract to SMEM for softmax
         }
