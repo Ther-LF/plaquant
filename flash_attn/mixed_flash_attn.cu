@@ -245,14 +245,15 @@ torch::Tensor int8_flash_attn(
     // Process each head separately
     for (int b = 0; b < B; b++) {
         for (int h = 0; h < H; h++) {
-            const int8_t* Q_ptr = reinterpret_cast<const int8_t*>(
-                Q_int8.index({b, h}).data_ptr());
-            const int8_t* K_ptr = reinterpret_cast<const int8_t*>(
-                K_int8.index({b, h}).data_ptr());
-            const half* V_ptr = reinterpret_cast<const half*>(
-                V_fp16.index({b, h}).data_ptr());
-            half* O_ptr = reinterpret_cast<half*>(
-                O.index({b, h}).data_ptr());
+            auto Q_head = Q_int8.select(0, b).select(0, h).contiguous();
+            auto K_head = K_int8.select(0, b).select(0, h).contiguous();
+            auto V_head = V_fp16.select(0, b).select(0, h).contiguous();
+            auto O_head = O.select(0, b).select(0, h);
+
+            const int8_t* Q_ptr = reinterpret_cast<const int8_t*>(Q_head.data_ptr());
+            const int8_t* K_ptr = reinterpret_cast<const int8_t*>(K_head.data_ptr());
+            const half* V_ptr = reinterpret_cast<const half*>(V_head.data_ptr());
+            half* O_ptr = reinterpret_cast<half*>(O_head.data_ptr());
 
             int8_flash_attn_kernel
                 <<<grid, threads, smem_bytes, stream>>>(
@@ -260,6 +261,11 @@ torch::Tensor int8_flash_attn(
                     Lq, Lkv, D,
                     scale_q, scale_k, scale_s, causal);
         }
+    }
+
+    auto err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        AT_ERROR("Kernel launch failed: ", cudaGetErrorString(err));
     }
 
     return O;
