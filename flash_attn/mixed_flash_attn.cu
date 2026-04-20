@@ -88,12 +88,11 @@ int8_fa_v3_kernel(
     float*  m_i    = O_acc + kBr * D;
     float*  l_i    = m_i + kBr;
 
-    // Load Q using CUTE SmemLayoutQ to compute correct GMMA offset
+    // Load Q using SmemLayoutQ layout operator()
     const int8_t* Q_ptr = Q_head + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
         int r = i / D, c = i % D;
-        int smem_off = cute::crd2idx(cute::make_tuple(r, c), SmemLayoutQ{});
-        Q_smem[smem_off] = Q_ptr[i];
+        Q_smem[SmemLayoutQ{}(make_coord(r, c))] = Q_ptr[i];
     }
 
     // Init accumulators
@@ -115,11 +114,11 @@ int8_fa_v3_kernel(
         int kv_rows  = kv_end - kv_start;
         if (causal && kv_start > q_end - 1) break;
 
-        // Load K using CUTE SmemLayoutK
+        // Load K using SmemLayoutK layout operator()
         const int8_t* K_ptr = K_head + kv_start * D;
         for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
             int r = i / D, c = i % D;
-            K_smem[cute::crd2idx(cute::make_tuple(r, c), SmemLayoutK{})] = K_ptr[i];
+            K_smem[SmemLayoutK{}(make_coord(r, c))] = K_ptr[i];
         }
         // Load V (plain row-major)
         const half* V_ptr = V_head + kv_start * D;
