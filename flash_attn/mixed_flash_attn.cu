@@ -14,7 +14,6 @@
 
 #include <cuda_runtime.h>
 #include <cuda/barrier>
-#include <cuda/ptx_instructions>
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -23,7 +22,6 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
 #include "cutlass/arch/barrier.h"
-#include "cutlass/arch/reg_reconfig.h"
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -61,76 +59,7 @@ float warp_sum(float val) {
 }
 
 // ============================================================
-// INT8 WGMMA wrapper (Q·K^T): D_frag[m,n] = A[m,k] @ B[n,k]^T
-// ============================================================
-
-// Accumulator: 64×64 INT32 distributed across 32 threads in a warp
-// Each thread in the warpgroup holds a slice
-
-struct Int8WgmmaAccum {
-    // For M=64, N=64, INT8 wgmma produces INT32 fragments
-    // Distributed across 4 warps (warpgroup of 128 threads)
-    // Each thread holds multiple INT32 values
-    int32_t data[32];  // enough space for the fragment
-    int count;
-
-    __device__ void clear() {
-        #pragma unroll
-        for (int i = 0; i < 32; i++) data[i] = 0;
-        count = 0;
-    }
-};
-
-// Launch INT8 WGMMA: accumulator += A_smem @ B_smem^T
-// A_smem: (M, K) INT8 in shared memory, row-major
-// B_smem: (N, K) INT8 in shared memory, row-major (B is K,V stored row-major)
-// We compute: S[M,N] += A[M,K] @ B[N,K]^T
-template<int M, int N, int K>
-__device__ void int8_wgmma_s8s8(
-    Int8WgmmaAccum& accum,
-    const int8_t* A_smem,  // (M, K) row-major
-    const int8_t* B_smem   // (N, K) row-major (we need col-major access = B^T)
-) {
-    // WGMMA for INT8 on SM90: m64×n8×k32
-    // Operand A from SMEM (row-major), Operand B from SMEM (col-major for B^T)
-    // Actually B is stored row-major (N, K), we need it as (K, N) = B^T
-    // WGMMA descriptor needs to describe the transpose
-
-    constexpr int k_tile = 32;
-    static_assert(K % k_tile == 0, "K must be multiple of 32");
-    static_assert(M == 64, "M must be 64 for WGMMA");
-    static_assert(N % 8 == 0, "N must be multiple of 8");
-
-    // Use inline PTX for wgmma.mma_async.sync.aligned.m64n8k32.s8.s8.s32
-    // A desc: smem, row-major (major=row)
-    // B desc: smem, col-major (major=col) ← because we need B^T
-
-    // For now, use a simpler path: load to registers and use mma.sync
-    // In production, this should use proper WGMMA with descriptors
-
-    // This is a placeholder — will be replaced with proper WGMMA PTX
-    asm volatile(
-        "// wgmma.mma_async.sync.aligned.m64n8k32.s8.s8.s32 placeholder\n"
-        :: "r"(A_smem), "r"(B_smem)
-    );
-}
-
-// ============================================================
-// FP16 WGMMA wrapper (P·V): O_frag[m,d] = P[m,n] @ V[n,d]
-// ============================================================
-
-struct Fp16WgmmaAccum {
-    float data[64];  // enough for 64×256 FP32 accumulator per thread
-    int count;
-
-    __device__ void clear() {
-        #pragma unroll
-        for (int i = 0; i < 64; i++) data[i] = 0.0f;
-    }
-};
-
-// ============================================================
-// Main kernel
+// Main kernel (v1: scalar correctness, WGMMA to be added in v2)
 // ============================================================
 
 template<int kBr, int kBc, int kD>
