@@ -126,7 +126,7 @@ int8_fa_v3_kernel(
         __syncthreads();
 
         // ---- INT8 WGMMA for Q·K^T via atom.fma() ----
-        int32_t S_acc[32];
+        uint32_t S_acc[32];
         for (int i = 0; i < 32; i++) S_acc[i] = 0;
 
         MmaAtomQK mma_atom;
@@ -166,7 +166,7 @@ int8_fa_v3_kernel(
             int tid = threadIdx.x;
             int idx = tid * 32 + i;
             if (tid < 128 && idx < kBr * kBc)
-                S_smem[idx] = float(S_acc[i]) * scale_qk;
+                S_smem[idx] = float(int32_t(S_acc[i])) * scale_qk;
         }
 
         // Write S_acc to SMEM (simplified: each thread writes to its row)
