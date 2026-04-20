@@ -164,33 +164,29 @@ int8_fa_v3_kernel(
                 scale);
         }
 
-        // Extract WGMMA accumulator to S_smem using fragment layout
-        // partition_fragment_C gives the correct (row, col) mapping
+        // Extract WGMMA accumulator to S_smem via CUTE copy
         TiledMmaQK tiled_mma;
+        auto wg_slice = tiled_mma.get_slice(threadIdx.x);
+
+        // Create fragment and fill with WGMMA results
         auto tSrS = partition_fragment_C(tiled_mma,
             make_shape(Int<kBr>{}, Int<kBc>{}));
+        for (int i = 0; i < size(tSrS); i++)
+            tSrS(i) = int32_t(S_acc[i]);
 
-        // Copy raw accumulator into fragment
-        for (int i = 0; i < size(tSrS); i++) {
-            float val = float(int32_t(S_acc[i])) * scale_qk;
-            // Store via fragment — the layout encodes (row, col)
-            // Each thread writes to its assigned positions in S_smem
-            tSrS(i) = int32_t(S_acc[i]);  // keep INT32 for now
-        }
+        // Create SMEM tensor for output
+        Tensor sS = make_tensor(make_smem_ptr(S_smem),
+            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}),
+                        LayoutRight{}));
 
-        // Write fragment values to S_smem at correct positions
-        // For each element in the fragment, compute (row, col) and store
-        // tSrS layout: each thread's values map to specific (r, c) in (kBr, kBc)
-        for (int i = 0; i < size(tSrS); i++) {
-            int32_t val = tSrS(i);
-            // Get the global (row, col) coordinate for this fragment element
-            // The fragment's layout encodes the position
-            auto coord = cute::idx2crd(i, tSrS.layout());
-            int r = cute::get<0>(coord);
-            int c = cute::get<1>(coord);
-            if (r < kBr && c < kBc) {
-                S_smem[r * kBc + c] = float(val) * scale_qk;
-            }
+        // Copy fragment to SMEM (CUTE handles thread-to-element mapping)
+        // Use the warpgroup slice to write each thread's fragment
+        auto tSrS_smem = wg_slice.retile_C(sS);
+        for (int i = 0; i < size(tSrS_smem); i++) {
+            float val = float(int32_t(tSrS(i))) * scale_qk;
+            // tSrS and tSrS_smem have the same thread-level layout
+            // so element i in both corresponds to the same (row, col)
+            tSrS_smem(i) = val;
         }
 
         // Write S_acc to SMEM (simplified: each thread writes to its row)
