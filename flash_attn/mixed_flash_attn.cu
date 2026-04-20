@@ -17,9 +17,12 @@
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
+#include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
+
+using namespace cute;
 
 // ============================================================
 // Tile config
@@ -29,10 +32,17 @@ constexpr int kBc = 64;   // KV tile along Lkv
 // D (head dim) is runtime parameter
 
 // ============================================================
-// WGMMA will be added in v3 using CUTLASS CollectiveBuilder
-// (same pattern as resq_gemm_v2.cu) since CUTE ss_op_selector
-// doesn't support INT8 in this CUTLASS version.
+// INT8 WGMMA for Q·K^T: use atom directly (ss_op_selector missing INT8)
+// MMA_Traits<SM90_64x64x32_S32S8S8_SS_TN> exists at line 3704
 // ============================================================
+using MmaAtomQK = SM90_64x64x32_S32S8S8_SS_TN;
+using TiledMmaQK = decltype(make_tiled_mma(
+    MMA_Atom<MmaAtomQK>{},
+    Layout<Shape<_1, _1, _1>>{}));
+
+// SMEM layouts for INT8 WGMMA (interleaved for GMMA)
+using SmemAtomQ = GMMA::Layout_MN_INTER_Atom<int8_t>;
+using SmemAtomK = GMMA::Layout_K_INTER_Atom<int8_t>;
 
 // ============================================================
 // Main kernel
