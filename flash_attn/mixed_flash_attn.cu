@@ -29,10 +29,10 @@ constexpr int kBc = 64;   // KV tile along Lkv
 // D = head dim, runtime parameter (must be multiple of 32 for WGMMA)
 
 // INT8 WGMMA: SS mode needs K=64 (sparse), D=256 → 4 iterations
-// ss_op_selector is a function → need decltype(...()) to get return type
+using MmaAtomQK = decltype(GMMA::ss_op_selector<int8_t, int8_t, int32_t,
+    Shape<Int<64>, Int<64>, Int<64>>>());
 using TiledMmaQK = decltype(make_tiled_mma(
-    decltype(GMMA::ss_op_selector<int8_t, int8_t, int32_t,
-        Shape<Int<64>, Int<64>, Int<64>>>()){},
+    MmaAtomQK{},
     Layout<Shape<_1, _1, _1>>{}));
 
 // ============================================================
@@ -152,8 +152,9 @@ int8_fa_v3_kernel(
             constexpr int k_iters = 256 / 64;
             #pragma unroll
             for (int k = 0; k < k_iters; k++) {
-                cute::gemm(tiled_mma_qk,
-                    tSrQ(_, _, k), tSrK(_, _, k), tSrS);
+                auto sQ_k = tSrQ(_, _, k);
+                auto sK_k = tSrK(_, _, k);
+                cute::gemm(tiled_mma_qk, sQ_k, sK_k, tSrS);
                 tiled_mma_qk.accumulate_ = GMMA::ScaleOut::One;
             }
             // tSrS now contains INT32 S = Q @ K^T
