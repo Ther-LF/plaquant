@@ -1,44 +1,56 @@
-"""Debug WGMMA: test with known input values."""
+"""Debug WGMMA: test with different scales."""
 import torch, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 import mixed_flash_attn
+from ref_attention import fp32_ref_attention, compute_metrics
 
 D = 256
-B, H, Lq, Lkv = 1, 1, 64, 64  # Single tile
+scale_s = 1.0 / D ** 0.5
+V = torch.randn(1, 1, 64, D, dtype=torch.float16, device='cuda')
 
-# Test 1: all ones → each S[i,j] should be 256 * 1 * 1 = 256
-print("Test 1: Q=all 1s, K=all 1s")
-Q = torch.ones(B, H, Lq, D, dtype=torch.int8, device='cuda')
-K = torch.ones(B, H, Lkv, D, dtype=torch.int8, device='cuda')
-V = torch.ones(B, H, Lkv, D, dtype=torch.float16, device='cuda')
-
-scale = 1.0 / D ** 0.5
-O = mixed_flash_attn.int8_flash_attn(Q, K, V, 1.0, 1.0, scale, False)
-torch.cuda.synchronize()
-
-# Softmax of uniform values → each row should sum to 1
-row_sums = O[0, 0].float().sum(dim=1)
-print(f"  Row sums (should be ~1): min={row_sums.min():.4f} max={row_sums.max():.4f}")
-print(f"  O values range: [{O.min():.4f}, {O.max():.4f}]")
-
-# Test 2: Q=identity-like, K=identity-like
-print("\nTest 2: Q and K with different values")
+# Test 1: small INT8 values, scale=0.1
+print("Test 1: small INT8 + scale=0.1")
 torch.manual_seed(42)
-Q2 = torch.randint(-8, 7, (B, H, Lq, D), dtype=torch.int8, device='cuda')
-K2 = torch.randint(-8, 7, (B, H, Lkv, D), dtype=torch.int8, device='cuda')
-V2 = torch.ones(B, H, Lkv, D, dtype=torch.float16, device='cuda')
-
-O2 = mixed_flash_attn.int8_flash_attn(Q2, K2, V2, 0.1, 0.1, scale, False)
+Q1 = torch.randint(-8, 7, (1, 1, 64, D), dtype=torch.int8, device='cuda')
+K1 = torch.randint(-8, 7, (1, 1, 64, D), dtype=torch.int8, device='cuda')
+O1 = mixed_flash_attn.int8_flash_attn(Q1, K1, V, 0.1, 0.1, scale_s, False)
 torch.cuda.synchronize()
+ref1 = fp32_ref_attention(Q1.float() * 0.1, K1.float() * 0.1, V.float(), scale=scale_s)
+m1 = compute_metrics(O1.cpu(), ref1.cpu())
+print(f"  CosSim={m1['cosine_sim']:.4f} MaxErr={m1['max_abs_err']:.4f}")
 
-print(f"  O shape: {O2.shape}")
-print(f"  O values range: [{O2.min():.4f}, {O2.max():.4f}]")
+# Test 2: full range INT8, proper scale
+print("Test 2: full range INT8 + scale=0.031")
+torch.manual_seed(42)
+sq = 4.0 / 127.0
+Q2 = torch.randint(-128, 127, (1, 1, 64, D), dtype=torch.int8, device='cuda')
+K2 = torch.randint(-128, 127, (1, 1, 64, D), dtype=torch.int8, device='cuda')
+O2 = mixed_flash_attn.int8_flash_attn(Q2, K2, V, sq, sq, scale_s, False)
+torch.cuda.synchronize()
+ref2 = fp32_ref_attention(Q2.float() * sq, K2.float() * sq, V.float(), scale=scale_s)
+m2 = compute_metrics(O2.cpu(), ref2.cpu())
+print(f"  CosSim={m2['cosine_sim']:.4f} MaxErr={m2['max_abs_err']:.4f}")
 
-# Reference: manual scalar computation for comparison
-Q2f = Q2.float() * 0.1
-K2f = K2.float() * 0.1
-S_ref = torch.matmul(Q2f[0,0], K2f[0,0].T) * scale
-P_ref = torch.softmax(S_ref, dim=-1)
-O_ref = torch.matmul(P_ref, V2[0,0].float())
-print(f"  Reference O range: [{O_ref.min():.4f}, {O_ref.max():.4f}]")
-print(f"  Match: CosSim={torch.nn.functional.cosine_similarity(O2[0,0].float().flatten(), O_ref.flatten(), dim=0):.4f}")
+# Test 3: all ones (should be perfect)
+print("Test 3: all ones + scale=1.0")
+Q3 = torch.ones(1, 1, 64, D, dtype=torch.int8, device='cuda')
+K3 = torch.ones(1, 1, 64, D, dtype=torch.int8, device='cuda')
+V3 = torch.ones(1, 1, 64, D, dtype=torch.float16, device='cuda')
+O3 = mixed_flash_attn.int8_flash_attn(Q3, K3, V3, 1.0, 1.0, scale_s, False)
+torch.cuda.synchronize()
+ref3 = fp32_ref_attention(Q3.float(), K3.float(), V3.float(), scale=scale_s)
+m3 = compute_metrics(O3.cpu(), ref3.cpu())
+print(f"  CosSim={m3['cosine_sim']:.4f} MaxErr={m3['max_abs_err']:.4f}")
+
+# Test 4: original test_kernel.py scales
+print("Test 4: test_kernel.py scales (sq=0.036, sk=0.034)")
+torch.manual_seed(42)
+sq4, sk4 = 0.036146, 0.034058
+Q4 = torch.randint(-128, 127, (1, 2, 64, D), dtype=torch.int8, device='cuda')
+K4 = torch.randint(-128, 127, (1, 2, 64, D), dtype=torch.int8, device='cuda')
+V4 = torch.randn(1, 2, 64, D, dtype=torch.float16, device='cuda')
+O4 = mixed_flash_attn.int8_flash_attn(Q4, K4, V4, sq4, sk4, scale_s, False)
+torch.cuda.synchronize()
+ref4 = fp32_ref_attention(Q4.float() * sq4, K4.float() * sk4, V4.float(), scale=scale_s)
+m4 = compute_metrics(O4.cpu(), ref4.cpu())
+print(f"  CosSim={m4['cosine_sim']:.4f} MaxErr={m4['max_abs_err']:.4f}")
