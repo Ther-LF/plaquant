@@ -125,60 +125,48 @@ int8_fa_v3_kernel(
             V_smem[i] = V_ptr[i];
         __syncthreads();
 
-        // ---- INT8 WGMMA for Q·K^T ----
-        // Accumulator fragment (32 INT32 per thread for M64×N64)
+        // ---- INT8 WGMMA for Q·K^T via atom.fma() ----
         int32_t S_acc[32];
         for (int i = 0; i < 32; i++) S_acc[i] = 0;
 
-        // Create SMEM descriptor for each K tile (32 elements each)
-        // K_INTER atom has inner tile (M, 32), stride along K = M bytes
+        MmaAtomQK mma_atom;
+
+        // 8 K iterations (D=256, K_tile=32)
         #pragma unroll
         for (int k = 0; k < 8; k++) {
-            int k_offset = k * 32;  // byte offset: k * 32 * M for K-major
-            // Descriptor: base SMEM address + K offset
-            uint32_t q_addr = __cvta_generic_to_shared(Q_smem) + k_offset * kBr;
-            uint32_t k_addr = __cvta_generic_to_shared(K_smem) + k_offset * kBc;
+            // SMEM pointer for this K tile (K-major: stride = M bytes)
+            int8_t* q_k = Q_smem + k * 32 * kBr;
+            int8_t* k_k = K_smem + k * 32 * kBc;
 
-            // Create GMMA descriptors from raw addresses
-            // Use CUTE tensors for descriptor creation
-            int8_t* q_k_ptr = Q_smem + k_offset * kBr;
-            int8_t* k_k_ptr = K_smem + k_offset * kBc;
-            Tensor sQ_k = make_tensor(make_smem_ptr(q_k_ptr),
-                make_layout(make_shape(Int<kBr>{}, Int<32>{}),
-                SmemLayoutQ{}.layout_fn_));  // reuse interleave pattern
-            // Simplified: create tensor with the K_INTER atom for 1 tile
-            Tensor sQ_tile = make_tensor(make_smem_ptr(q_k_ptr),
+            // Create single-tile GMMA tensor + descriptor
+            Tensor sQ_tile = make_tensor(make_smem_ptr(q_k),
+                GMMA::Layout_K_INTER_Atom<int8_t>{});
+            Tensor sK_tile = make_tensor(make_smem_ptr(k_k),
                 GMMA::Layout_K_INTER_Atom<int8_t>{});
 
             uint64_t desc_q = make_gmma_desc<GMMA::Major::K>(sQ_tile);
-            uint64_t desc_k = make_gmma_desc<GMMA::Major::K>(
-                make_tensor(make_smem_ptr(k_k_ptr),
-                    GMMA::Layout_K_INTER_Atom<int8_t>{}));
+            uint64_t desc_k = make_gmma_desc<GMMA::Major::K>(sK_tile);
 
-            asm volatile(
-                "{\n"
-                ".reg .pred p;\n"
-                "setp.ne.b32 p, %34, 0;\n"
-                "wgmma.mma_async.sync.aligned.m64n64k32.s32.s8.s8 "
-                "{%0,  %1,  %2,  %3,  %4,  %5,  %6,  %7,  "
-                " %8,  %9,  %10, %11, %12, %13, %14, %15,  "
-                " %16, %17, %18, %19, %20, %21, %22, %23,  "
-                " %24, %25, %26, %27, %28, %29, %30, %31},\n"
-                " %32,\n"
-                " %33,\n"
-                " p, 1;\n"
-                "}\n"
-                : "+r"(S_acc[0]),  "+r"(S_acc[1]),  "+r"(S_acc[2]),  "+r"(S_acc[3]),
-                  "+r"(S_acc[4]),  "+r"(S_acc[5]),  "+r"(S_acc[6]),  "+r"(S_acc[7]),
-                  "+r"(S_acc[8]),  "+r"(S_acc[9]),  "+r"(S_acc[10]), "+r"(S_acc[11]),
-                  "+r"(S_acc[12]), "+r"(S_acc[13]), "+r"(S_acc[14]), "+r"(S_acc[15]),
-                  "+r"(S_acc[16]), "+r"(S_acc[17]), "+r"(S_acc[18]), "+r"(S_acc[19]),
-                  "+r"(S_acc[20]), "+r"(S_acc[21]), "+r"(S_acc[22]), "+r"(S_acc[23]),
-                  "+r"(S_acc[24]), "+r"(S_acc[25]), "+r"(S_acc[26]), "+r"(S_acc[27]),
-                  "+r"(S_acc[28]), "+r"(S_acc[29]), "+r"(S_acc[30]), "+r"(S_acc[31])
-                : "l"(desc_q), "l"(desc_k), "n"(0)
-                : "memory"
-            );
+            auto scale = (k == 0) ? GMMA::ScaleOut::Zero
+                                  : GMMA::ScaleOut::One;
+            mma_atom.fma(desc_q, desc_k,
+                S_acc[0],  S_acc[1],  S_acc[2],  S_acc[3],
+                S_acc[4],  S_acc[5],  S_acc[6],  S_acc[7],
+                S_acc[8],  S_acc[9],  S_acc[10], S_acc[11],
+                S_acc[12], S_acc[13], S_acc[14], S_acc[15],
+                S_acc[16], S_acc[17], S_acc[18], S_acc[19],
+                S_acc[20], S_acc[21], S_acc[22], S_acc[23],
+                S_acc[24], S_acc[25], S_acc[26], S_acc[27],
+                S_acc[28], S_acc[29], S_acc[30], S_acc[31],
+                scale);
+        }
+
+        // Dequant + write S to SMEM (simplified linear mapping)
+        for (int i = 0; i < 32; i++) {
+            int tid = threadIdx.x;
+            int idx = tid * 32 + i;
+            if (tid < 128 && idx < kBr * kBc)
+                S_smem[idx] = float(S_acc[i]) * scale_qk;
         }
 
         // Write S_acc to SMEM (simplified: each thread writes to its row)
