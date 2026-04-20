@@ -152,8 +152,9 @@ int8_fa_v3_kernel(
             constexpr int k_iters = 256 / 64;
             #pragma unroll
             for (int k = 0; k < k_iters; k++) {
-                cute::gemm(tiled_mma_qk, tSrS,
+                cute::gemm(tiled_mma_qk,
                     tSrQ(_, _, k), tSrK(_, _, k), tSrS);
+                tiled_mma_qk.accumulate_ = GMMA::ScaleOut::One;
             }
             // tSrS now contains INT32 S = Q @ K^T
             // TODO: dequant + write to SMEM for softmax
