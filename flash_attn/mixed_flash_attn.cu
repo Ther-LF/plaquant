@@ -242,6 +242,11 @@ torch::Tensor int8_flash_attn(
                       + kBr * sizeof(float)          // m_i
                       + kBr * sizeof(float);         // l_i
 
+    // Opt in to larger dynamic shared memory (default max is 48KB on Hopper)
+    cudaFuncSetAttribute(int8_flash_attn_kernel,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize,
+                         smem_bytes);
+
     // Process each head separately
     for (int b = 0; b < B; b++) {
         for (int h = 0; h < H; h++) {
