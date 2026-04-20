@@ -144,8 +144,8 @@ int8_fa_v3_kernel(
             Tensor sK_tile = make_tensor(make_smem_ptr(k_k),
                 GMMA::Layout_K_INTER_Atom<int8_t>{});
 
-            uint64_t desc_q = make_gmma_desc<GMMA::Major::K>(sQ_tile);
-            uint64_t desc_k = make_gmma_desc<GMMA::Major::K>(sK_tile);
+            uint64_t desc_q = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sQ_tile);
+            uint64_t desc_k = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sK_tile);
 
             auto scale = (k == 0) ? GMMA::ScaleOut::Zero
                                   : GMMA::ScaleOut::One;
