@@ -1,9 +1,8 @@
 /*
- * INT8 FlashAttention v3 — CUTLASS 3.x Hopper (SM90) with WGMMA
+ * INT8 FlashAttention — CUTLASS 3.x Hopper (SM90)
  *
- * v3: INT8 WGMMA for Q·K^T using SM90_64x64x32_S32S8S8_SS_TN atom.
- *     GMMA interleaved SMEM layouts + cute::gemm().
- * v2: Single launch for all heads, scalar Q·K^T.
+ * v2: Single launch for all heads, scalar Q·K^T (correct, CosSim=0.9999)
+ * v3 WIP: INT8 WGMMA via CUTE partition + inline PTX
  *
  * Semantics:
  *   O[Lq, D] = softmax(dequant(Q_int8 @ K_int8^T) * scale) @ V_fp16
@@ -26,18 +25,30 @@ using namespace cute;
 // ============================================================
 constexpr int kBr = 64;   // Q tile along Lq
 constexpr int kBc = 64;   // KV tile along Lkv
-// D = head dim, runtime parameter (must be multiple of 32 for WGMMA)
+// D = 256 hardcoded
 
-// INT8 WGMMA: SS mode needs K=64 (sparse), D=256 → 4 iterations
+// INT8 WGMMA atom
 using MmaAtomQK = decltype(GMMA::ss_op_selector<int8_t, int8_t, int32_t,
     Shape<Int<64>, Int<64>, Int<64>>>());
-using TiledMmaQK = decltype(make_tiled_mma(
-    MmaAtomQK{},
-    Layout<Shape<_1, _1, _1>>{}));
+using TiledMmaQK = decltype(make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{}));
+
+// SMEM layouts for GMMA (K-major interleaved)
+using SmemLayoutQ = decltype(tile_to_shape(
+    GMMA::Layout_K_INTER_Atom<int8_t>{},
+    make_shape(Int<kBr>{}, Int<256>{})));
+using SmemLayoutK = decltype(tile_to_shape(
+    GMMA::Layout_K_INTER_Atom<int8_t>{},
+    make_shape(Int<kBc>{}, Int<256>{})));
 
 // ============================================================
-// SMEM layouts (plain row-major for v2 scalar, GMMA interleaved for v3 WGMMA)
+// SMEM index for K-major interleaved layout
 // ============================================================
+__device__ inline int smem_idx_kmaj(int r, int c, int M) {
+    // K-major with 32-element interleave
+    int group = c / 32;
+    int c_in  = c % 32;
+    return group * 32 * M + c_in * M + r;
+}
 
 // ============================================================
 // Main kernel
@@ -50,109 +61,152 @@ int8_fa_v3_kernel(
     const half*    __restrict__ V,   // (B*H, Lkv, D) row-major
     half*          __restrict__ O,   // (B*H, Lq, D) row-major
     int Lq, int Lkv, int D,
-    float scale_qk,    // scale_q * scale_k * scale_s
+    float scale_qk,
     bool causal
 ) {
-    // Restrict to 128 threads (1 warpgroup) for WGMMA
-    // blockIdx.x = Q_tile, blockIdx.y = head index
-    int head_idx  = blockIdx.y;
-    int q_tile    = blockIdx.x;
-    int q_start   = q_tile * kBr;
-    int q_end     = min(q_start + kBr, Lq);
-    int q_rows    = q_end - q_start;
+    int head_idx = blockIdx.y;
+    int q_tile   = blockIdx.x;
+    int q_start  = q_tile * kBr;
+    int q_end    = min(q_start + kBr, Lq);
+    int q_rows   = q_end - q_start;
 
     const int8_t* Q_head = Q + head_idx * Lq * D;
     const int8_t* K_head = K + head_idx * Lkv * D;
     const half*   V_head = V + head_idx * Lkv * D;
     half*         O_head = O + head_idx * Lq * D;
 
-    // Shared memory: Q + K + V + O_acc + softmax state
+    // Shared memory
     extern __shared__ char smem_buf[];
-
     int8_t* Q_smem = reinterpret_cast<int8_t*>(smem_buf);
-    int8_t* K_smem = Q_smem + kBr * D;
-    half*   V_smem = reinterpret_cast<half*>(K_smem + kBc * D);
-    float* O_acc   = reinterpret_cast<float*>(V_smem + kBc * D);
-    float* m_i     = O_acc + kBr * D;
-    float* l_i     = m_i + kBr;
+    size_t q_sz = cosize(SmemLayoutQ{});
+    int8_t* K_smem = Q_smem + q_sz;
+    size_t k_sz = cosize(SmemLayoutK{});
+    half*   V_smem = reinterpret_cast<half*>(K_smem + k_sz);
+    float*  S_smem = reinterpret_cast<float*>(V_smem + kBc * D); // (kBr, kBc) FP32 S
+    float*  O_acc  = S_smem + kBr * kBc;
+    float*  m_i    = O_acc + kBr * D;
+    float*  l_i    = m_i + kBr;
 
-    // ---- Load Q into SMEM ----
+    // Load Q into interleaved SMEM
     const int8_t* Q_ptr = Q_head + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        Q_smem[i] = Q_ptr[i];
+        int r = i / D, c = i % D;
+        Q_smem[smem_idx_kmaj(r, c, kBr)] = Q_ptr[i];
     }
 
     // Init accumulators
-    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        O_acc[i] = 0.0f;
-    }
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) O_acc[i] = 0.0f;
     for (int i = threadIdx.x; i < q_rows; i += blockDim.x) {
         m_i[i] = -INFINITY;
         l_i[i] = 0.0f;
     }
     __syncthreads();
 
-    // ---- KV loop ----
+    // KV loop
     int num_kv_tiles = (Lkv + kBc - 1) / kBc;
+    int warp_id  = threadIdx.x / 32;
+    int num_warps = blockDim.x / 32;
 
     for (int kv_tile = 0; kv_tile < num_kv_tiles; kv_tile++) {
         int kv_start = kv_tile * kBc;
         int kv_end   = min(kv_start + kBc, Lkv);
         int kv_rows  = kv_end - kv_start;
-
         if (causal && kv_start > q_end - 1) break;
 
-        // Load K tile
+        // Load K into interleaved SMEM
         const int8_t* K_ptr = K_head + kv_start * D;
         for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
-            K_smem[i] = K_ptr[i];
+            int r = i / D, c = i % D;
+            K_smem[smem_idx_kmaj(r, c, kBc)] = K_ptr[i];
         }
-        // Load V
+        // Load V (plain row-major)
         const half* V_ptr = V_head + kv_start * D;
-        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
+        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x)
             V_smem[i] = V_ptr[i];
+        __syncthreads();
+
+        // ---- INT8 WGMMA for Q·K^T ----
+        // Accumulator fragment (32 INT32 per thread for M64×N64)
+        int32_t S_acc[32];
+        for (int i = 0; i < 32; i++) S_acc[i] = 0;
+
+        // Create SMEM descriptor for each K tile (32 elements each)
+        // K_INTER atom has inner tile (M, 32), stride along K = M bytes
+        #pragma unroll
+        for (int k = 0; k < 8; k++) {
+            int k_offset = k * 32;  // byte offset: k * 32 * M for K-major
+            // Descriptor: base SMEM address + K offset
+            uint32_t q_addr = __cvta_generic_to_shared(Q_smem) + k_offset * kBr;
+            uint32_t k_addr = __cvta_generic_to_shared(K_smem) + k_offset * kBc;
+
+            // Create GMMA descriptors from raw addresses
+            // Use CUTE tensors for descriptor creation
+            int8_t* q_k_ptr = Q_smem + k_offset * kBr;
+            int8_t* k_k_ptr = K_smem + k_offset * kBc;
+            Tensor sQ_k = make_tensor(make_smem_ptr(q_k_ptr),
+                make_layout(make_shape(Int<kBr>{}, Int<32>{}),
+                SmemLayoutQ{}.layout_fn_));  // reuse interleave pattern
+            // Simplified: create tensor with the K_INTER atom for 1 tile
+            Tensor sQ_tile = make_tensor(make_smem_ptr(q_k_ptr),
+                GMMA::Layout_K_INTER_Atom<int8_t>{});
+
+            uint64_t desc_q = make_gmma_desc<GMMA::Major::K>(sQ_tile);
+            uint64_t desc_k = make_gmma_desc<GMMA::Major::K>(
+                make_tensor(make_smem_ptr(k_k_ptr),
+                    GMMA::Layout_K_INTER_Atom<int8_t>{}));
+
+            asm volatile(
+                "{\n"
+                ".reg .pred p;\n"
+                "setp.ne.b32 p, %34, 0;\n"
+                "wgmma.mma_async.sync.aligned.m64n64k32.s32.s8.s8 "
+                "{%0,  %1,  %2,  %3,  %4,  %5,  %6,  %7,  "
+                " %8,  %9,  %10, %11, %12, %13, %14, %15,  "
+                " %16, %17, %18, %19, %20, %21, %22, %23,  "
+                " %24, %25, %26, %27, %28, %29, %30, %31},\n"
+                " %32,\n"
+                " %33,\n"
+                " p, 1;\n"
+                "}\n"
+                : "+r"(S_acc[0]),  "+r"(S_acc[1]),  "+r"(S_acc[2]),  "+r"(S_acc[3]),
+                  "+r"(S_acc[4]),  "+r"(S_acc[5]),  "+r"(S_acc[6]),  "+r"(S_acc[7]),
+                  "+r"(S_acc[8]),  "+r"(S_acc[9]),  "+r"(S_acc[10]), "+r"(S_acc[11]),
+                  "+r"(S_acc[12]), "+r"(S_acc[13]), "+r"(S_acc[14]), "+r"(S_acc[15]),
+                  "+r"(S_acc[16]), "+r"(S_acc[17]), "+r"(S_acc[18]), "+r"(S_acc[19]),
+                  "+r"(S_acc[20]), "+r"(S_acc[21]), "+r"(S_acc[22]), "+r"(S_acc[23]),
+                  "+r"(S_acc[24]), "+r"(S_acc[25]), "+r"(S_acc[26]), "+r"(S_acc[27]),
+                  "+r"(S_acc[28]), "+r"(S_acc[29]), "+r"(S_acc[30]), "+r"(S_acc[31])
+                : "l"(desc_q), "l"(desc_k), "n"(0)
+                : "memory"
+            );
+        }
+
+        // Write S_acc to SMEM (simplified: each thread writes to its row)
+        // The accumulator mapping: for M64×N64, 128 threads,
+        // each thread holds 32 values covering specific (row, col) pairs.
+        // For now, store linearly: thread t writes to S_smem[t * 32 .. t*32+31]
+        int tid = threadIdx.x;
+        if (tid < 128) {
+            for (int i = 0; i < 32 && (tid * 32 + i) < kBr * kBc; i++) {
+                S_smem[tid * 32 + i] = (float)S_acc[i] * scale_qk;
+            }
         }
         __syncthreads();
 
-        // ---- Q·K^T WGMMA placeholder (will use CUTE gemm when INT8 support is complete) ----
-        // The WGMMA atom compiles (ss_op_selector<int8_t,...>), but the
-        // CUTE gemm() function doesn't handle INT8 tensor types yet.
-        // Inline PTX requires SMEM descriptors (not raw addresses).
-        // Next step: use make_gmma_desc() + atom.fma() directly.
-
-        // ---- Scalar Q·K^T (fallback, produces correct output) ----
-        int num_warps = blockDim.x / 32;
-        int warp_id  = threadIdx.x / 32;
-
+        // ---- Softmax + P·V using S_smem ----
         for (int qi = warp_id; qi < q_rows; qi += num_warps) {
-            float m_old = m_i[qi];
-            float l_old = l_i[qi];
-            float m_new = m_old;
+            float m_old = m_i[qi], l_old = l_i[qi], m_new = m_old;
+            float s_row[64], p_row[64];
 
-            float s_row[64];
-            for (int kj = 0; kj < kv_rows; kj++) s_row[kj] = 0.0f;
-
-            for (int d = 0; d < D; d++) {
-                int32_t qv = static_cast<int32_t>(Q_smem[qi * D + d]);
-                for (int kj = 0; kj < kv_rows; kj++) {
-                    s_row[kj] += static_cast<float>(
-                        qv * static_cast<int32_t>(K_smem[kj * D + d]));
-                }
-            }
-            for (int kj = 0; kj < kv_rows; kj++) s_row[kj] *= scale_qk;
-
-            if (causal) {
-                int qi_g = q_start + qi;
-                for (int kj = 0; kj < kv_rows; kj++)
-                    if (kv_start + kj > qi_g) s_row[kj] = -INFINITY;
-            }
-
-            for (int kj = 0; kj < kv_rows; kj++)
+            for (int kj = 0; kj < kv_rows; kj++) {
+                s_row[kj] = S_smem[qi * kBc + kj];  // read WGMMA output
+                if (causal && (kv_start + kj > q_start + qi))
+                    s_row[kj] = -INFINITY;
                 m_new = fmaxf(m_new, s_row[kj]);
+            }
 
             float rescale = expf(m_old - m_new);
             float l_new = l_old * rescale;
-            float p_row[64];
             for (int kj = 0; kj < kv_rows; kj++) {
                 p_row[kj] = expf(s_row[kj] - m_new);
                 l_new += p_row[kj];
@@ -170,15 +224,14 @@ int8_fa_v3_kernel(
         __syncthreads();
     }
 
-    // Final rescale
+    // Final rescale + write
     for (int qi = threadIdx.x; qi < q_rows; qi += blockDim.x) {
-        float inv_l = (l_i[qi] > 0.0f) ? (1.0f / l_i[qi]) : 0.0f;
+        float inv_l = (l_i[qi] > 0) ? 1.0f / l_i[qi] : 0.0f;
         for (int d = 0; d < D; d++)
             O_acc[qi * D + d] *= inv_l;
     }
     __syncthreads();
 
-    // Write output
     half* O_ptr = O_head + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x)
         O_ptr[i] = __float2half(O_acc[i]);
@@ -199,7 +252,7 @@ torch::Tensor int8_flash_attn(
     const int B = Q_int8.size(0), H = Q_int8.size(1);
     const int Lq = Q_int8.size(2), D = Q_int8.size(3);
     const int Lkv = K_int8.size(2);
-    TORCH_CHECK(D == 256, "D must be 256 for v3 (hardcoded SMEM layout)");
+    TORCH_CHECK(D == 256, "D must be 256 for v3");
 
     auto Q_flat = Q_int8.reshape({B * H, Lq, D}).contiguous();
     auto K_flat = K_int8.reshape({B * H, Lkv, D}).contiguous();
@@ -208,17 +261,16 @@ torch::Tensor int8_flash_attn(
         torch::TensorOptions().device(Q_int8.device()).dtype(torch::kFloat16));
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
-    constexpr int threads = 256;  // 8 warps
+    constexpr int threads = 256;
     int num_q_tiles = (Lq + kBr - 1) / kBr;
     dim3 grid(num_q_tiles, B * H);
     float scale_qk = scale_q * scale_k * scale_s;
 
-    // SMEM: Q + K + V + O_acc + softmax
-    size_t smem = kBr * D * sizeof(int8_t)       // Q_smem
-                + kBc * D * sizeof(int8_t)        // K_smem
-                + kBc * D * sizeof(half)          // V_smem
-                + kBr * D * sizeof(float)         // O_acc
-                + kBr * sizeof(float) * 2;        // m_i, l_i
+    size_t smem = cosize(SmemLayoutQ{}) + cosize(SmemLayoutK{})
+                + kBc * D * sizeof(half)              // V_smem
+                + kBr * kBc * sizeof(float)           // S_smem (WGMMA output)
+                + kBr * D * sizeof(float)             // O_acc
+                + kBr * sizeof(float) * 2;            // m_i, l_i
 
     cudaFuncSetAttribute(int8_fa_v3_kernel,
         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
