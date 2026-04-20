@@ -112,30 +112,12 @@ int8_fa_v3_kernel(
 
         // Extract accumulator to S_smem
         // Each of 128 threads holds 32 INT32 values for 64x64 output
-        // Fragment layout: ThrID = Layout<_128>, CLayout = CLayout_64x64
-        // For M64xN64, thread t holds values at positions:
-        //   row = (t % 4) * 16 + row_in_group (from CLayout)
-        //   col = (t / 4) % 4 * 16 + col_in_group
-        // Simplified: write all values, each thread writes 32 values
-        // The CLayout_64x64 maps 32 values per thread to (row, col)
         int tid = threadIdx.x;
         if (tid < 128) {
-            // Use partition_fragment_C for correct mapping
-            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
-            auto frag = partition_fragment_C(tiled_mma, make_shape(Int<kBr>{}, Int<kBc>{}));
-            // Copy acc to fragment
-            for (int i = 0; i < size(frag); i++)
-                frag(i) = int32_t(S_acc[i]);
-
-            // Write fragment to S_smem — each element's (row, col) from frag layout
-            // frag layout encodes ThrID + CLayout → use flat index iteration
-            auto flat_frag = coalesce(frag);
-            for (int i = 0; i < size(flat_frag); i++) {
-                auto crd = flat_frag.layout().get_hier_coord(i);
-                int r = get<0>(crd);
-                int c = get<1>(crd);
-                if (r < kBr && c < kBc)
-                    S_smem[r * kBc + c] = float(flat_frag(i)) * scale_qk;
+            for (int i = 0; i < 32; i++) {
+                int idx = tid * 32 + i;
+                if (idx < kBr * kBc)
+                    S_smem[idx] = float(int32_t(S_acc[i])) * scale_qk;
             }
         }
         __syncthreads();
