@@ -110,14 +110,23 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract accumulator to S_smem
-        // Each of 128 threads holds 32 INT32 values for 64x64 output
+        // Extract accumulator to S_smem via TiledCopy (handles mapping)
         int tid = threadIdx.x;
         if (tid < 128) {
-            for (int i = 0; i < 32; i++) {
-                int idx = tid * 32 + i;
-                if (idx < kBr * kBc)
-                    S_smem[idx] = float(int32_t(S_acc[i])) * scale_qk;
+            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
+            // Create tiled copy for C fragment → SMEM
+            auto tiled_copy = make_tiled_copy_C(
+                Copy_Atom<UniversalCopy<float>, float>{}, tiled_mma);
+            auto thr_copy = tiled_copy.get_slice(tid);
+
+            // SMEM destination tensor
+            Tensor sS = make_tensor(make_smem_ptr(S_smem),
+                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+            auto tSrD = thr_copy.partition_D(sS);
+
+            // Copy WGMMA results (INT32 → float)
+            for (int i = 0; i < size(tSrD); i++) {
+                tSrD(i) = float(int32_t(S_acc[i])) * scale_qk;
             }
         }
         __syncthreads();
