@@ -13,55 +13,18 @@
  */
 
 #include <cuda_runtime.h>
-#include <cuda/barrier>
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
-#include "cutlass/numeric_types.h"
-#include "cutlass/arch/barrier.h"
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
-
-using namespace cute;
-
-// ============================================================
-// Tile config
-// ============================================================
-constexpr int Br = 64;   // Q tile size (rows)
-constexpr int Bc = 64;   // KV tile size (rows)
-constexpr int D  = 256;  // head dimension (must match k_high + k_low)
-
-// WGMMA shapes
-// INT8:  m64 x n8 x k32
-// FP16:  m64 x n8 x k16
-
-// ============================================================
-// Online softmax helpers
-// ============================================================
-
-__device__ __forceinline__
-float warp_max(float val) {
-    #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, offset));
-    return val;
-}
-
-__device__ __forceinline__
-float warp_sum(float val) {
-    #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val += __shfl_xor_sync(0xffffffff, val, offset);
-    return val;
-}
 
 // ============================================================
 // Main kernel (v1: scalar correctness, WGMMA to be added in v2)
 //
-// D is a runtime parameter (not template) for flexibility.
+// D is a runtime parameter for flexibility across head dims.
 // ============================================================
 
 __global__ void int8_flash_attn_kernel(
