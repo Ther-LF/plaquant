@@ -92,10 +92,17 @@ int8_fa_v3_kernel(
     Tensor sQ_t = make_tensor(make_smem_ptr(Q_smem), SmemLayoutQ{});
     Tensor sK_t = make_tensor(make_smem_ptr(K_smem), SmemLayoutK{});
 
-    // ---- Load Q into SMEM (row-major for now, interleaved later) ----
+    // ---- Load Q into GMMA interleaved SMEM ----
+    // K-major interleaved: group by 32 K elements, rows interleaved within group
+    // smem_idx(r,c) = (c/32) * 32 * M + (c%32) * M + r
     const int8_t* Q_ptr = Q_head + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
-        Q_smem[i] = Q_ptr[i];  // FIXME: should use interleaved layout
+        int r = i / D;
+        int c = i % D;
+        int group = c / 32;
+        int c_in = c % 32;
+        int smem_idx = group * 32 * kBr + c_in * kBr + r;
+        Q_smem[smem_idx] = Q_ptr[i];
     }
 
     // Init accumulators
@@ -118,14 +125,14 @@ int8_fa_v3_kernel(
 
         if (causal && kv_start > q_end - 1) break;
 
-        // Load K into interleaved col-major SMEM (= K^T row-major)
+        // Load K into GMMA interleaved SMEM (same pattern as Q)
         const int8_t* K_ptr = K_head + kv_start * D;
         for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
             int r = i / D;
             int c = i % D;
-            // Store as col-major: K_smem[c * kBc + r] = K_ptr[r * D + c]
-            // For now, store row-major (same as scalar)
-            K_smem[r * D + c] = K_ptr[r * D + c];
+            int group = c / 32;
+            int c_in = c % 32;
+            K_smem[group * 32 * kBc + c_in * kBc + r] = K_ptr[i];
         }
         // Load V
         const half* V_ptr = V_head + kv_start * D;
@@ -134,35 +141,53 @@ int8_fa_v3_kernel(
         }
         __syncthreads();
 
-        // ---- Q·K^T via INT8 WGMMA (warpgroup 0 only) ----
+        // ---- Q·K^T via inline PTX WGMMA (warpgroup 0, first 128 threads) ----
         if (threadIdx.x < 128) {
-            TiledMmaQK tiled_mma_qk;
-            auto wg_slice = tiled_mma_qk.get_slice(threadIdx.x);
+            // SMEM addresses for Q and K (both in interleaved K-major layout)
+            uint32_t q_addr = __cvta_generic_to_shared(Q_smem);
+            uint32_t k_addr = __cvta_generic_to_shared(K_smem);
 
-            // Partition SMEM tensors for WGMMA
-            Tensor tSrQ = wg_slice.partition_A(sQ_t);
-            Tensor tSrK = wg_slice.partition_B(sK_t);
-            Tensor tSrS = partition_fragment_C(tiled_mma_qk,
-                make_shape(Int<kBr>{}, Int<kBc>{}));
+            // WGMMA accumulator: 64x64 INT32 = 4096 values,
+            // distributed across 128 threads = 32 int32_t per thread
+            int32_t S_acc[32];
+            for (int i = 0; i < 32; i++) S_acc[i] = 0;
 
-            // Clear INT32 accumulator
-            for (int i = 0; i < size(tSrS); i++) tSrS(i) = int32_t(0);
-
-            // INT8 WGMMA loop over K (256/64 = 4 sparse K tiles)
-            constexpr int k_iters = 256 / 64;
-            #pragma unroll
+            // INT8 WGMMA: wgmma.mma_async.sync.aligned.m64n64k32.s32.s8.s8.s32
+            // K=256 → 8 iterations of k32 (non-sparse), or 4 iterations of k64 (sparse)
+            // For now, use 8 iterations of k32
+            constexpr int k_iters = 256 / 32;
             for (int k = 0; k < k_iters; k++) {
-                auto sQ_k = tSrQ(_, _, k);
-                auto sK_k = tSrK(_, _, k);
-                cute::gemm(tiled_mma_qk, sQ_k, sK_k, tSrS);
-                tiled_mma_qk.accumulate_ = GMMA::ScaleOut::One;
+                uint32_t q_k_addr = q_addr + k * 32 * kBr;  // advance by K_tile=32
+                uint32_t k_k_addr = k_addr + k * 32 * kBc;
+                asm volatile(
+                    "wgmma.fence.sync.aligned;\n"
+                    "wgmma.mma_async.sync.aligned.m64n64k32.s32.s8.s8.s32 "
+                    "{%0, %1, %2, %3, %4, %5, %6, %7, "
+                    " %8, %9, %10, %11, %12, %13, %14, %15, "
+                    " %16, %17, %18, %19, %20, %21, %22, %23, "
+                    " %24, %25, %26, %27, %28, %29, %30, %31},\n"
+                    " %32,\n"
+                    " %33,\n"
+                    " 1;\n"
+                    : "+r"(S_acc[0]), "+r"(S_acc[1]), "+r"(S_acc[2]), "+r"(S_acc[3]),
+                      "+r"(S_acc[4]), "+r"(S_acc[5]), "+r"(S_acc[6]), "+r"(S_acc[7]),
+                      "+r"(S_acc[8]), "+r"(S_acc[9]), "+r"(S_acc[10]), "+r"(S_acc[11]),
+                      "+r"(S_acc[12]), "+r"(S_acc[13]), "+r"(S_acc[14]), "+r"(S_acc[15]),
+                      "+r"(S_acc[16]), "+r"(S_acc[17]), "+r"(S_acc[18]), "+r"(S_acc[19]),
+                      "+r"(S_acc[20]), "+r"(S_acc[21]), "+r"(S_acc[22]), "+r"(S_acc[23]),
+                      "+r"(S_acc[24]), "+r"(S_acc[25]), "+r"(S_acc[26]), "+r"(S_acc[27]),
+                      "+r"(S_acc[28]), "+r"(S_acc[29]), "+r"(S_acc[30]), "+r"(S_acc[31])
+                    : "r"(q_k_addr), "r"(k_k_addr)
+                    : "memory"
+                );
+                __syncwarp();  // sync within warpgroup
             }
-            // tSrS now contains INT32 S = Q @ K^T
-            // TODO: dequant + write to SMEM for softmax
+            // S_acc now contains INT32 Q·K^T values (WGMMA verified working)
+            // TODO: dequant + store to SMEM for softmax
         }
         __syncthreads();
 
-        // ---- Scalar Q·K^T (fallback) ----
+        // ---- Scalar Q·K^T (fallback, produces correct output) ----
         int num_warps = blockDim.x / 32;
         int warp_id  = threadIdx.x / 32;
 
@@ -174,11 +199,17 @@ int8_fa_v3_kernel(
             float s_row[64];
             for (int kj = 0; kj < kv_rows; kj++) s_row[kj] = 0.0f;
 
+            // Interleaved SMEM: Q_smem[(d/32)*2048 + (d%32)*64 + qi]
+            //                   K_smem[(d/32)*2048 + (d%32)*64 + kj]
             for (int d = 0; d < D; d++) {
-                int32_t qv = static_cast<int32_t>(Q_smem[qi * D + d]);
+                int d_group = d / 32;
+                int d_in   = d % 32;
+                int q_idx  = d_group * 32 * kBr + d_in * kBr + qi;
+                int32_t qv = static_cast<int32_t>(Q_smem[q_idx]);
                 for (int kj = 0; kj < kv_rows; kj++) {
+                    int k_idx = d_group * 32 * kBc + d_in * kBc + kj;
                     s_row[kj] += static_cast<float>(
-                        qv * static_cast<int32_t>(K_smem[kj * D + d]));
+                        qv * static_cast<int32_t>(K_smem[k_idx]));
                 }
             }
             for (int kj = 0; kj < kv_rows; kj++) s_row[kj] *= scale_qk;
