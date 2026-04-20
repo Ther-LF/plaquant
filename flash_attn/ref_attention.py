@@ -75,7 +75,8 @@ def resq_baseline_attention(
         out: (B, H, Lq, d_head) FP16
     """
     B, H, Lq, k_high = q_int8.shape
-    _, _, Lkv, k_low = q_int4.shape
+    Lkv = k_int8.shape[2]
+    k_low = q_int4.shape[-1]
     d_head = k_high + k_low
 
     if scale is None:
