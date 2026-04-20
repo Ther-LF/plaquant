@@ -60,9 +60,10 @@ float warp_sum(float val) {
 
 // ============================================================
 // Main kernel (v1: scalar correctness, WGMMA to be added in v2)
+//
+// D is a runtime parameter (not template) for flexibility.
 // ============================================================
 
-template<int kBr, int kBc, int kD>
 __global__ void int8_flash_attn_kernel(
     const int8_t* __restrict__ Q,      // (Lq, D) for one head, row-major
     const int8_t* __restrict__ K,      // (Lkv, D) for one head, row-major
@@ -70,46 +71,45 @@ __global__ void int8_flash_attn_kernel(
     half*          __restrict__ O,      // (Lq, D) for one head, row-major
     int Lq,
     int Lkv,
+    int D,             // head dimension (runtime)
     float scale_q,     // Q dequant scale
     float scale_k,     // K dequant scale
     float scale_s,     // softmax scale = 1/sqrt(D)
     bool causal
 ) {
-    // Thread block = one Q tile (Br rows)
-    int q_tile_idx = blockIdx.x;  // which Q tile (0..ceil(Lq/Br)-1)
+    // Tile config (can be tuned)
+    constexpr int kBr = 64;
+    constexpr int kBc = 64;
+
+    // Thread block = one Q tile (kBr rows)
+    int q_tile_idx = blockIdx.x;  // which Q tile (0..ceil(Lq/kBr)-1)
     int q_start = q_tile_idx * kBr;
     int q_end = min(q_start + kBr, Lq);
     int q_rows = q_end - q_start;
 
-    // Shared memory
-    __shared__ int8_t Q_smem[kBr][kD];  // Q tile
-    __shared__ int8_t K_smem[kBc][kD];  // K tile
-    __shared__ half   V_smem[kBc][kD];  // V tile
+    extern __shared__ char smem_buf[];
+    int8_t* Q_smem = reinterpret_cast<int8_t*>(smem_buf);
+    int8_t* K_smem = Q_smem + kBr * D;
+    half*   V_smem = reinterpret_cast<half*>(K_smem + kBc * D);
+    // O accumulator and softmax state after V_smem
+    float* O_acc = reinterpret_cast<float*>(reinterpret_cast<char*>(V_smem) + kBc * D * sizeof(half));
+    float* m_i   = O_acc + kBr * D;
+    float* l_i   = m_i + kBr;
 
     // Load Q tile (all threads cooperate)
-    const int8_t* Q_ptr = Q + q_start * kD;
-    for (int i = threadIdx.x; i < q_rows * kD; i += blockDim.x) {
-        int r = i / kD;
-        int c = i % kD;
-        Q_smem[r][c] = Q_ptr[r * kD + c];
-    }
-    __syncthreads();
-
-    // Output accumulator (in registers)
-    // O_acc: (Br, D) FP32, distributed across threads
-    // For simplicity in v1: use shared memory for O accumulator
-    __shared__ float O_acc[kBr][kD];
-
-    // Initialize O_acc to 0
-    for (int i = threadIdx.x; i < q_rows * kD; i += blockDim.x) {
-        int r = i / kD;
-        int c = i % kD;
-        O_acc[r][c] = 0.0f;
+    const int8_t* Q_ptr = Q + q_start * D;
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
+        int r = i / D;
+        int c = i % D;
+        Q_smem[r * D + c] = Q_ptr[r * D + c];
     }
 
-    // Online softmax state
-    __shared__ float m_i[kBr];   // row max
-    __shared__ float l_i[kBr];   // row sum
+    // Initialize O_acc to 0, m_i to -inf, l_i to 0
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
+        int r = i / D;
+        int c = i % D;
+        O_acc[r * D + c] = 0.0f;
+    }
     for (int i = threadIdx.x; i < q_rows; i += blockDim.x) {
         m_i[i] = -INFINITY;
         l_i[i] = 0.0f;
@@ -133,87 +133,78 @@ __global__ void int8_flash_attn_kernel(
             if (kv_start > last_q) break;  // all KV after Q → masked out
         }
 
-        // Load K tile
-        const int8_t* K_ptr = K + kv_start * kD;
-        for (int i = threadIdx.x; i < kv_rows * kD; i += blockDim.x) {
-            int r = i / kD;
-            int c = i % kD;
-            K_smem[r][c] = K_ptr[r * kD + c];
+        // Load K tile (1D layout: K_smem[r*D + c])
+        const int8_t* K_ptr = K + kv_start * D;
+        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
+            int r = i / D;
+            int c = i % D;
+            K_smem[r * D + c] = K_ptr[r * D + c];
+        }
+
+        // Load V tile
+        const half* V_ptr = V + kv_start * D;
+        for (int i = threadIdx.x; i < kv_rows * D; i += blockDim.x) {
+            int r = i / D;
+            int c = i % D;
+            V_smem[r * D + c] = V_ptr[r * D + c];
         }
         __syncthreads();
 
-        // ---- S = Q @ K^T (INT8 GEMM, computed in FP32 for now) ----
-        // v1: Use warp-level cooperative computation
-        // Each warp computes a (32, kv_rows) tile of S
+        // ---- S = Q @ K^T (INT8 GEMM, v1: scalar for correctness) ----
         int warp_id = threadIdx.x / 32;
-        int lane_id = threadIdx.x % 32;
         int num_warps = blockDim.x / 32;
 
-        // Warp computes rows assigned to it
+        // Each warp computes assigned Q rows
         for (int qi = warp_id; qi < q_rows; qi += num_warps) {
             float m_old = m_i[qi];
             float l_old = l_i[qi];
             float m_new = m_old;
 
             // Compute S[qi, :] = Q_smem[qi, :] @ K_smem[:, :]^T
-            // Do this in chunks to use registers
-            float s_row[kBc];
-            #pragma unroll
-            for (int kj = 0; kj < kBc; kj++) s_row[kj] = 0.0f;
+            float s_row[64];  // max kBc = 64
+            for (int kj = 0; kj < kv_rows; kj++) s_row[kj] = 0.0f;
 
-            // Dot product over D
-            for (int d = 0; d < kD; d++) {
-                int8_t q_val = Q_smem[qi][d];
-                int32_t q_i32 = static_cast<int32_t>(q_val);
-                #pragma unroll
+            for (int d = 0; d < D; d++) {
+                int32_t q_val = static_cast<int32_t>(Q_smem[qi * D + d]);
                 for (int kj = 0; kj < kv_rows; kj++) {
-                    int32_t k_val = static_cast<int32_t>(K_smem[kj][d]);
-                    s_row[kj] += static_cast<float>(q_i32 * k_val);
+                    int32_t k_val = static_cast<int32_t>(K_smem[kj * D + d]);
+                    s_row[kj] += static_cast<float>(q_val * k_val);
                 }
             }
 
-            // Dequant and scale
-            #pragma unroll
-            for (int kj = 0; kj < kv_rows; kj++) {
-                s_row[kj] *= dq_scale;
-            }
+            // Dequant
+            for (int kj = 0; kj < kv_rows; kj++) s_row[kj] *= dq_scale;
 
             // Causal mask
             if (causal) {
                 int qi_global = q_start + qi;
-                #pragma unroll
                 for (int kj = 0; kj < kv_rows; kj++) {
                     int kj_global = kv_start + kj;
                     if (kj_global > qi_global) s_row[kj] = -INFINITY;
                 }
             }
 
-            // Find row max
-            #pragma unroll
+            // Row max
             for (int kj = 0; kj < kv_rows; kj++) {
                 m_new = fmaxf(m_new, s_row[kj]);
             }
 
-            // Rescale and compute exp
-            float l_new = 0.0f;
-            float p_row[kBc];
+            // Softmax + update O
             float rescale = expf(m_old - m_new);
-
-            #pragma unroll
+            float l_new = l_old * rescale;
+            float p_row[64];
             for (int kj = 0; kj < kv_rows; kj++) {
                 p_row[kj] = expf(s_row[kj] - m_new);
                 l_new += p_row[kj];
             }
-            l_new += l_old * rescale;
 
-            // Update O accumulator
-            for (int d = 0; d < kD; d++) {
-                float o_val = O_acc[qi][d] * rescale;
-                #pragma unroll
+            // Update O accumulator: O[qi, :] = O[qi, :]*rescale + p_row @ V
+            for (int d = 0; d < D; d++) {
+                float o_val = O_acc[qi * D + d] * rescale;
                 for (int kj = 0; kj < kv_rows; kj++) {
-                    o_val += p_row[kj] * __half2float(V_smem[kj][d]);
+                    o_val += p_row[kj] * __half2float(V_smem[kj * D + d]);
                 }
-                O_acc[qi][d] = o_val;
+                O_acc[qi * D + d] = o_val;
             }
 
             m_i[qi] = m_new;
@@ -227,18 +218,18 @@ __global__ void int8_flash_attn_kernel(
     int num_warps = blockDim.x / 32;
     for (int qi = warp_id; qi < q_rows; qi += num_warps) {
         float inv_l = (l_i[qi] > 0.0f) ? (1.0f / l_i[qi]) : 0.0f;
-        for (int d = 0; d < kD; d++) {
-            O_acc[qi][d] *= inv_l;
+        for (int d = 0; d < D; d++) {
+            O_acc[qi * D + d] *= inv_l;
         }
     }
     __syncthreads();
 
     // Write output
-    half* O_ptr = O + q_start * kD;
-    for (int i = threadIdx.x; i < q_rows * kD; i += blockDim.x) {
-        int r = i / kD;
-        int c = i % kD;
-        O_ptr[r * kD + c] = __float2half(O_acc[r][c]);
+    half* O_ptr = O + q_start * D;
+    for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) {
+        int r = i / D;
+        int c = i % D;
+        O_ptr[r * D + c] = __float2half(O_acc[r * D + c]);
     }
 }
 
@@ -266,7 +257,6 @@ torch::Tensor int8_flash_attn(
     const int D  = Q_int8.size(3);
     const int Lkv = K_int8.size(2);
 
-    TORCH_CHECK(D == ::D, "head dim must match D template param (", ::D, ")");
     TORCH_CHECK(K_int8.size(3) == D, "K head dim mismatch");
     TORCH_CHECK(V_fp16.size(3) == D, "V head dim mismatch");
 
@@ -275,7 +265,19 @@ torch::Tensor int8_flash_attn(
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
     constexpr int threads = 256;  // 8 warps
-    dim3 grid(Lq / Br + (Lq % Br ? 1 : 0));  // one block per Q tile
+    constexpr int kBr = 64;
+    dim3 grid((Lq + kBr - 1) / kBr);  // one block per Q tile
+
+    // Compute dynamic shared memory size
+    // Q_smem: kBr*D int8, K_smem: Bc*D int8, V_smem: Bc*D half
+    // O_acc:  kBr*D float, m_i: kBr float, l_i: kBr float
+    constexpr int kBc = 64;
+    size_t smem_bytes = kBr * D * sizeof(int8_t)    // Q_smem
+                      + kBc * D * sizeof(int8_t)     // K_smem
+                      + kBc * D * sizeof(half)       // V_smem
+                      + kBr * D * sizeof(float)      // O_acc
+                      + kBr * sizeof(float)          // m_i
+                      + kBr * sizeof(float);         // l_i
 
     // Process each head separately
     for (int b = 0; b < B; b++) {
@@ -289,10 +291,11 @@ torch::Tensor int8_flash_attn(
             half* O_ptr = reinterpret_cast<half*>(
                 O.index({b, h}).data_ptr());
 
-            int8_flash_attn_kernel<Br, Bc, D>
-                <<<grid, threads, 0, stream>>>(
+            int8_flash_attn_kernel
+                <<<grid, threads, smem_bytes, stream>>>(
                     Q_ptr, K_ptr, V_ptr, O_ptr,
-                    Lq, Lkv, scale_q, scale_k, scale_s, causal);
+                    Lq, Lkv, D,
+                    scale_q, scale_k, scale_s, causal);
         }
     }
 
