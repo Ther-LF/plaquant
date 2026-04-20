@@ -17,14 +17,9 @@
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
-#include "cutlass/numeric_types.h"
-#include "cutlass/gemm/collective/collective_builder.hpp"
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
-
-using namespace cute;
 
 // ============================================================
 // Tile config
@@ -33,35 +28,11 @@ constexpr int kBr = 64;   // Q tile along Lq
 constexpr int kBc = 64;   // KV tile along Lkv
 // D (head dim) is runtime parameter
 
-// WGMMA tile shapes
-using TileQK = Shape<Int<64>, Int<64>, Int<32>>;  // M=64, N=64, K=32 for INT8
-using TilePV = Shape<Int<64>, Int<64>, Int<16>>;  // M=64, N=64, K=16 for FP16
-
 // ============================================================
-// INT8 WGMMA for Q·K^T
+// WGMMA will be added in v3 using CUTLASS CollectiveBuilder
+// (same pattern as resq_gemm_v2.cu) since CUTE ss_op_selector
+// doesn't support INT8 in this CUTLASS version.
 // ============================================================
-// On SM90, INT8 WGMMA: m64n8k32 per instruction
-// We tile to 64x64 using 8 N-slices
-
-using TiledMmaQK = decltype(make_tiled_mma(
-    GMMA::ss_op_selector<int8_t, int8_t, int32_t, TileQK>{},
-    Layout<Shape<Int<1>, _1, _1>>{}));
-
-using TiledMmaPV = decltype(make_tiled_mma(
-    GMMA::ss_op_selector<cutlass::half_t, cutlass::half_t, float, TilePV>{},
-    Layout<Shape<Int<1>, _1, _1>>{}));
-
-// ============================================================
-// SMEM Layouts
-// ============================================================
-
-using SmemLayoutQ = decltype(tile_to_shape(
-    GMMA::Layout_MN_INTER_Atom<int8_t>{},
-    make_shape(Int<kBr>{}, Int<256>{})));
-
-using SmemLayoutK = decltype(tile_to_shape(
-    GMMA::Layout_MN_INTER_Atom<int8_t>{},
-    make_shape(Int<kBc>{}, Int<256>{})));
 
 // ============================================================
 // Main kernel
