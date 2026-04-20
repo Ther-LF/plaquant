@@ -322,8 +322,8 @@ def main():
     print(f"\n{'Config':<18} {'Lq':>5} {'Lkv':>5} {'GFLOPs':>9} ", end='')
     for b in BACKENDS:
         print(f"{b+'(ms)':>10} ", end='')
-    print(f"{'CosSim':>8} {'MaxErr':>8}")
-    print('-' * 130)
+    print(f"{'CosSim':>8} {'MaxErr':>8} {'MAE':>8} {'MAPE':>8}")
+    print('-' * 160)
 
     # Header — Achieved TFLOPS/TOPS + Utilization
     print(f"{'Achieved (TF/TOPS)':<18} {'':>5} {'':>5} {'':>9} ", end='')
@@ -334,7 +334,7 @@ def main():
     for b in BACKENDS:
         print(f"{b+'%peak':>10} ", end='')
     print()
-    print('-' * 130)
+    print('-' * 160)
 
     all_results = {}
 
@@ -380,7 +380,9 @@ def main():
         resq_acc = entry['resq_mixed'].get('accuracy', {})
         cos_sim = resq_acc.get('cosine_sim', 0) if resq_acc else 0
         max_err = resq_acc.get('max_abs_err', 0) if resq_acc else 0
-        print(f"{cos_sim:>8.4f} {max_err:>8.4f}")
+        mae = resq_acc.get('mae', 0) if resq_acc else 0
+        mape = resq_acc.get('mape', 0) if resq_acc else 0
+        print(f"{cos_sim:>8.4f} {max_err:>8.4f} {mae:>8.4f} {mape:>8.4f}")
 
         # Achieved TFLOPS/TOPS row
         total_ops = gflops * 1e9  # convert back to FLOPs

@@ -217,6 +217,9 @@ def compute_metrics(actual, expected):
     mae = diff.abs().mean().item()
     rmse = diff.pow(2).mean().sqrt().item()
 
+    eps = 1e-8
+    mape = (diff.abs() / (e.abs() + eps)).mean().item()
+
     cos_sim = F.cosine_similarity(a.unsqueeze(0), e.unsqueeze(0)).item()
 
     ref_power = e.pow(2).sum().item()
@@ -230,6 +233,7 @@ def compute_metrics(actual, expected):
         'max_abs_err': max_abs_err,
         'mae': mae,
         'rmse': rmse,
+        'mape': mape,
         'cosine_sim': cos_sim,
         'snr_db': snr_db,
     }
