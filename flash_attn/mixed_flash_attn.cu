@@ -166,7 +166,6 @@ int8_fa_v3_kernel(
 
         // Extract WGMMA accumulator to S_smem via CUTE copy
         TiledMmaQK tiled_mma;
-        auto wg_slice = tiled_mma.get_slice(threadIdx.x);
 
         // Create fragment and fill with WGMMA results
         auto tSrS = partition_fragment_C(tiled_mma,
@@ -174,20 +173,20 @@ int8_fa_v3_kernel(
         for (int i = 0; i < size(tSrS); i++)
             tSrS(i) = int32_t(S_acc[i]);
 
-        // Create SMEM tensor for output
-        Tensor sS = make_tensor(make_smem_ptr(S_smem),
+        // Create SMEM tensor for output (float row-major)
+        Tensor sS = make_tensor(make_smem_ptr(reinterpret_cast<float*>(S_smem)),
             make_layout(make_shape(Int<kBr>{}, Int<kBc>{}),
                         LayoutRight{}));
 
-        // Copy fragment to SMEM (CUTE handles thread-to-element mapping)
-        // Use the warpgroup slice to write each thread's fragment
-        auto tSrS_smem = wg_slice.retile_C(sS);
-        for (int i = 0; i < size(tSrS_smem); i++) {
-            float val = float(int32_t(tSrS(i))) * scale_qk;
-            // tSrS and tSrS_smem have the same thread-level layout
-            // so element i in both corresponds to the same (row, col)
-            tSrS_smem(i) = val;
-        }
+        // Copy fragment → SMEM (CUTE handles thread-to-element mapping)
+        // Use DefaultCopy or AutoVectorizingCopy
+        auto tS_copy = make_tiled_copy_C(
+            Copy_Atom<DefaultCopy, float>{}, tiled_mma);
+        cute::copy(tS_copy, tSrS, sS);
+
+        // Apply scale
+        for (int i = threadIdx.x; i < kBr * kBc; i += blockDim.x)
+            S_smem[i] *= scale_qk;
 
         // Write S_acc to SMEM (simplified: each thread writes to its row)
         // The accumulator mapping: for M64×N64, 128 threads,
