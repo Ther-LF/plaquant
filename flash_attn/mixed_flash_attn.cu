@@ -29,9 +29,9 @@ constexpr int kBr = 64;   // Q tile along Lq
 constexpr int kBc = 64;   // KV tile along Lkv
 // D = head dim, runtime parameter (must be multiple of 32 for WGMMA)
 
-// INT8 WGMMA: use GMMA::ss_op_selector with new CUTLASS
+// INT8 WGMMA: SS mode needs K=64 (sparse), D=256 → 4 iterations
 using TiledMmaQK = decltype(make_tiled_mma(
-    GMMA::ss_op_selector<int8_t, int8_t, int32_t, Shape<Int<64>, Int<64>, Int<32>>>{},
+    GMMA::ss_op_selector<int8_t, int8_t, int32_t, Shape<Int<64>, Int<64>, Int<64>>>{},
     Layout<Shape<_1, _1, _1>>{}));
 
 // ============================================================
@@ -164,8 +164,8 @@ int8_fa_v3_kernel(
             // Clear accumulator
             for (int i = 0; i < size(tSrS); i++) tSrS(i) = int32_t(0);
 
-            // INT8 WGMMA loop over K dimension (256/32 = 8 iters)
-            constexpr int k_iters = 256 / 32;
+            // INT8 WGMMA loop over K dimension (256/64 = 4 iters)
+            constexpr int k_iters = 256 / 64;
             #pragma unroll
             for (int k = 0; k < k_iters; k++) {
                 cute::gemm(tiled_mma_qk, tSrS,
