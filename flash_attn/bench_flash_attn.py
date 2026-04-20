@@ -130,6 +130,34 @@ def compute_flops(B, H, Lq, Lkv, d_head, causal):
 
 
 # ============================================================
+# H20 Peak Throughput (Tensor Core)
+# ============================================================
+
+# NVIDIA H20 (Hopper SM90, 78 SMs, 400W TDP)
+H20_PEAK = {
+    'fp16':  148.0,   # TFLOPS (FP16 TC)
+    'int8':  296.0,   # TOPS   (INT8 TC, 2x FP16)
+    'int4':  592.0,   # TOPS   (INT4 TC, 2x INT8, 4x FP16) — estimated
+}
+
+# Effective peak for mixed precision (weighted by K ratio)
+def mixed_peak(k_high, k_low):
+    """Effective peak TOPS for mixed INT8/INT4."""
+    total_k = k_high + k_low
+    return (k_high * H20_PEAK['int8'] + k_low * H20_PEAK['int4']) / total_k
+
+# Peak for each backend
+def backend_peak(name, k_high=128, k_low=128):
+    if name == 'fa_fp16':
+        return H20_PEAK['fp16']
+    elif name == 'int8_only':
+        return H20_PEAK['int8']
+    elif name == 'resq_mixed':
+        return mixed_peak(k_high, k_low)
+    return 0
+
+
+# ============================================================
 # Config Sweep
 # ============================================================
 
@@ -252,19 +280,31 @@ def main():
     configs  = build_configs(seq_lens)
 
     gpu_name = torch.cuda.get_device_name()
-    print(f"\n{'='*150}")
+    print(f"\n{'='*160}")
     print(f"Mixed-Precision FlashAttention Benchmark")
     print(f"Config: k_high={k_high}, k_low={k_low}, d_head={d_head}")
     print(f"GPU:    {gpu_name}")
-    print(f"{'='*150}")
+    print(f"H20 Peak: FP16={H20_PEAK['fp16']} TF, INT8={H20_PEAK['int8']} TOPS, "
+          f"INT4={H20_PEAK['int4']} TOPS, Mixed={mixed_peak(k_high, k_low):.0f} TOPS")
+    print(f"{'='*160}")
 
-    # Header
-    header = (f"{'Config':<18} {'Lq':>5} {'Lkv':>5} {'GFLOPs':>9} "
-              f"{'FA_FP16':>9} {'INT8':>9} {'ResQ':>9} "
-              f"{'FA-FP16':>9} {'INT8':>9} {'ResQ':>9} "
-              f"{'CosSim':>8} {'MaxErr':>8}")
-    print(header)
-    print('-' * 150)
+    # Header — Latency
+    print(f"\n{'Config':<18} {'Lq':>5} {'Lkv':>5} {'GFLOPs':>9} ", end='')
+    for b in BACKENDS:
+        print(f"{b+'(ms)':>10} ", end='')
+    print(f"{'CosSim':>8} {'MaxErr':>8}")
+    print('-' * 130)
+
+    # Header — Achieved TFLOPS/TOPS + Utilization
+    print(f"{'Achieved (TF/TOPS)':<18} {'':>5} {'':>5} {'':>9} ", end='')
+    for b in BACKENDS:
+        print(f"{b+'(ops)':>10} ", end='')
+    print()
+    print(f"{'Utilization (%)':<18} {'':>5} {'':>5} {'':>9} ", end='')
+    for b in BACKENDS:
+        print(f"{b+'%peak':>10} ", end='')
+    print()
+    print('-' * 130)
 
     all_results = {}
 
@@ -296,32 +336,45 @@ def main():
             entry[backend] = {
                 'latency_ms': round(r['latency_ms'], 4),
                 'error': r['error'],
+                'accuracy': r['accuracy'],
             }
             latencies[backend] = r['latency_ms']
             if r['accuracy']:
                 accuracies[backend] = r['accuracy']
 
-        # Use resq_mixed accuracy for display
-        resq_acc = accuracies.get('resq_mixed', {})
-        cos_sim = resq_acc.get('cosine_sim', 0)
-        max_err = resq_acc.get('max_abs_err', 0)
+        # Latency row
+        print(f"{name:<18} {Lq:>5} {Lkv:>5} {gflops:>9.2f} ", end='')
+        for b in BACKENDS:
+            l = entry[b]['latency_ms']
+            print(f"{l:>10.3f} ", end='')
+        resq_acc = entry['resq_mixed'].get('accuracy', {})
+        cos_sim = resq_acc.get('cosine_sim', 0) if resq_acc else 0
+        max_err = resq_acc.get('max_abs_err', 0) if resq_acc else 0
+        print(f"{cos_sim:>8.4f} {max_err:>8.4f}")
 
-        fa_ms  = latencies.get('fa_fp16', 0)
-        i8_ms  = latencies.get('int8_only', 0)
-        resq_ms = latencies.get('resq_mixed', 0)
+        # Achieved TFLOPS/TOPS row
+        total_ops = gflops * 1e9  # convert back to FLOPs
+        print(f"{'  achieved ops':<18} {'':>5} {'':>5} {'':>9} ", end='')
+        for b in BACKENDS:
+            l = entry[b]['latency_ms']
+            if l > 0:
+                ops = total_ops / (l * 1e-3) / 1e12  # TFLOPS/TOPS
+            else:
+                ops = 0
+            entry[b]['achieved_ops'] = round(ops, 2)
+            print(f"{ops:>10.2f} ", end='')
+        print()
 
-        print(f"{name:<18} {Lq:>5} {Lkv:>5} {gflops:>9.2f} "
-              f"{fa_ms:>9.3f} {i8_ms:>9.3f} {resq_ms:>9.3f} "
-              f"{'':>9} {'':>9} {'':>9} "
-              f"{cos_sim:>8.4f} {max_err:>8.4f}")
-
-        # Speedup row
-        if fa_ms > 0:
-            i8_speedup  = fa_ms / i8_ms if i8_ms > 0 else 0
-            resq_speedup = fa_ms / resq_ms if resq_ms > 0 else 0
-            print(f"{'  speedup vs FA':<18} {'':>5} {'':>5} {'':>9} "
-                  f"{'1.00x':>9} {f'{i8_speedup:.2f}x':>9} "
-                  f"{f'{resq_speedup:.2f}x':>9}")
+        # Utilization % row
+        print(f"{'  utilization %':<18} {'':>5} {'':>5} {'':>9} ", end='')
+        for b in BACKENDS:
+            peak = backend_peak(b, k_high, k_low)
+            ops = entry[b].get('achieved_ops', 0)
+            util = (ops / peak * 100) if peak > 0 else 0
+            entry[b]['utilization_pct'] = round(util, 1)
+            marker = '<<<' if util > 50 else ''
+            print(f"{util:>9.1f}% ", end='')
+        print()
 
         all_results[name] = entry
 
