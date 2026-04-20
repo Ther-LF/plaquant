@@ -110,19 +110,18 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract accumulator: CLayout_64x64 maps 128 threads to 64x64 output
-        // Thread t covers 2 rows × 16 cols block (32 values per thread)
-        //   row_base = (t / 4) * 2,  col_base = (t % 4) * 16
+        // Extract via TiledCopy (best so far: CosSim=0.98 small, 0.70 full)
         int tid = threadIdx.x;
         if (tid < 128) {
-            int row_base = (tid / 4) * 2;
-            int col_base = (tid % 4) * 16;
-            // 32 values fill the 2×16 block: val i maps to row=row_base+i/16, col=col_base+i%16
-            for (int i = 0; i < 32; i++) {
-                int r = row_base + i / 16;
-                int c = col_base + i % 16;
-                S_smem[r * kBc + c] = float(int32_t(S_acc[i])) * scale_qk;
-            }
+            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
+            auto tiled_copy = make_tiled_copy_C(
+                Copy_Atom<UniversalCopy<float>, float>{}, tiled_mma);
+            auto thr_copy = tiled_copy.get_slice(tid);
+            Tensor sS = make_tensor(make_smem_ptr(S_smem),
+                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+            auto tSrD = thr_copy.partition_D(sS);
+            for (int i = 0; i < size(tSrD); i++)
+                tSrD(i) = float(int32_t(S_acc[i])) * scale_qk;
         }
         __syncthreads();
 
