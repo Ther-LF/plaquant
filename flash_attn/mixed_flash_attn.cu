@@ -30,8 +30,10 @@ constexpr int kBc = 64;   // KV tile along Lkv
 // D = head dim, runtime parameter (must be multiple of 32 for WGMMA)
 
 // INT8 WGMMA: SS mode needs K=64 (sparse), D=256 → 4 iterations
+// ss_op_selector is a function → need decltype(...()) to get return type
 using TiledMmaQK = decltype(make_tiled_mma(
-    GMMA::ss_op_selector<int8_t, int8_t, int32_t, Shape<Int<64>, Int<64>, Int<64>>>{},
+    decltype(GMMA::ss_op_selector<int8_t, int8_t, int32_t,
+        Shape<Int<64>, Int<64>, Int<64>>>()){},
     Layout<Shape<_1, _1, _1>>{}));
 
 // ============================================================
