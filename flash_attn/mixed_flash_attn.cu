@@ -112,9 +112,9 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract WGMMA accumulator using partition_fragment_C + cute::copy
-        // partition_fragment_C gives GenColMajor layout matching S_acc register order.
-        // We copy to an int32_t SMEM view first, then convert to float.
+        // Extract WGMMA accumulator using canonical CUTE cooperative_gemm pattern:
+        // partition_fragment_C (GenColMajor, matches S_acc register order)
+        // → retile_S (adapt to TiledCopy source layout) → copy to SMEM via partition_D
         int tid = threadIdx.x;
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
@@ -125,17 +125,20 @@ int8_fa_v3_kernel(
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
             auto frg = thr_mma.partition_fragment_C(sS);
 
-            // Fill fragment from accumulator registers
+            // Fill fragment from accumulator registers (GenColMajor order = S_acc order)
             for (int i = 0; i < size(frg); i++)
                 frg(i) = int32_t(S_acc[i]);
 
-            // Copy fragment to SMEM via int32_t view
+            // TiledCopy for accumulator → SMEM (int32_t)
             auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
             auto thr_copy_C = tiled_copy_C.get_slice(tid);
             Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
             auto tCsC = thr_copy_C.partition_D(sS_int);
-            cute::copy(frg, tCsC);
+
+            // retile_S adapts the fragment's GenColMajor layout to the TiledCopy's source layout
+            auto frg_view = thr_copy_C.retile_S(frg);
+            copy(tiled_copy_C, frg_view, tCsC);
         }
         __syncthreads();
 
