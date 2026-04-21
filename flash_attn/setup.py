@@ -4,10 +4,10 @@ import subprocess
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-# Use CUTLASS from project-resq submodule
+# Use CUTLASS from plaquant root
 cutlass_dir = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'project-resq', 'fake_quant', 'csrc', 'cutlass')
+    'cutlass')
 
 if not os.path.exists(os.path.join(cutlass_dir, 'include', 'cutlass', 'cutlass.h')):
     raise RuntimeError(

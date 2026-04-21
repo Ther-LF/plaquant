@@ -110,18 +110,21 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract via TiledCopy (best so far: CosSim=0.98 small, 0.70 full)
+        // Extract using CLayout_64x64: Shape((4,8,4),(2,2,8)) Stride((128,1,16),(64,8,512))
         int tid = threadIdx.x;
         if (tid < 128) {
-            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
-            auto tiled_copy = make_tiled_copy_C(
-                Copy_Atom<DefaultCopy, float>{}, tiled_mma);
-            auto thr_copy = tiled_copy.get_slice(tid);
-            Tensor sS = make_tensor(make_smem_ptr(S_smem),
-                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tSrD = thr_copy.partition_D(sS);
-            for (int i = 0; i < size(tSrD); i++)
-                tSrD(i) = float(int32_t(S_acc[i])) * scale_qk;
+            int t0 = tid % 4;
+            int t1 = (tid / 4) % 8;
+            int t2 = (tid / 32) % 4;
+            for (int r = 0; r < 32; r++) {
+                int r0 = r % 2;
+                int r1 = (r / 2) % 2;
+                int r2 = (r / 4) % 8;
+                int linear = t0*128 + t1*1 + t2*16 + r0*64 + r1*8 + r2*512;
+                int row = linear / 64;
+                int col = linear % 64;
+                S_smem[row * kBc + col] = float(int32_t(S_acc[r])) * scale_qk;
+            }
         }
         __syncthreads();
 
