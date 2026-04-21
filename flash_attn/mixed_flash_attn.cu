@@ -110,18 +110,19 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract using TiledCopy with int32_t (matching WGMMA accumulator type)
+        // Extract WGMMA accumulator using thr_mma.partition_C (canonical CUTE)
+        // The ThrMMA slice uses CLayout_64x64 to partition SMEM destination,
+        // matching the WGMMA register layout exactly.
         int tid = threadIdx.x;
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
-            auto tiled_copy = make_tiled_copy_C(
-                Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
-            auto thr_copy = tiled_copy.get_slice(tid);
+            auto thr_mma = tiled_mma.get_slice(tid);
             Tensor sS = make_tensor(make_smem_ptr(S_smem),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tSrD = thr_copy.partition_D(sS);
-            for (int i = 0; i < size(tSrD); i++)
-                tSrD(i) = float(S_acc[i]) * scale_qk;
+            auto tCsC = thr_mma.partition_C(sS);
+            // tCsC maps val_idx → SMEM position; S_acc[val_idx] is the matching register
+            for (int i = 0; i < size(tCsC); i++)
+                tCsC(i) = float(S_acc[i]) * scale_qk;
         }
         __syncthreads();
 
