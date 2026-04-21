@@ -10,6 +10,10 @@
 #include <ATen/cuda/CUDAContext.h>
 
 // From mixed_flash_attn.cu
+torch::Tensor debug_wgmma_extract(
+    torch::Tensor Q_int8,
+    torch::Tensor K_int8);
+
 torch::Tensor int8_flash_attn(
     torch::Tensor Q_int8,    // (B, H, Lq, D) INT8
     torch::Tensor K_int8,    // (B, H, Lkv, D) INT8
@@ -21,6 +25,9 @@ torch::Tensor int8_flash_attn(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "Mixed-Precision FlashAttention — CUTLASS 3.x Hopper";
+    m.def("debug_wgmma_extract", &debug_wgmma_extract,
+          "Debug: run WGMMA and output raw S matrix (int32)",
+          py::arg("Q_int8"), py::arg("K_int8"));
     m.def("int8_flash_attn", &int8_flash_attn,
           "INT8 FlashAttention forward",
           py::arg("Q_int8"), py::arg("K_int8"), py::arg("V_fp16"),

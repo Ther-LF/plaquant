@@ -112,10 +112,9 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract WGMMA accumulator: partition_fragment_C gives GenColMajor
-        // fragment matching S_acc register order. partition_C gives SMEM
-        // references with correct CLayout-based (row,col) mapping.
-        // Copy via logical coordinates — both have the same shape.
+        // Extract WGMMA accumulator using canonical CUTE cooperative_gemm pattern:
+        // partition_fragment_C (GenColMajor, matches S_acc register order)
+        // → retile_S (adapt to TiledCopy source layout) → copy to SMEM via partition_D
         int tid = threadIdx.x;
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
@@ -130,17 +129,16 @@ int8_fa_v3_kernel(
             for (int i = 0; i < size(frg); i++)
                 frg(i) = int32_t(S_acc[i]);
 
-            // Partition SMEM using CLayout — gives correct (row,col) addresses
+            // TiledCopy for accumulator → SMEM (int32_t)
+            auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
+            auto thr_copy_C = tiled_copy_C.get_slice(tid);
             Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tCrC = thr_mma.partition_C(sS_int);
+            auto tCsC = thr_copy_C.partition_D(sS_int);
 
-            // Coordinate-based copy: frg and tCrC have the same shape,
-            // frg(mi,ni) is the value, tCrC(mi,ni) is the correct SMEM reference
-            auto sh = shape(frg);
-            for (int mi = 0; mi < size<0>(sh); mi++)
-                for (int ni = 0; ni < size<1>(sh); ni++)
-                    tCrC(mi, ni) = frg(mi, ni);
+            // retile_S adapts the fragment's GenColMajor layout to the TiledCopy's source layout
+            auto frg_view = thr_copy_C.retile_S(frg);
+            copy(tiled_copy_C, frg_view, tCsC);
         }
         __syncthreads();
 
@@ -178,6 +176,93 @@ int8_fa_v3_kernel(
     __syncthreads();
     half* Op = Oh + q_start * D;
     for (int i = threadIdx.x; i < q_rows * D; i += blockDim.x) Op[i] = __float2half(O_acc[i]);
+}
+
+// Debug kernel: runs WGMMA and outputs raw S matrix (int32_t) to global memory
+extern "C" __global__ void
+debug_wgmma_extract_kernel(
+    const int8_t* __restrict__ Q, const int8_t* __restrict__ K,
+    int32_t* __restrict__ S_out, int D)
+{
+    extern __shared__ char smem[];
+    int8_t* Q_smem = reinterpret_cast<int8_t*>(smem);
+    int8_t* K_smem = Q_smem + kBr * D;
+    float*  S_smem = reinterpret_cast<float*>(K_smem + kBc * D);
+
+    // Load Q
+    for (int i = threadIdx.x; i < kBr * D; i += blockDim.x) {
+        int r = i / D, c = i % D;
+        int kt = c / 32, ci = c % 32;
+        Q_smem[kt * kBr * 32 + r * 32 + ci] = Q[i];
+    }
+    // Load K
+    for (int i = threadIdx.x; i < kBc * D; i += blockDim.x) {
+        int r = i / D, c = i % D;
+        int kt = c / 32, ci = c % 32;
+        K_smem[kt * kBc * 32 + r * 32 + ci] = K[i];
+    }
+    __syncthreads();
+
+    uint32_t S_acc[32]; for (int i = 0; i < 32; i++) S_acc[i] = 0;
+    MmaAtomQK mma;
+    for (int k = 0; k < 8; k++) {
+        int8_t* qk = Q_smem + k * kBr * 32;
+        int8_t* kk = K_smem + k * kBc * 32;
+        Tensor sQ = make_tensor(make_smem_ptr(qk), SmemLayoutTile{});
+        Tensor sK = make_tensor(make_smem_ptr(kk), SmemLayoutTile{});
+        uint64_t dq = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sQ);
+        uint64_t dk = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sK);
+        auto sc = (k == 0) ? GMMA::ScaleOut::Zero : GMMA::ScaleOut::One;
+        mma.fma(dq, dk,
+            S_acc[0],  S_acc[1],  S_acc[2],  S_acc[3],
+            S_acc[4],  S_acc[5],  S_acc[6],  S_acc[7],
+            S_acc[8],  S_acc[9],  S_acc[10], S_acc[11],
+            S_acc[12], S_acc[13], S_acc[14], S_acc[15],
+            S_acc[16], S_acc[17], S_acc[18], S_acc[19],
+            S_acc[20], S_acc[21], S_acc[22], S_acc[23],
+            S_acc[24], S_acc[25], S_acc[26], S_acc[27],
+            S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
+    }
+
+    // Extract using retile_S + copy
+    int tid = threadIdx.x;
+    if (tid < 128) {
+        auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
+        auto thr_mma = tiled_mma.get_slice(tid);
+        Tensor sS = make_tensor(make_smem_ptr(S_smem),
+            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+        auto frg = thr_mma.partition_fragment_C(sS);
+        for (int i = 0; i < size(frg); i++)
+            frg(i) = int32_t(S_acc[i]);
+        auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
+        auto thr_copy_C = tiled_copy_C.get_slice(tid);
+        Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
+            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+        auto tCsC = thr_copy_C.partition_D(sS_int);
+        auto frg_view = thr_copy_C.retile_S(frg);
+        copy(tiled_copy_C, frg_view, tCsC);
+    }
+    __syncthreads();
+
+    // Copy S_smem (as int32_t) to global memory
+    for (int i = threadIdx.x; i < kBr * kBc; i += blockDim.x)
+        S_out[i] = ((int32_t*)S_smem)[i];
+}
+
+torch::Tensor debug_wgmma_extract(
+    torch::Tensor Q, torch::Tensor K)
+{
+    const int B=Q.size(0), H=Q.size(1), D=Q.size(3);
+    TORCH_CHECK(D==256);
+    auto Qf=Q.reshape({B*H, kBr, D}).contiguous(), Kf=K.reshape({B*H, kBc, D}).contiguous();
+    auto Sout=torch::empty({B*H, kBr, kBc}, torch::TensorOptions().device(Q.device()).dtype(torch::kInt32));
+    constexpr int th=256;
+    size_t sm=kBr*D + kBc*D + kBr*kBc*4;
+    cudaFuncSetAttribute(debug_wgmma_extract_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, sm);
+    debug_wgmma_extract_kernel<<<dim3(1,B*H), th, sm, at::cuda::getCurrentCUDAStream().stream()>>>(
+        (const int8_t*)Qf.data_ptr(), (const int8_t*)Kf.data_ptr(),
+        (int32_t*)Sout.data_ptr(), D);
+    return Sout.reshape({B,H,kBr,kBc});
 }
 
 torch::Tensor int8_flash_attn(
