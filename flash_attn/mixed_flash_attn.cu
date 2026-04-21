@@ -110,26 +110,18 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract using corrected CLayout_64x64 (GenColMajor: smallest stride varies fastest)
-        // CLayout_64x64 = Layout<Shape<Shape<_4,_8,_4>,Shape<_2,_2,_8>>,
-        //                         Stride<Stride<_128,_1,_16>,Stride<_64,_8,_512>>>
-        // Thread: modes (4,8,4) strides (128,1,16) → mode 1 (stride=1) fastest
-        // Value:  modes (2,2,8) strides (64,8,512) → mode 1 (stride=8) fastest
+        // Extract using TiledCopy with int32_t (matching WGMMA accumulator type)
         int tid = threadIdx.x;
         if (tid < 128) {
-            for (int v = 0; v < 32; v++) {
-                // GenColMajor decomposition: smallest stride varies fastest
-                int t1 = tid % 8;        // mode 1, stride=1 (smallest)
-                int t0 = (tid / 8) % 4;  // mode 0, stride=128
-                int t2 = tid / 32;       // mode 2, stride=16
-                int v1 = v % 2;          // mode 1, stride=8 (smallest)
-                int v0 = (v / 2) % 2;    // mode 0, stride=64
-                int v2 = v / 4;          // mode 2, stride=512
-                int flat = t0*128 + t1*1 + t2*16 + v0*64 + v1*8 + v2*512;
-                int row = flat / 64;
-                int col = flat % 64;
-                S_smem[row * kBc + col] = float(int32_t(S_acc[v])) * scale_qk;
-            }
+            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
+            auto tiled_copy = make_tiled_copy_C(
+                Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
+            auto thr_copy = tiled_copy.get_slice(tid);
+            Tensor sS = make_tensor(make_smem_ptr(S_smem),
+                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+            auto tSrD = thr_copy.partition_D(sS);
+            for (int i = 0; i < size(tSrD); i++)
+                tSrD(i) = float(S_acc[i]) * scale_qk;
         }
         __syncthreads();
 
