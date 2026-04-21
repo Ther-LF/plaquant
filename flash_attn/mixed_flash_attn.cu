@@ -1,12 +1,11 @@
 /*
- * INT8 FlashAttention v3 — WGMMA via atom.fma() with correct TN descriptors
+ * INT8 FlashAttention v3 — WGMMA via atom.fma() with SW32 SMEM layout
  *
- * MMA_64x64x32_S32S8S8_SS_TN atom:
- *   T (A=Q): Major::K via Layout_K_SW32_Atom<int8_t>
- *   N (B=K): Major::MN via Layout_MN_SW32_Atom<int8_t>
+ * Both Q and K use Major::K (K-major). Per CUTLASS sm90_common.inl,
+ * Major::MN is NOT valid for INT8 types (sizeof(T)==1).
  *
- * Q SMEM (K-major):  element (r,ci) at r*32 + ci  (K varies fastest)
- * K SMEM (MN-major): element (r,ci) at r + ci*kBc (MN varies fastest)
+ * SMEM: Layout_K_SW32_Atom<int8_t> tiled to (64, 32) — K varies fastest.
+ * Element (r,c) at r*32 + c.
  */
 
 #include <cuda_runtime.h>
@@ -27,15 +26,10 @@ using MmaAtomQK = decltype(
     GMMA::ss_op_selector<int8_t, int8_t, int32_t,
         Shape<Int<64>, Int<64>, Int<64>>>());
 
-// SMEM layout for Q (A matrix): K-major → Major::K (T in TN atom)
-using SmemLayoutQ = decltype(tile_to_shape(
+// SMEM layout: SW32 (B32) → canonical GMMA K-major, accepted by make_gmma_desc
+using SmemLayoutTile = decltype(tile_to_shape(
     GMMA::Layout_K_SW32_Atom<int8_t>{},
-    make_shape(Int<kBr>{}, Int<32>{})));  // (64, 32)
-
-// SMEM layout for K (B matrix): MN-major → Major::MN (N in TN atom)
-using SmemLayoutK = decltype(tile_to_shape(
-    GMMA::Layout_MN_SW32_Atom<int8_t>{},
-    make_shape(Int<kBc>{}, Int<32>{})));  // (64, 32)
+    make_shape(Int<kBr>{}, Int<32>{})));  // (64, 32) for one WGMMA K tile
 
 extern "C" __global__ void
 int8_fa_v3_kernel(
@@ -79,12 +73,12 @@ int8_fa_v3_kernel(
         int ks = kv * kBc, ke = min(ks + kBc, Lkv), kr = ke - ks;
         if (causal && ks > q_end - 1) break;
 
-        // Load K (MN-major within each 64x32 tile: element (r,ci) at r + ci*kBc)
+        // Load K (same K-major pattern)
         const int8_t* Kp = Kh + ks * D;
         for (int i = threadIdx.x; i < kr * D; i += blockDim.x) {
             int r = i / D, c = i % D;
             int kt = c / 32, ci = c % 32;
-            K_smem[kt * kBc * 32 + r + ci * kBc] = Kp[i];
+            K_smem[kt * kBc * 32 + r * 32 + ci] = Kp[i];
         }
         // Load V (row-major)
         const half* Vp = Vh + ks * D;
@@ -101,10 +95,10 @@ int8_fa_v3_kernel(
             int8_t* qk = Q_smem + k * kBr * 32;
             int8_t* kk = K_smem + k * kBc * 32;
 
-            Tensor sQ = make_tensor(make_smem_ptr(qk), SmemLayoutQ{});
-            Tensor sK = make_tensor(make_smem_ptr(kk), SmemLayoutK{});
+            Tensor sQ = make_tensor(make_smem_ptr(qk), SmemLayoutTile{});
+            Tensor sK = make_tensor(make_smem_ptr(kk), SmemLayoutTile{});
             uint64_t dq = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sQ);
-            uint64_t dk = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::MN>(sK);
+            uint64_t dk = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sK);
 
             auto sc = (k == 0) ? GMMA::ScaleOut::Zero : GMMA::ScaleOut::One;
             mma.fma(dq, dk,
@@ -118,20 +112,36 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract WGMMA accumulator using thr_mma.partition_C (canonical CUTE)
-        // The ThrMMA slice uses CLayout_64x64 to partition SMEM destination,
-        // matching the WGMMA register layout exactly.
+        // Extract WGMMA accumulator using partition_fragment_C + cute::copy
+        // partition_fragment_C gives GenColMajor layout matching S_acc register order.
+        // We copy to an int32_t SMEM view first, then convert to float.
         int tid = threadIdx.x;
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
             auto thr_mma = tiled_mma.get_slice(tid);
+
+            // Fragment with GenColMajor layout (matches S_acc[0..31] register order)
             Tensor sS = make_tensor(make_smem_ptr(S_smem),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tCsC = thr_mma.partition_C(sS);
-            // tCsC maps val_idx → SMEM position; S_acc[val_idx] is the matching register
-            for (int i = 0; i < size(tCsC); i++)
-                tCsC(i) = float(S_acc[i]) * scale_qk;
+            auto frg = thr_mma.partition_fragment_C(sS);
+
+            // Fill fragment from accumulator registers
+            for (int i = 0; i < size(frg); i++)
+                frg(i) = int32_t(S_acc[i]);
+
+            // Copy fragment to SMEM via int32_t view
+            auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
+            auto thr_copy_C = tiled_copy_C.get_slice(tid);
+            Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
+                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
+            auto tCsC = thr_copy_C.partition_D(sS_int);
+            cute::copy(frg, tCsC);
         }
+        __syncthreads();
+
+        // Convert int32_t S_smem to float and apply scale
+        for (int i = threadIdx.x; i < kBr * kBc; i += blockDim.x)
+            S_smem[i] = float(((int32_t*)S_smem)[i]) * scale_qk;
         __syncthreads();
 
         // Softmax + P·V
