@@ -112,33 +112,28 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract WGMMA accumulator using canonical CUTE cooperative_gemm pattern:
-        // partition_fragment_C (GenColMajor, matches S_acc register order)
-        // → retile_S (adapt to TiledCopy source layout) → copy to SMEM via partition_D
+        // Extract WGMMA accumulator using manually derived CLayout_64x64 mapping.
+        // CLayout_64x64 = Layout<Shape<Shape<_4,_8,_4>,Shape<_2,_2,_8>>,
+        //                        Stride<Stride<_128,_1,_16>,Stride<_64,_8,_512>>>
+        // Thread (tid) → (n0,m2,n1,m1); register (r) → (m0,n2).
+        // GenColMajor: row = m1 + m2*16 + n1*8, col = m0*2 + n0 + n2*8.
         int tid = threadIdx.x;
         if (tid < 128) {
-            auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
-            auto thr_mma = tiled_mma.get_slice(tid);
-
-            // Fragment with GenColMajor layout (matches S_acc[0..31] register order)
-            Tensor sS = make_tensor(make_smem_ptr(S_smem),
-                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto frg = thr_mma.partition_fragment_C(sS);
-
-            // Fill fragment from accumulator registers (GenColMajor order = S_acc order)
-            for (int i = 0; i < size(frg); i++)
-                frg(i) = int32_t(S_acc[i]);
-
-            // TiledCopy for accumulator → SMEM (int32_t)
-            auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
-            auto thr_copy_C = tiled_copy_C.get_slice(tid);
-            Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
-                make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tCsC = thr_copy_C.partition_D(sS_int);
-
-            // retile_S adapts the fragment's GenColMajor layout to the TiledCopy's source layout
-            auto frg_view = thr_copy_C.retile_S(frg);
-            copy(tiled_copy_C, frg_view, tCsC);
+            int n0 = tid / 64;
+            int rem1 = tid % 64;
+            int m2 = rem1 / 16;
+            int rem2 = rem1 % 16;
+            int n1 = rem2 / 8;
+            int m1 = rem2 % 8;
+            int row_base = m1 + m2 * 16 + n1 * 8;
+            int32_t* S_int = (int32_t*)S_smem;
+            for (int r = 0; r < 32; r++) {
+                int m0 = r % 4;
+                int n2 = r / 4;
+                int row = row_base;
+                int col = m0 * 2 + n0 + n2 * 8;
+                S_int[row * kBc + col] = int32_t(S_acc[r]);
+            }
         }
         __syncthreads();
 
@@ -224,23 +219,24 @@ debug_wgmma_extract_kernel(
             S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
     }
 
-    // Extract using retile_S + copy
+    // Extract using manually derived CLayout_64x64 mapping
     int tid = threadIdx.x;
     if (tid < 128) {
-        auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
-        auto thr_mma = tiled_mma.get_slice(tid);
-        Tensor sS = make_tensor(make_smem_ptr(S_smem),
-            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-        auto frg = thr_mma.partition_fragment_C(sS);
-        for (int i = 0; i < size(frg); i++)
-            frg(i) = int32_t(S_acc[i]);
-        auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
-        auto thr_copy_C = tiled_copy_C.get_slice(tid);
-        Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
-            make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-        auto tCsC = thr_copy_C.partition_D(sS_int);
-        auto frg_view = thr_copy_C.retile_S(frg);
-        copy(tiled_copy_C, frg_view, tCsC);
+        int n0 = tid / 64;
+        int rem1 = tid % 64;
+        int m2 = rem1 / 16;
+        int rem2 = rem1 % 16;
+        int n1 = rem2 / 8;
+        int m1 = rem2 % 8;
+        int row_base = m1 + m2 * 16 + n1 * 8;
+        int32_t* S_int = (int32_t*)S_smem;
+        for (int r = 0; r < 32; r++) {
+            int m0 = r % 4;
+            int n2 = r / 4;
+            int row = row_base;
+            int col = m0 * 2 + n0 + n2 * 8;
+            S_int[row * kBc + col] = int32_t(S_acc[r]);
+        }
     }
     __syncthreads();
 
