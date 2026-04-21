@@ -1,9 +1,12 @@
 /*
- * INT8 FlashAttention v3 — WGMMA via atom.fma() with SW32 SMEM layout
+ * INT8 FlashAttention v3 — WGMMA via atom.fma() with correct TN descriptors
  *
- * Key insight: Layout_K_SW32_Atom<int8_t> creates a canonical GMMA K-major
- * layout (B32 type) that make_gmma_desc<Major::K> accepts.
- * Native shape (8,32), tiled to (64,32). Stride: r*32 + c.
+ * MMA_64x64x32_S32S8S8_SS_TN atom:
+ *   T (A=Q): Major::K via Layout_K_SW32_Atom<int8_t>
+ *   N (B=K): Major::MN via Layout_MN_SW32_Atom<int8_t>
+ *
+ * Q SMEM (K-major):  element (r,ci) at r*32 + ci  (K varies fastest)
+ * K SMEM (MN-major): element (r,ci) at r + ci*kBc (MN varies fastest)
  */
 
 #include <cuda_runtime.h>
@@ -24,10 +27,15 @@ using MmaAtomQK = decltype(
     GMMA::ss_op_selector<int8_t, int8_t, int32_t,
         Shape<Int<64>, Int<64>, Int<64>>>());
 
-// SMEM layout: SW32 (B32) → canonical GMMA K-major, accepted by make_gmma_desc
-using SmemLayoutTile = decltype(tile_to_shape(
+// SMEM layout for Q (A matrix): K-major → Major::K (T in TN atom)
+using SmemLayoutQ = decltype(tile_to_shape(
     GMMA::Layout_K_SW32_Atom<int8_t>{},
-    make_shape(Int<kBr>{}, Int<32>{})));  // (64, 32) for one WGMMA K tile
+    make_shape(Int<kBr>{}, Int<32>{})));  // (64, 32)
+
+// SMEM layout for K (B matrix): MN-major → Major::MN (N in TN atom)
+using SmemLayoutK = decltype(tile_to_shape(
+    GMMA::Layout_MN_SW32_Atom<int8_t>{},
+    make_shape(Int<kBc>{}, Int<32>{})));  // (64, 32)
 
 extern "C" __global__ void
 int8_fa_v3_kernel(
@@ -71,12 +79,12 @@ int8_fa_v3_kernel(
         int ks = kv * kBc, ke = min(ks + kBc, Lkv), kr = ke - ks;
         if (causal && ks > q_end - 1) break;
 
-        // Load K (same K-major pattern)
+        // Load K (MN-major within each 64x32 tile: element (r,ci) at r + ci*kBc)
         const int8_t* Kp = Kh + ks * D;
         for (int i = threadIdx.x; i < kr * D; i += blockDim.x) {
             int r = i / D, c = i % D;
             int kt = c / 32, ci = c % 32;
-            K_smem[kt * kBc * 32 + r * 32 + ci] = Kp[i];
+            K_smem[kt * kBc * 32 + r + ci * kBc] = Kp[i];
         }
         // Load V (row-major)
         const half* Vp = Vh + ks * D;
@@ -93,10 +101,10 @@ int8_fa_v3_kernel(
             int8_t* qk = Q_smem + k * kBr * 32;
             int8_t* kk = K_smem + k * kBc * 32;
 
-            Tensor sQ = make_tensor(make_smem_ptr(qk), SmemLayoutTile{});
-            Tensor sK = make_tensor(make_smem_ptr(kk), SmemLayoutTile{});
+            Tensor sQ = make_tensor(make_smem_ptr(qk), SmemLayoutQ{});
+            Tensor sK = make_tensor(make_smem_ptr(kk), SmemLayoutK{});
             uint64_t dq = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sQ);
-            uint64_t dk = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::K>(sK);
+            uint64_t dk = cute::SM90::GMMA::make_gmma_desc<GMMA::Major::MN>(sK);
 
             auto sc = (k == 0) ? GMMA::ScaleOut::Zero : GMMA::ScaleOut::One;
             mma.fma(dq, dk,
