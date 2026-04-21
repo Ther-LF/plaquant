@@ -112,9 +112,10 @@ int8_fa_v3_kernel(
                 S_acc[28], S_acc[29], S_acc[30], S_acc[31], sc);
         }
 
-        // Extract WGMMA accumulator using canonical CUTE cooperative_gemm pattern:
-        // partition_fragment_C (GenColMajor, matches S_acc register order)
-        // → retile_S (adapt to TiledCopy source layout) → copy to SMEM via partition_D
+        // Extract WGMMA accumulator: partition_fragment_C gives GenColMajor
+        // fragment matching S_acc register order. partition_C gives SMEM
+        // references with correct CLayout-based (row,col) mapping.
+        // Copy via logical coordinates — both have the same shape.
         int tid = threadIdx.x;
         if (tid < 128) {
             auto tiled_mma = make_tiled_mma(MmaAtomQK{}, Layout<Shape<_1, _1, _1>>{});
@@ -129,16 +130,17 @@ int8_fa_v3_kernel(
             for (int i = 0; i < size(frg); i++)
                 frg(i) = int32_t(S_acc[i]);
 
-            // TiledCopy for accumulator → SMEM (int32_t)
-            auto tiled_copy_C = make_tiled_copy_C(Copy_Atom<DefaultCopy, int32_t>{}, tiled_mma);
-            auto thr_copy_C = tiled_copy_C.get_slice(tid);
+            // Partition SMEM using CLayout — gives correct (row,col) addresses
             Tensor sS_int = make_tensor(make_smem_ptr((int32_t*)S_smem),
                 make_layout(make_shape(Int<kBr>{}, Int<kBc>{}), LayoutRight{}));
-            auto tCsC = thr_copy_C.partition_D(sS_int);
+            auto tCrC = thr_mma.partition_C(sS_int);
 
-            // retile_S adapts the fragment's GenColMajor layout to the TiledCopy's source layout
-            auto frg_view = thr_copy_C.retile_S(frg);
-            copy(tiled_copy_C, frg_view, tCsC);
+            // Coordinate-based copy: frg and tCrC have the same shape,
+            // frg(mi,ni) is the value, tCrC(mi,ni) is the correct SMEM reference
+            auto sh = shape(frg);
+            for (int mi = 0; mi < size<0>(sh); mi++)
+                for (int ni = 0; ni < size<1>(sh); ni++)
+                    tCrC(mi, ni) = frg(mi, ni);
         }
         __syncthreads();
 
