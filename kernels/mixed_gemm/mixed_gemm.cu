@@ -61,11 +61,11 @@ constexpr int AlignmentOutput = 128 / cutlass::sizeof_bits<ElementOutput>::value
 using namespace cutlass::epilogue::fusion;
 
 // Leaf nodes: per-row and per-col vectors loaded via TMA
-//   Indices 0,1,2,3 identify the auxiliary tensor in epilogue arguments
+//   First template arg is smem pipeline stage (must be 0, pipelining not supported)
 using Leaf_sx       = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_1, _0, int64_t>>;
-using Leaf_sw       = Sm90RowBroadcast<1, TileShape_MNK, ElementOutput, ElementCompute, Stride<_0, _1, int64_t>>;
-using Leaf_neg_zero = Sm90ColBroadcast<2, TileShape_MNK, ElementOutput, ElementCompute, Stride<_1, _0, int64_t>>;
-using Leaf_colsum   = Sm90RowBroadcast<3, TileShape_MNK, ElementCompute, ElementCompute, Stride<_0, _1, int64_t>>;
+using Leaf_sw       = Sm90RowBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_0, _1, int64_t>>;
+using Leaf_neg_zero = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_1, _0, int64_t>>;
+using Leaf_colsum   = Sm90RowBroadcast<0, TileShape_MNK, ElementCompute, ElementCompute, Stride<_0, _1, int64_t>>;
 
 // bias_term = neg_zero_x[m] * colsum_w[n]
 using BiasCompute = Sm90EVT<
