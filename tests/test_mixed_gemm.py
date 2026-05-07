@@ -139,15 +139,18 @@ def reference_mixed_gemm_dequant(data: dict) -> torch.Tensor:
 
 
 def reference_mixed_gemm_integer(data: dict) -> torch.Tensor:
-    """Reference: integer matmul with shift+bias trick (simulates Tensor Core).
+    """Reference: unsigned×signed integer matmul (simulates Tensor Core).
 
-    This matches what our CUDA kernel should compute:
-    Y = s_x_m * s_w_m * (q_x_shifted_m @ q_w_m^T + bias_m)
-      + s_x_h * s_w_h * (q_x_shifted_h @ q_w_h^T + bias_h)
+    Uses u4×s4 and u8×s8 Tensor Core instructions where:
+    - Activation is unsigned: [0,15] for 4-bit, [0,255] for 8-bit
+    - Weight is signed: [-8,7] for 4-bit, [-128,127] for 8-bit
+    - Result accumulates in INT32
 
-    Where:
-        q_x_shifted = q_x - shift (shift=8 for 4-bit, shift=128 for 8-bit)
-        bias = (shift - zero) * colsum(q_w)
+    Formula:
+    Y = s_x_m * s_w_m * (q_x_m @ q_w_m^T - z_x_m * colsum(q_w_m))
+      + s_x_h * s_w_h * (q_x_h @ q_w_h^T - z_x_h * colsum(q_w_h))
+
+    Where colsum(q_w) = sum of each row of q_w (precomputable offline).
     """
     # Extract per-token scales (take first column since broadcast)
     s_x_m = data["x_main_scale"][:, :, :1].float()   # (batch, seq, 1)
@@ -158,28 +161,22 @@ def reference_mixed_gemm_integer(data: dict) -> torch.Tensor:
     s_w_m = data["w_main_scale"].float()              # (N, 1)
     s_w_h = data["w_high_scale"].float()
 
-    q_x_m = data["x_main_qint"].float()              # (batch, seq, K_main) [0, 15]
-    q_x_h = data["x_high_qint"].float()              # (batch, seq, K_high) [0, 255]
-    q_w_m = data["w_main_qint"].float()              # (N, K_main) [-8, 7]
-    q_w_h = data["w_high_qint"].float()              # (N, K_high) [-128, 127]
+    q_x_m = data["x_main_qint"].float()              # (batch, seq, K_main) unsigned [0, 15]
+    q_x_h = data["x_high_qint"].float()              # (batch, seq, K_high) unsigned [0, 255]
+    q_w_m = data["w_main_qint"].float()              # (N, K_main) signed [-8, 7]
+    q_w_h = data["w_high_qint"].float()              # (N, K_high) signed [-128, 127]
 
-    # Shift activations to signed: 4-bit shift=8, 8-bit shift=128
-    shift_m = 8.0
-    shift_h = 128.0
+    # Integer matmul: unsigned activation × signed weight → INT32
+    int_out_m = torch.matmul(q_x_m, q_w_m.t())      # (batch, seq, N)
+    int_out_h = torch.matmul(q_x_h, q_w_h.t())
 
-    q_x_m_shifted = q_x_m - shift_m                  # [-8, 7]
-    q_x_h_shifted = q_x_h - shift_h                  # [-128, 127]
-
-    # Integer matmul (simulates INT32 accumulator)
-    int_out_m = torch.matmul(q_x_m_shifted, q_w_m.t())  # (batch, seq, N)
-    int_out_h = torch.matmul(q_x_h_shifted, q_w_h.t())
-
-    # Bias correction: (shift - zero) * colsum(q_w)
-    colsum_w_m = q_w_m.sum(dim=1, keepdim=True).t()     # (1, N)
+    # Bias correction: -zero * colsum(q_w)
+    # colsum = sum over K dimension for each output channel (precomputable)
+    colsum_w_m = q_w_m.sum(dim=1, keepdim=True).t()  # (1, N)
     colsum_w_h = q_w_h.sum(dim=1, keepdim=True).t()
 
-    bias_m = (shift_m - z_x_m) * colsum_w_m             # (batch, seq, N)
-    bias_h = (shift_h - z_x_h) * colsum_w_h
+    bias_m = -z_x_m * colsum_w_m                     # (batch, seq, N)
+    bias_h = -z_x_h * colsum_w_h
 
     # Final: scale * (int_matmul + bias)
     out_m = s_x_m * s_w_m.t() * (int_out_m + bias_m)
