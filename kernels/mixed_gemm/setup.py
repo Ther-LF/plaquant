@@ -5,7 +5,7 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 # Path to CUTLASS include directory
 CUTLASS_PATH = os.path.join(os.path.dirname(__file__), "../../third_party/cutlass")
 CUTLASS_INCLUDE = os.path.join(CUTLASS_PATH, "include")
-CUTE_INCLUDE = os.path.join(CUTLASS_PATH, "include")
+CUTLASS_TOOLS_INCLUDE = os.path.join(CUTLASS_PATH, "tools/util/include")
 
 assert os.path.isdir(CUTLASS_INCLUDE), f"CUTLASS not found at {CUTLASS_INCLUDE}"
 
@@ -15,7 +15,7 @@ setup(
         CUDAExtension(
             "mixed_gemm",
             sources=["mixed_gemm.cu"],
-            include_dirs=[CUTLASS_INCLUDE, CUTE_INCLUDE],
+            include_dirs=[CUTLASS_INCLUDE, CUTLASS_TOOLS_INCLUDE],
             extra_compile_args={
                 "nvcc": [
                     "-gencode", "arch=compute_90a,code=sm_90a",

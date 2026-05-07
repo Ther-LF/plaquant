@@ -27,6 +27,7 @@
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
+#include "cutlass/util/packed_stride.hpp"
 
 using namespace cute;
 
@@ -36,42 +37,44 @@ using namespace cute;
 // GEMM Type Definitions
 // =============================================================================
 
-// --- UINT8 × INT8 → INT32 GEMM ---
-// A = activation (uint8, row-major), B = weight (int8, column-major)
+// --- INT8 × INT8 → INT32 GEMM ---
+// A = activation (int8, row-major), B = weight (int8, column-major)
 // C/D = int32 output
-using GemmU8S8_CollectiveOp = typename cutlass::gemm::collective::CollectiveBuilder<
+// Note: For unsigned activation, Python shifts q_x_unsigned - 128 to signed range before calling.
+using GemmS8S8_CollectiveOp = typename cutlass::gemm::collective::CollectiveBuilder<
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
-    uint8_t, cutlass::layout::RowMajor, 16,        // A: uint8, row-major, alignment=16
-    int8_t, cutlass::layout::ColumnMajor, 16,       // B: int8, col-major, alignment=16
-    int32_t,                                         // Accumulator: int32
-    Shape<_128, _128, _128>, Shape<_1, _1, _1>,     // Tile shape, cluster shape
+    int8_t, cutlass::layout::RowMajor, 16,          // A: int8, row-major, alignment=16
+    int8_t, cutlass::layout::ColumnMajor, 16,        // B: int8, col-major, alignment=16
+    int32_t,                                          // Accumulator: int32
+    Shape<_128, _128, _128>, Shape<_1, _1, _1>,      // Tile shape, cluster shape
     cutlass::gemm::collective::StageCountAuto,
     cutlass::gemm::collective::KernelScheduleAuto
 >::CollectiveOp;
 
-using GemmU8S8_Epilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+using GemmS8S8_Epilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
     Shape<_128, _128, _128>, Shape<_1, _1, _1>,
     cutlass::epilogue::collective::EpilogueTileAuto,
-    int32_t, int32_t,                                // Accumulator type, compute type
-    int32_t, cutlass::layout::RowMajor, 4,           // C: int32 output, row-major
-    int32_t, cutlass::layout::RowMajor, 4,           // D: int32 output, row-major
+    int32_t, int32_t,                                 // Accumulator type, compute type
+    int32_t, cutlass::layout::RowMajor, 4,            // C: int32 output, row-major
+    int32_t, cutlass::layout::RowMajor, 4,            // D: int32 output, row-major
     cutlass::epilogue::collective::EpilogueScheduleAuto
 >::CollectiveOp;
 
-using GemmU8S8_Kernel = cutlass::gemm::kernel::GemmUniversal<
+using GemmS8S8_Kernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int, int, int, int>,
-    GemmU8S8_CollectiveOp,
-    GemmU8S8_Epilogue
+    GemmS8S8_CollectiveOp,
+    GemmS8S8_Epilogue
 >;
 
-using GemmU8S8 = cutlass::gemm::device::GemmUniversalAdapter<GemmU8S8_Kernel>;
+using GemmS8S8 = cutlass::gemm::device::GemmUniversalAdapter<GemmS8S8_Kernel>;
 
-// --- UINT4 × INT4 → INT32 GEMM ---
-// A = activation (uint4, row-major), B = weight (int4, column-major)
-using GemmU4S4_CollectiveOp = typename cutlass::gemm::collective::CollectiveBuilder<
+// --- INT4 × INT4 → INT32 GEMM ---
+// A = activation (int4, row-major), B = weight (int4, column-major)
+// Note: For unsigned activation, Python shifts q_x_unsigned - 8 to signed range before calling.
+using GemmS4S4_CollectiveOp = typename cutlass::gemm::collective::CollectiveBuilder<
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
-    cutlass::uint4b_t, cutlass::layout::RowMajor, 32,  // A: uint4, alignment=32 (128 bits / 4 bits)
+    cutlass::int4b_t, cutlass::layout::RowMajor, 32,   // A: int4, alignment=32 (128 bits / 4 bits)
     cutlass::int4b_t, cutlass::layout::ColumnMajor, 32, // B: int4, alignment=32
     int32_t,
     Shape<_128, _128, _256>, Shape<_1, _1, _1>,         // Larger K tile for int4
@@ -79,7 +82,7 @@ using GemmU4S4_CollectiveOp = typename cutlass::gemm::collective::CollectiveBuil
     cutlass::gemm::collective::KernelScheduleAuto
 >::CollectiveOp;
 
-using GemmU4S4_Epilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+using GemmS4S4_Epilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
     Shape<_128, _128, _256>, Shape<_1, _1, _1>,
     cutlass::epilogue::collective::EpilogueTileAuto,
@@ -89,13 +92,13 @@ using GemmU4S4_Epilogue = typename cutlass::epilogue::collective::CollectiveBuil
     cutlass::epilogue::collective::EpilogueScheduleAuto
 >::CollectiveOp;
 
-using GemmU4S4_Kernel = cutlass::gemm::kernel::GemmUniversal<
+using GemmS4S4_Kernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int, int, int, int>,
-    GemmU4S4_CollectiveOp,
-    GemmU4S4_Epilogue
+    GemmS4S4_CollectiveOp,
+    GemmS4S4_Epilogue
 >;
 
-using GemmU4S4 = cutlass::gemm::device::GemmUniversalAdapter<GemmU4S4_Kernel>;
+using GemmS4S4 = cutlass::gemm::device::GemmUniversalAdapter<GemmS4S4_Kernel>;
 
 // =============================================================================
 // Launch helpers
@@ -159,11 +162,11 @@ cutlass::Status run_gemm(
 // PyTorch-facing functions
 // =============================================================================
 
-/// UINT8 × INT8 GEMM: (M, K) × (N, K)^T → (M, N) in INT32
-/// A is row-major uint8, B is stored as row-major int8 but transposed to col-major for CUTLASS
-torch::Tensor gemm_u8s8(torch::Tensor A, torch::Tensor B) {
+/// INT8 × INT8 GEMM: (M, K) × (N, K)^T → (M, N) in INT32
+/// A is row-major int8 (shifted from unsigned), B is int8 weight (stored row-major, used as col-major)
+torch::Tensor gemm_s8s8(torch::Tensor A, torch::Tensor B) {
     TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
-    TORCH_CHECK(A.dtype() == torch::kUInt8, "A must be uint8");
+    TORCH_CHECK(A.dtype() == torch::kInt8, "A must be int8");
     TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8");
     TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
     TORCH_CHECK(A.size(1) == B.size(1), "K dimensions must match");
@@ -179,7 +182,7 @@ torch::Tensor gemm_u8s8(torch::Tensor A, torch::Tensor B) {
 
     // B is (N, K) row-major in memory = (K, N) column-major → matches ColumnMajor layout
     auto stream = at::cuda::getCurrentCUDAStream().stream();
-    auto status = run_gemm<GemmU8S8>(
+    auto status = run_gemm<GemmS8S8>(
         M, N, K,
         A.data_ptr(),
         B.data_ptr(),
@@ -188,18 +191,18 @@ torch::Tensor gemm_u8s8(torch::Tensor A, torch::Tensor B) {
     );
 
     TORCH_CHECK(status == cutlass::Status::kSuccess,
-                "CUTLASS U8S8 GEMM failed: ", cutlass::cutlassGetStatusString(status));
+                "CUTLASS S8S8 GEMM failed: ", cutlass::cutlassGetStatusString(status));
 
     return output;
 }
 
-/// UINT4 × INT4 GEMM: (M, K) × (N, K)^T → (M, N) in INT32
-/// A is packed uint4 (2 elements per byte), B is packed int4
-torch::Tensor gemm_u4s4(torch::Tensor A, torch::Tensor B) {
+/// INT4 × INT4 GEMM: (M, K) × (N, K)^T → (M, N) in INT32
+/// A is packed int4 (2 elements per byte), B is packed int4
+torch::Tensor gemm_s4s4(torch::Tensor A, torch::Tensor B) {
     TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
     TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "Inputs must be 2D");
-    // A and B are stored as uint8 with 2 int4 values packed per byte
-    TORCH_CHECK(A.dtype() == torch::kUInt8, "A must be uint8 (packed uint4)");
+    // A and B are stored as int8 with 2 int4 values packed per byte
+    TORCH_CHECK(A.dtype() == torch::kInt8, "A must be int8 (packed int4)");
     TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8 (packed int4)");
 
     A = A.contiguous();
@@ -215,7 +218,7 @@ torch::Tensor gemm_u4s4(torch::Tensor A, torch::Tensor B) {
     auto output = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kInt32).device(A.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
-    auto status = run_gemm<GemmU4S4>(
+    auto status = run_gemm<GemmS4S4>(
         M, N, K,
         A.data_ptr(),
         B.data_ptr(),
@@ -224,18 +227,18 @@ torch::Tensor gemm_u4s4(torch::Tensor A, torch::Tensor B) {
     );
 
     TORCH_CHECK(status == cutlass::Status::kSuccess,
-                "CUTLASS U4S4 GEMM failed: ", cutlass::cutlassGetStatusString(status));
+                "CUTLASS S4S4 GEMM failed: ", cutlass::cutlassGetStatusString(status));
 
     return output;
 }
 
 #else
 // Fallback for non-SM90 compilation
-torch::Tensor gemm_u8s8(torch::Tensor A, torch::Tensor B) {
+torch::Tensor gemm_s8s8(torch::Tensor A, torch::Tensor B) {
     TORCH_CHECK(false, "SM90 not supported in this build");
     return torch::Tensor();
 }
-torch::Tensor gemm_u4s4(torch::Tensor A, torch::Tensor B) {
+torch::Tensor gemm_s4s4(torch::Tensor A, torch::Tensor B) {
     TORCH_CHECK(false, "SM90 not supported in this build");
     return torch::Tensor();
 }
@@ -246,10 +249,10 @@ torch::Tensor gemm_u4s4(torch::Tensor A, torch::Tensor B) {
 // =============================================================================
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("gemm_u8s8", &gemm_u8s8,
-          "UINT8 x INT8 GEMM → INT32 (CUTLASS SM90)",
+    m.def("gemm_s8s8", &gemm_s8s8,
+          "INT8 x INT8 GEMM → INT32 (CUTLASS SM90)",
           py::arg("A"), py::arg("B"));
-    m.def("gemm_u4s4", &gemm_u4s4,
-          "UINT4 x INT4 GEMM → INT32 (CUTLASS SM90)",
+    m.def("gemm_s4s4", &gemm_s4s4,
+          "INT4 x INT4 GEMM → INT32 (CUTLASS SM90)",
           py::arg("A"), py::arg("B"));
 }
