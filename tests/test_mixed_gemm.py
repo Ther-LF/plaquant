@@ -82,7 +82,32 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
 
 
 def load_metadata(data_dir: str):
-    """Load per-operator metadata (quantization config)."""
+    """Load per-operator metadata (quantization config).
+
+    Metadata fields:
+        name:               full layer name, e.g. "model.layers.0.self_attn.q_proj"
+        weight_shape:       [N, K] original weight dimensions
+        has_bias:           whether the linear layer has bias (always False for Llama)
+
+        a_bits:             activation quantization bits for main group (4)
+        a_sym:              activation symmetric quantization (False = asymmetric)
+        a_groupsize:        activation quantization groupsize (-1 = per-token)
+        a_high_bits:        activation bits for high-precision group (8)
+        a_high_bits_length: number of K channels in high-precision group (256)
+        a_low_bits:         activation bits for low-precision group (2, unused if length=0)
+        a_low_bits_length:  number of K channels in low-precision group (0 = disabled)
+
+        online_full_had:    whether online full Hadamard rotation is applied (down_proj only)
+        online_partial_had: whether online partial Hadamard is applied (False for q_proj)
+        has_column_order:   whether o_proj column reorder is needed (o_proj only)
+        out_quantizer_bits: output quantization bits (16 = no output quantization)
+
+        has_real_quant:     True if real quant weights were collected
+        w_m_int_shape:      [N, K_main] shape of main weight integer tensor
+        w_m_scale_shape:    [N, 1] shape of main weight scale (per-channel)
+        w_h_int_shape:      [N, K_high] shape of high weight integer tensor
+        w_h_scale_shape:    [N, 1] shape of high weight scale (per-channel)
+    """
     with open(os.path.join(data_dir, "metadata.json"), "r") as f:
         return json.load(f)
 
