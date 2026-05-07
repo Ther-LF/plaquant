@@ -48,39 +48,36 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
     w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
 
-    # Dtype enforcement: cast to expected types if needed, assert integer ranges
-    def _to_int16(t):
-        if t.dtype != torch.int16:
-            assert t.min() >= -32768 and t.max() <= 32767, f"Values out of int16 range: [{t.min()}, {t.max()}]"
-            return t.to(torch.int16)
+    # Dtype validation: assert expected types, fail loudly if data collection was wrong
+    def _assert_int16(t, name):
+        assert t.dtype == torch.int16, f"{name}: expected int16, got {t.dtype}"
         return t
 
-    def _to_fp16(t):
-        if t.dtype != torch.float16:
-            return t.to(torch.float16)
+    def _assert_fp16(t, name):
+        assert t.dtype == torch.float16, f"{name}: expected fp16, got {t.dtype}"
         return t
 
     return {
         # Activation main (4-bit unsigned [0,15], asymmetric)
-        "x_main_qint": _to_int16(act_main["q_int"]),   # (batch, seq, K_main) int16
-        "x_main_scale": _to_fp16(act_main["scale"]),    # (batch, seq, K_main) fp16 (broadcast)
-        "x_main_zero": _to_fp16(act_main["zero"]),      # (batch, seq, K_main) fp16 (broadcast)
+        "x_main_qint": _assert_int16(act_main["q_int"], "act_main.q_int"),
+        "x_main_scale": _assert_fp16(act_main["scale"], "act_main.scale"),
+        "x_main_zero": _assert_fp16(act_main["zero"], "act_main.zero"),
         # Activation high (8-bit unsigned [0,255], asymmetric)
-        "x_high_qint": _to_int16(act_high["q_int"]),    # (batch, seq, K_high) int16
-        "x_high_scale": _to_fp16(act_high["scale"]),     # (batch, seq, K_high) fp16 (broadcast)
-        "x_high_zero": _to_fp16(act_high["zero"]),       # (batch, seq, K_high) fp16 (broadcast)
+        "x_high_qint": _assert_int16(act_high["q_int"], "act_high.q_int"),
+        "x_high_scale": _assert_fp16(act_high["scale"], "act_high.scale"),
+        "x_high_zero": _assert_fp16(act_high["zero"], "act_high.zero"),
         # Weight main (4-bit signed [-8,7], symmetric, per-channel)
-        "w_main_qint": _to_fp16(w_main["q_int"]),       # (N, K_main) fp16 (stores int values)
-        "w_main_scale": _to_fp16(w_main["scale"]),       # (N, 1) fp16
+        "w_main_qint": _assert_fp16(w_main["q_int"], "w_main.q_int"),
+        "w_main_scale": _assert_fp16(w_main["scale"], "w_main.scale"),
         # Weight high (8-bit signed [-128,127], symmetric, per-channel)
-        "w_high_qint": _to_fp16(w_high["q_int"]),       # (N, K_high) fp16 (stores int values)
-        "w_high_scale": _to_fp16(w_high["scale"]),       # (N, 1) fp16
+        "w_high_qint": _assert_fp16(w_high["q_int"], "w_high.q_int"),
+        "w_high_scale": _assert_fp16(w_high["scale"], "w_high.scale"),
         # FP16 weight (original, for baseline verification)
-        "weight_fp16": _to_fp16(w_fp16),                 # (N, K) fp16
+        "weight_fp16": _assert_fp16(w_fp16, "weight_fp16"),
         # Ground truth
-        "output_real_quant": _to_fp16(output_rq),        # (batch, seq, N) fp16
-        "output_fp16_baseline": _to_fp16(output_fp),     # (batch, seq, N) fp16
-        "input_fp16": _to_fp16(input_fp),                # (batch, seq, K) fp16
+        "output_real_quant": _assert_fp16(output_rq, "output_real_quant"),
+        "output_fp16_baseline": _assert_fp16(output_fp, "output_fp16_baseline"),
+        "input_fp16": _assert_fp16(input_fp, "input_fp16"),
     }
 
 
