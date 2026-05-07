@@ -449,6 +449,11 @@ if __name__ == "__main__":
         print(f"  w_high: {data['w_high_qint'].shape}, range [{data['w_high_qint'].min()}, {data['w_high_qint'].max()}]")
 
         gt = data["output_real_quant"]
+        fp16_baseline = data["output_fp16_baseline"]
+
+        # FP16 baseline: how much error does quantization introduce?
+        m = compute_metrics(gt, fp16_baseline)
+        print_metrics(m, prefix="[real_quant vs fp16_baseline (quantization loss)]")
 
         # Dequant reference
         ref_dq = reference_mixed_gemm_dequant(data)
