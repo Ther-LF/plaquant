@@ -269,3 +269,57 @@ residual 处理: 当整除不完美时，动态插入额外的 tile 来保持均
 ### 6.3 与 ResQ 正交性的利用
 
 ResQ 的 PCA 投影保证了低精度和高精度分量之间**不存在交叉乘法**（正交性）。这恰好符合我们 kernel 的设计——在 K 维度上，高精度 tiles 和低精度 tiles 完全独立，可以分开处理后累加。
+
+---
+
+## 七、重要修正：Fake Quant vs Real Quant
+
+### 7.1 ResQ 当前代码只有 Fake Quant
+
+**经过详细代码审查确认：ResQ 的 `fake_quant/` 目录下所有代码做的是伪量化（fake quantization），不是真实整数推理。**
+
+```python
+# 伪量化流程（ResQ 当前实现）：
+x_quantized = round_clip(x / scale) * scale   # quantize → 立即 dequantize 回 fp16
+output = nn.Linear(x_quantized, W)             # 一次普通 fp16 GEMM
+```
+
+这意味着：
+- **ResQ 论文报告的 PPL/Accuracy 数据**是在 fake quant 下测的（量化误差已经引入，但计算仍是 fp16）
+- **ResQ 论文声称的 1.6-3x speedup**数据是硬编码参考值，代码中不存在真实的整数 GEMM kernel
+- **不存在两次独立 GEMM 的问题**——fake quant 下只有一次 fp16 GEMM
+
+### 7.2 真实部署需要 Real Quant
+
+要获得实际的推理加速，需要实现真实量化推理：
+
+```python
+# 真实量化流程（需要实现）：
+x_int4 = quantize_to_int4(x_low)     # 保持 INT4 整数
+x_int8 = quantize_to_int8(x_high)    # 保持 INT8 整数
+W_int4 = pack_int4(W_low)            # INT4 权重打包
+W_int8 = pack_int8(W_high)           # INT8 权重打包
+output = INT4_GEMM(x_int4, W_int4) + INT8_GEMM(x_int8, W_int8)  # 两次整数 GEMM
+# → 这才是我们的 fused mixed-precision kernel 要优化的场景！
+```
+
+### 7.3 验证结论：Fake Quant == Real Quant
+
+经过验证，fake quant 和 real quant **在数学上完全等价**：
+
+```python
+# Fake quant (ResQ 当前):
+x_fq = cat([scale_l * (round(x_l/scale_l) + zero_l - zero_l),
+            scale_h * (round(x_h/scale_h) + zero_h - zero_h)])
+output = x_fq @ W.T    # 一次 fp16 GEMM
+
+# Real quant (部署目标):
+output = (scale_l * (q_l - zero_l)) @ W_l.T + (scale_h * (q_h - zero_h)) @ W_h.T
+       = F.linear(x_fq[:, :K_low], W[:, :K_low]) + F.linear(x_fq[:, K_low:], W[:, K_low:])
+# 因为 cat → linear == split linear → add（矩阵乘的分块性质）
+```
+
+这意味着：
+1. **ResQ 论文报告的 PPL/Accuracy 就是 real quant 的效果** — 无需额外验证
+2. **优化目标明确**：将 fake quant 的一次 fp16 GEMM 替换为 fused INT4+INT8 GEMM，获得真正的推理加速
+3. **精度验证标准**：fused kernel 的输出必须与两次独立 integer GEMM + dequant + add 的结果一致（考虑累加顺序差异，允许小误差）
