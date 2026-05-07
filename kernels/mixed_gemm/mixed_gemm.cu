@@ -157,6 +157,36 @@ cutlass::Status run_gemm(
 }
 
 // =============================================================================
+// Dequantization kernel: INT32 accumulator → FP16 output
+// output[m,n] = s_x[m] * s_w[n] * (acc[m,n] - zero_x[m] * colsum_w[n])
+// =============================================================================
+
+__global__ void dequant_kernel(
+    const int32_t* __restrict__ acc,       // (M, N) INT32 accumulator
+    const half* __restrict__ s_x,          // (M,) per-token activation scale
+    const half* __restrict__ s_w,          // (N,) per-channel weight scale
+    const half* __restrict__ zero_x,       // (M,) per-token zero point
+    const int32_t* __restrict__ colsum_w,  // (N,) precomputed weight column sum
+    half* __restrict__ output,             // (M, N) FP16 output
+    int M, int N)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+
+    int m = idx / N;
+    int n = idx % N;
+
+    float acc_val = static_cast<float>(acc[m * N + n]);
+    float sx = __half2float(s_x[m]);
+    float sw = __half2float(s_w[n]);
+    float zx = __half2float(zero_x[m]);
+    float cw = static_cast<float>(colsum_w[n]);
+
+    float result = sx * sw * (acc_val - zx * cw);
+    output[m * N + n] = __float2half(result);
+}
+
+// =============================================================================
 // PyTorch-facing functions
 // =============================================================================
 
@@ -212,15 +242,111 @@ torch::Tensor gemm_s8s8(torch::Tensor A, torch::Tensor B) {
     return output;
 }
 
+/// Complete baseline for high portion: UINT8×INT8 GEMM + dequant → FP16
+/// output[m,n] = s_x[m] * s_w[n] * (gemm_result[m,n] - zero_x[m] * colsum_w[n])
+torch::Tensor gemm_u8s8_dequant(
+    torch::Tensor A,           // (M, K) uint8 activation
+    torch::Tensor B,           // (N, K) int8 weight
+    torch::Tensor s_x,         // (M,) fp16 per-token scale
+    torch::Tensor s_w,         // (N,) fp16 per-channel scale
+    torch::Tensor zero_x,      // (M,) fp16 per-token zero point
+    torch::Tensor colsum_w)    // (N,) int32 precomputed column sum
+{
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kUInt8, "A must be uint8");
+    TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8");
+
+    A = A.contiguous();
+    B = B.contiguous();
+
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(0);
+
+    // Step 1: Integer GEMM → INT32
+    auto acc = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kInt32).device(A.device()));
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    auto status = run_gemm<GemmU8S8>(M, N, K, A.data_ptr(), B.data_ptr(), acc.data_ptr(), stream);
+    TORCH_CHECK(status == cutlass::Status::kSuccess,
+                "CUTLASS U8S8 GEMM failed: ", cutlass::cutlassGetStatusString(status));
+
+    // Step 2: Dequant → FP16
+    auto output = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
+    int total = M * N;
+    int threads = 256;
+    int blocks = (total + threads - 1) / threads;
+    dequant_kernel<<<blocks, threads, 0, stream>>>(
+        acc.data_ptr<int32_t>(),
+        reinterpret_cast<half*>(s_x.data_ptr()),
+        reinterpret_cast<half*>(s_w.data_ptr()),
+        reinterpret_cast<half*>(zero_x.data_ptr()),
+        colsum_w.data_ptr<int32_t>(),
+        reinterpret_cast<half*>(output.data_ptr()),
+        M, N
+    );
+    return output;
+}
+
+/// Complete baseline for main portion: INT8×INT8 GEMM + dequant → FP16
+/// (INT4 values sign-extended to INT8 before calling)
+torch::Tensor gemm_s8s8_dequant(
+    torch::Tensor A,           // (M, K) int8 activation (shifted: q_x - 8)
+    torch::Tensor B,           // (N, K) int8 weight
+    torch::Tensor s_x,         // (M,) fp16 per-token scale
+    torch::Tensor s_w,         // (N,) fp16 per-channel scale
+    torch::Tensor zero_x,      // (M,) fp16 per-token zero point (after shift adjustment)
+    torch::Tensor colsum_w)    // (N,) int32 precomputed column sum
+{
+    TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kInt8, "A must be int8");
+    TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8");
+
+    A = A.contiguous();
+    B = B.contiguous();
+
+    int M = A.size(0);
+    int K = A.size(1);
+    int N = B.size(0);
+
+    // Step 1: Integer GEMM → INT32
+    auto acc = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kInt32).device(A.device()));
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    auto status = run_gemm<GemmS8S8>(M, N, K, A.data_ptr(), B.data_ptr(), acc.data_ptr(), stream);
+    TORCH_CHECK(status == cutlass::Status::kSuccess,
+                "CUTLASS S8S8 GEMM failed: ", cutlass::cutlassGetStatusString(status));
+
+    // Step 2: Dequant → FP16
+    auto output = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
+    int total = M * N;
+    int threads = 256;
+    int blocks = (total + threads - 1) / threads;
+    dequant_kernel<<<blocks, threads, 0, stream>>>(
+        acc.data_ptr<int32_t>(),
+        reinterpret_cast<half*>(s_x.data_ptr()),
+        reinterpret_cast<half*>(s_w.data_ptr()),
+        reinterpret_cast<half*>(zero_x.data_ptr()),
+        colsum_w.data_ptr<int32_t>(),
+        reinterpret_cast<half*>(output.data_ptr()),
+        M, N
+    );
+    return output;
+}
+
 #else
 // Fallback for non-SM90 compilation
 torch::Tensor gemm_u8s8(torch::Tensor A, torch::Tensor B) {
-    TORCH_CHECK(false, "SM90 not supported in this build");
-    return torch::Tensor();
+    TORCH_CHECK(false, "SM90 not supported in this build"); return {};
 }
 torch::Tensor gemm_s8s8(torch::Tensor A, torch::Tensor B) {
-    TORCH_CHECK(false, "SM90 not supported in this build");
-    return torch::Tensor();
+    TORCH_CHECK(false, "SM90 not supported in this build"); return {};
+}
+torch::Tensor gemm_u8s8_dequant(torch::Tensor A, torch::Tensor B,
+    torch::Tensor s_x, torch::Tensor s_w, torch::Tensor zero_x, torch::Tensor colsum_w) {
+    TORCH_CHECK(false, "SM90 not supported in this build"); return {};
+}
+torch::Tensor gemm_s8s8_dequant(torch::Tensor A, torch::Tensor B,
+    torch::Tensor s_x, torch::Tensor s_w, torch::Tensor zero_x, torch::Tensor colsum_w) {
+    TORCH_CHECK(false, "SM90 not supported in this build"); return {};
 }
 #endif
 
@@ -230,9 +356,17 @@ torch::Tensor gemm_s8s8(torch::Tensor A, torch::Tensor B) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_u8s8", &gemm_u8s8,
-          "UINT8 x INT8 GEMM → INT32 (SM90 WGMMA, for high-precision portion)",
+          "UINT8 x INT8 GEMM → INT32 (raw integer matmul)",
           py::arg("A"), py::arg("B"));
     m.def("gemm_s8s8", &gemm_s8s8,
-          "INT8 x INT8 GEMM → INT32 (SM90 WGMMA, for main portion with expanded int4)",
+          "INT8 x INT8 GEMM → INT32 (raw integer matmul)",
           py::arg("A"), py::arg("B"));
+    m.def("gemm_u8s8_dequant", &gemm_u8s8_dequant,
+          "UINT8 x INT8 GEMM + dequant → FP16 (complete high-portion baseline)",
+          py::arg("A"), py::arg("B"), py::arg("s_x"), py::arg("s_w"),
+          py::arg("zero_x"), py::arg("colsum_w"));
+    m.def("gemm_s8s8_dequant", &gemm_s8s8_dequant,
+          "INT8 x INT8 GEMM + dequant → FP16 (complete main-portion baseline)",
+          py::arg("A"), py::arg("B"), py::arg("s_x"), py::arg("s_w"),
+          py::arg("zero_x"), py::arg("colsum_w"));
 }
