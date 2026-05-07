@@ -1,18 +1,30 @@
+import os
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+# Path to CUTLASS include directory
+CUTLASS_PATH = os.path.join(os.path.dirname(__file__), "../../third_party/cutlass")
+CUTLASS_INCLUDE = os.path.join(CUTLASS_PATH, "include")
+CUTE_INCLUDE = os.path.join(CUTLASS_PATH, "include")
+
+assert os.path.isdir(CUTLASS_INCLUDE), f"CUTLASS not found at {CUTLASS_INCLUDE}"
 
 setup(
     name="mixed_gemm",
     ext_modules=[
         CUDAExtension(
             "mixed_gemm",
-            sources=["binding.cpp", "mixed_gemm.cu"],
+            sources=["mixed_gemm.cu"],
+            include_dirs=[CUTLASS_INCLUDE, CUTE_INCLUDE],
             extra_compile_args={
                 "nvcc": [
                     "-gencode", "arch=compute_90a,code=sm_90a",
                     "-O3",
                     "--use_fast_math",
+                    "-std=c++17",
+                    "-DCUTLASS_ARCH_MMA_SM90_SUPPORTED=1",
                 ],
+                "cxx": ["-std=c++17"],
             },
         )
     ],
