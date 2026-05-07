@@ -46,6 +46,7 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     output_rq = torch.load(d / f"output_real_quant_bs{bs}.pt", map_location="cpu", weights_only=False)
     output_fp = torch.load(d / f"output_fp16_baseline_bs{bs}.pt", map_location="cpu", weights_only=False)
     input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
+    w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
 
     return {
         # Activation main (4-bit unsigned [0,15], asymmetric)
@@ -62,6 +63,8 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
         # Weight high (8-bit signed [-128,127], symmetric, per-channel)
         "w_high_qint": w_high["q_int"],          # (N, K_high) fp16
         "w_high_scale": w_high["scale"],         # (N, 1) fp16
+        # FP16 weight (original, for baseline verification)
+        "weight_fp16": w_fp16,                   # (N, K) fp16
         # Ground truth
         "output_real_quant": output_rq,          # (batch, seq, N) fp16
         "output_fp16_baseline": output_fp,       # (batch, seq, N) fp16
@@ -308,6 +311,19 @@ class TestQProjReference:
 
 class TestQProjDataIntegrity:
     """Sanity checks on the loaded data."""
+
+    def test_fp16_baseline_consistency(self, q_proj_dir, batch_size):
+        """Verify input_fp16 @ weight_fp16.T == output_fp16_baseline."""
+        data = load_operator_data(q_proj_dir, batch_size)
+        input_fp = data["input_fp16"].float()
+        w_fp = data["weight_fp16"].float()
+        expected = data["output_fp16_baseline"]
+
+        recomputed = torch.matmul(input_fp, w_fp.t()).half()
+        metrics = compute_metrics(recomputed, expected)
+        print_metrics(metrics, prefix=f"[fp16 baseline verify, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-2, f"FP16 baseline mismatch: rel_err={metrics['rel_err']}"
 
     def test_activation_value_ranges(self, q_proj_dir, batch_size):
         """Activation integers should be in expected ranges."""
