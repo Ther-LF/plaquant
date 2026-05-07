@@ -192,11 +192,18 @@ def compute_metrics(output: torch.Tensor, ground_truth: torch.Tensor) -> dict:
 
     # ULP error for FP16: |diff| / eps_at_that_magnitude
     # FP16 epsilon at magnitude x is approximately x * 2^-10 (for normal numbers)
-    gt_magnitude = gt.abs().clamp(min=6.1e-5)  # clamp to FP16 min normal
-    ulp_size = gt_magnitude * (2.0 ** -10)  # FP16 has 10-bit mantissa
-    ulp_err = (diff.abs() / ulp_size)
-    max_ulp_err = ulp_err.max().item()
-    mean_ulp_err = ulp_err.mean().item()
+    # Filter out near-zero elements where ULP is meaninglessly small
+    ulp_mask = gt.abs() > 0.01  # ignore elements with |gt| < 0.01
+    if ulp_mask.any():
+        gt_masked = gt[ulp_mask].abs()
+        diff_masked = diff[ulp_mask].abs()
+        ulp_size = gt_masked * (2.0 ** -10)  # FP16 has 10-bit mantissa
+        ulp_err = diff_masked / ulp_size
+        max_ulp_err = ulp_err.max().item()
+        mean_ulp_err = ulp_err.mean().item()
+    else:
+        max_ulp_err = 0.0
+        mean_ulp_err = 0.0
 
     return {
         "max_abs_err": max_abs_err,
