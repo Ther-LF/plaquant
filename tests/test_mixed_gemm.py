@@ -152,6 +152,78 @@ def reference_mixed_gemm_integer(data: dict) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+def compute_metrics(output: torch.Tensor, ground_truth: torch.Tensor) -> dict:
+    """Compute comprehensive error metrics between output and ground truth.
+
+    All computations done in FP32 for precision.
+
+    Returns dict with:
+        max_abs_err:    max |output - gt|
+        mean_abs_err:   mean |output - gt|
+        rel_err:        max |output - gt| / max |gt|
+        rmse:           root mean square error
+        cosine_sim:     cosine similarity (1.0 = identical direction)
+        snr_db:         signal-to-noise ratio in dB (higher = better)
+                        SNR = 10 * log10(signal_power / noise_power)
+        max_ulp_err:    max error in FP16 ULP (units of least precision)
+    """
+    out = output.float().flatten()
+    gt = ground_truth.float().flatten()
+    diff = out - gt
+
+    max_abs_err = diff.abs().max().item()
+    mean_abs_err = diff.abs().mean().item()
+    rel_err = max_abs_err / gt.abs().max().item() if gt.abs().max() > 0 else float('inf')
+    rmse = diff.pow(2).mean().sqrt().item()
+
+    # Cosine similarity
+    cosine_sim = torch.nn.functional.cosine_similarity(out.unsqueeze(0), gt.unsqueeze(0)).item()
+
+    # SNR: signal power / noise power (in dB)
+    signal_power = gt.pow(2).mean().item()
+    noise_power = diff.pow(2).mean().item()
+    if noise_power > 0:
+        snr_db = 10 * torch.log10(torch.tensor(signal_power / noise_power)).item()
+    else:
+        snr_db = float('inf')
+
+    # ULP error for FP16: |diff| / eps_at_that_magnitude
+    # FP16 epsilon at magnitude x is approximately x * 2^-10 (for normal numbers)
+    gt_magnitude = gt.abs().clamp(min=6.1e-5)  # clamp to FP16 min normal
+    ulp_size = gt_magnitude * (2.0 ** -10)  # FP16 has 10-bit mantissa
+    ulp_err = (diff.abs() / ulp_size)
+    max_ulp_err = ulp_err.max().item()
+    mean_ulp_err = ulp_err.mean().item()
+
+    return {
+        "max_abs_err": max_abs_err,
+        "mean_abs_err": mean_abs_err,
+        "rel_err": rel_err,
+        "rmse": rmse,
+        "cosine_sim": cosine_sim,
+        "snr_db": snr_db,
+        "max_ulp_err": max_ulp_err,
+        "mean_ulp_err": mean_ulp_err,
+    }
+
+
+def print_metrics(metrics: dict, prefix: str = ""):
+    """Pretty-print metrics."""
+    print(f"\n  {prefix}")
+    print(f"    max_abs_err:  {metrics['max_abs_err']:.6f}")
+    print(f"    mean_abs_err: {metrics['mean_abs_err']:.6f}")
+    print(f"    rel_err:      {metrics['rel_err']:.6f}")
+    print(f"    rmse:         {metrics['rmse']:.6f}")
+    print(f"    cosine_sim:   {metrics['cosine_sim']:.8f}")
+    print(f"    snr_db:       {metrics['snr_db']:.2f} dB")
+    print(f"    max_ulp_err:  {metrics['max_ulp_err']:.1f} ULP")
+    print(f"    mean_ulp_err: {metrics['mean_ulp_err']:.1f} ULP")
+
+
+# ---------------------------------------------------------------------------
 # Pytest fixtures
 # ---------------------------------------------------------------------------
 
@@ -194,14 +266,12 @@ class TestQProjReference:
         ref_output = reference_mixed_gemm_dequant(data)
         gt_output = data["output_real_quant"]
 
-        # Compute error metrics
-        abs_diff = (ref_output.float() - gt_output.float()).abs()
-        max_err = abs_diff.max().item()
-        mean_err = abs_diff.mean().item()
-        rel_err = max_err / gt_output.float().abs().max().item()
+        metrics = compute_metrics(ref_output, gt_output)
+        print_metrics(metrics, prefix=f"[dequant ref, bs={batch_size}]")
 
-        print(f"\n  [dequant ref] max_err={max_err:.6f}, mean_err={mean_err:.6f}, rel_err={rel_err:.6f}")
-        assert rel_err < 1e-2, f"Dequant reference too far from ground truth: rel_err={rel_err}"
+        assert metrics["rel_err"] < 1e-2, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_integer_reference_matches_ground_truth(self, q_proj_dir, batch_size):
         """Integer matmul + shift/bias should match output_real_quant."""
@@ -209,13 +279,12 @@ class TestQProjReference:
         ref_output = reference_mixed_gemm_integer(data)
         gt_output = data["output_real_quant"]
 
-        abs_diff = (ref_output.float() - gt_output.float()).abs()
-        max_err = abs_diff.max().item()
-        mean_err = abs_diff.mean().item()
-        rel_err = max_err / gt_output.float().abs().max().item()
+        metrics = compute_metrics(ref_output, gt_output)
+        print_metrics(metrics, prefix=f"[integer ref, bs={batch_size}]")
 
-        print(f"\n  [integer ref] max_err={max_err:.6f}, mean_err={mean_err:.6f}, rel_err={rel_err:.6f}")
-        assert rel_err < 1e-2, f"Integer reference too far from ground truth: rel_err={rel_err}"
+        assert metrics["rel_err"] < 1e-2, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_dequant_vs_integer_consistency(self, q_proj_dir, batch_size):
         """Both reference implementations should produce identical results."""
@@ -223,12 +292,11 @@ class TestQProjReference:
         out_dequant = reference_mixed_gemm_dequant(data)
         out_integer = reference_mixed_gemm_integer(data)
 
-        abs_diff = (out_dequant.float() - out_integer.float()).abs()
-        max_err = abs_diff.max().item()
-        rel_err = max_err / out_dequant.float().abs().max().item()
+        metrics = compute_metrics(out_dequant, out_integer)
+        print_metrics(metrics, prefix=f"[dequant vs integer, bs={batch_size}]")
 
-        print(f"\n  [consistency] max_err={max_err:.6f}, rel_err={rel_err:.6f}")
-        assert rel_err < 1e-5, f"Dequant and integer refs disagree: rel_err={rel_err}"
+        assert metrics["rel_err"] < 1e-5, f"Two refs disagree: rel_err={metrics['rel_err']}"
+        assert metrics["max_ulp_err"] < 1.0, f"ULP error > 1: {metrics['max_ulp_err']}"
 
 
 class TestQProjDataIntegrity:
@@ -312,22 +380,29 @@ if __name__ == "__main__":
         exit(1)
 
     for bs in [1, 2, 4]:
-        print(f"\n--- batch_size={bs} ---")
+        print(f"\n{'='*60}")
+        print(f" batch_size={bs}")
+        print(f"{'='*60}")
         data = load_operator_data(data_dir, bs)
         meta = load_metadata(data_dir)
-        print(f"  Metadata: a_bits={meta.get('a_bits')}, a_sym={meta.get('a_sym')}")
+        print(f"  Config: a_bits={meta.get('a_bits')}, a_sym={meta.get('a_sym')}")
         print(f"  x_main: {data['x_main_qint'].shape}, range [{data['x_main_qint'].min()}, {data['x_main_qint'].max()}]")
         print(f"  x_high: {data['x_high_qint'].shape}, range [{data['x_high_qint'].min()}, {data['x_high_qint'].max()}]")
         print(f"  w_main: {data['w_main_qint'].shape}, range [{data['w_main_qint'].min()}, {data['w_main_qint'].max()}]")
         print(f"  w_high: {data['w_high_qint'].shape}, range [{data['w_high_qint'].min()}, {data['w_high_qint'].max()}]")
 
-        # Test dequant reference
-        ref = reference_mixed_gemm_dequant(data)
         gt = data["output_real_quant"]
-        rel_err = (ref.float() - gt.float()).abs().max().item() / gt.float().abs().max().item()
-        print(f"  dequant ref vs GT: rel_err={rel_err:.6f} {'✓' if rel_err < 1e-2 else '✗'}")
 
-        # Test integer reference
+        # Dequant reference
+        ref_dq = reference_mixed_gemm_dequant(data)
+        m = compute_metrics(ref_dq, gt)
+        print_metrics(m, prefix="[dequant ref vs GT]")
+
+        # Integer reference
         ref_int = reference_mixed_gemm_integer(data)
-        rel_err_int = (ref_int.float() - gt.float()).abs().max().item() / gt.float().abs().max().item()
-        print(f"  integer ref vs GT: rel_err={rel_err_int:.6f} {'✓' if rel_err_int < 1e-2 else '✗'}")
+        m = compute_metrics(ref_int, gt)
+        print_metrics(m, prefix="[integer ref vs GT]")
+
+        # Consistency
+        m = compute_metrics(ref_dq, ref_int)
+        print_metrics(m, prefix="[dequant vs integer]")
