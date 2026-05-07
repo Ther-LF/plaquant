@@ -47,6 +47,8 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     output_fp = torch.load(d / f"output_fp16_baseline_bs{bs}.pt", map_location="cpu", weights_only=False)
     input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
     w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
+    colsum_w_m = torch.load(d / "colsum_w_main.pt", map_location="cpu", weights_only=False)
+    colsum_w_h = torch.load(d / "colsum_w_high.pt", map_location="cpu", weights_only=False)
 
     # Dtype validation: assert expected types, fail loudly if data collection was wrong
     def _assert_int16(t, name):
@@ -74,6 +76,9 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
         "w_high_scale": _assert_fp16(w_high["scale"], "w_high.scale"),
         # FP16 weight (original, for baseline verification)
         "weight_fp16": _assert_fp16(w_fp16, "weight_fp16"),
+        # Precomputed weight column sums (for bias correction in kernel)
+        "colsum_w_main": colsum_w_m,             # (N,) int32
+        "colsum_w_high": colsum_w_h,             # (N,) int32
         # Ground truth
         "output_real_quant": _assert_fp16(output_rq, "output_real_quant"),
         "output_fp16_baseline": _assert_fp16(output_fp, "output_fp16_baseline"),
@@ -170,10 +175,9 @@ def reference_mixed_gemm_integer(data: dict) -> torch.Tensor:
     int_out_m = torch.matmul(q_x_m, q_w_m.t())      # (batch, seq, N)
     int_out_h = torch.matmul(q_x_h, q_w_h.t())
 
-    # Bias correction: -zero * colsum(q_w)
-    # colsum = sum over K dimension for each output channel (precomputable)
-    colsum_w_m = q_w_m.sum(dim=1, keepdim=True).t()  # (1, N)
-    colsum_w_h = q_w_h.sum(dim=1, keepdim=True).t()
+    # Bias correction using precomputed colsum: -zero * colsum_w
+    colsum_w_m = data["colsum_w_main"].float()       # (N,)
+    colsum_w_h = data["colsum_w_high"].float()       # (N,)
 
     bias_m = -z_x_m * colsum_w_m                     # (batch, seq, N)
     bias_h = -z_x_h * colsum_w_h
