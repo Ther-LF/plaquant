@@ -162,6 +162,34 @@ cutlass::Status run_gemm_dequant(
     StrideB stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, 1));
     StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, 1));
 
+    // Build EVT fusion arguments following the tree structure:
+    // DequantEVT = EVT<Compute<mul>, ScaleProduct, CorrectedAcc>
+    //   ScaleProduct = EVT<Compute<mul>, Leaf_sx, Leaf_sw>
+    //   CorrectedAcc = EVT<Compute<plus>, AccFetch, BiasCompute>
+    //     BiasCompute = EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
+    using FusionArgs = typename Gemm::GemmKernel::CollectiveEpilogue::FusionCallbacks::Arguments;
+
+    FusionArgs fusion_args{
+        {},  // DequantEVT: Compute<mul> args (empty)
+        // ScaleProduct args:
+        {
+            {},  // Compute<mul> args (empty)
+            {reinterpret_cast<ElementOutput const*>(ptr_s_x), ElementOutput(0), {}},   // Leaf_sx: {ptr, null_default, stride}
+            {reinterpret_cast<ElementOutput const*>(ptr_s_w), ElementOutput(0), {}}    // Leaf_sw: {ptr, null_default, stride}
+        },
+        // CorrectedAcc args:
+        {
+            {},  // Compute<plus> args (empty)
+            {},  // AccFetch args (empty)
+            // BiasCompute args:
+            {
+                {},  // Compute<mul> args (empty)
+                {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x), ElementOutput(0), {}},  // Leaf_neg_zero
+                {reinterpret_cast<ElementCompute const*>(ptr_colsum_w), ElementCompute(0), {}}   // Leaf_colsum
+            }
+        }
+    };
+
     typename Gemm::Arguments args{
         cutlass::gemm::GemmUniversalMode::kGemm,
         {M, N, K, 1},
@@ -172,35 +200,13 @@ cutlass::Status run_gemm_dequant(
             reinterpret_cast<typename Gemm::GemmKernel::CollectiveMainloop::ElementB const*>(ptr_B),
             stride_B
         },
-        // Epilogue args (EVT)
+        // Epilogue args
         {
-            {},      // thread args (none for EVT)
-            nullptr, // C ptr (unused)
+            fusion_args,
+            nullptr,  // C ptr (unused)
             stride_D,
             reinterpret_cast<ElementOutput*>(ptr_D),
-            stride_D,
-            // Fusion args: nested following EVT tree structure
-            // DequantEVT = Compute<mul>(ScaleProduct, CorrectedAcc)
-            {
-                {}, // Compute<mul> args
-                // ScaleProduct = Compute<mul>(Leaf_sx, Leaf_sw)
-                {
-                    {},  // Compute<mul> args
-                    {reinterpret_cast<ElementOutput const*>(ptr_s_x)},       // Leaf_sx: ColBroadcast
-                    {reinterpret_cast<ElementOutput const*>(ptr_s_w)}        // Leaf_sw: RowBroadcast
-                },
-                // CorrectedAcc = Compute<plus>(AccFetch, BiasCompute)
-                {
-                    {},  // Compute<plus> args
-                    {},  // AccFetch: no args
-                    // BiasCompute = Compute<mul>(Leaf_neg_zero, Leaf_colsum)
-                    {
-                        {},  // Compute<mul> args
-                        {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x)},  // Leaf_neg_zero: ColBroadcast
-                        {reinterpret_cast<ElementCompute const*>(ptr_colsum_w)}    // Leaf_colsum: RowBroadcast
-                    }
-                }
-            }
+            stride_D
         }
     };
 
