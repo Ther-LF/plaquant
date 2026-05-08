@@ -60,12 +60,14 @@ constexpr int AlignmentOutput = 128 / cutlass::sizeof_bits<ElementOutput>::value
 
 using namespace cutlass::epilogue::fusion;
 
-// Leaf nodes: per-row and per-col vectors loaded via TMA
-//   First template arg is smem pipeline stage (must be 0, pipelining not supported)
-using Leaf_sx       = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_1, _0, int64_t>>;
-using Leaf_sw       = Sm90RowBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_0, _1, int64_t>>;
-using Leaf_neg_zero = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute, Stride<_1, _0, int64_t>>;
-using Leaf_colsum   = Sm90RowBroadcast<0, TileShape_MNK, ElementCompute, ElementCompute, Stride<_0, _1, int64_t>>;
+// Leaf nodes: per-row and per-col vectors
+//   Sm90ColBroadcast: broadcasts a column vector (M,) across N dimension → per-row
+//   Sm90RowBroadcast: broadcasts a row vector (N,) across M dimension → per-col
+//   Stage=0 (no smem pipelining), no alignment specified
+using Leaf_sx       = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute>;
+using Leaf_sw       = Sm90RowBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute>;
+using Leaf_neg_zero = Sm90ColBroadcast<0, TileShape_MNK, ElementOutput, ElementCompute>;
+using Leaf_colsum   = Sm90RowBroadcast<0, TileShape_MNK, ElementCompute, ElementCompute>;
 
 // bias_term = neg_zero_x[m] * colsum_w[n]
 using BiasCompute = Sm90EVT<
@@ -163,35 +165,42 @@ cutlass::Status run_gemm_dequant(
     StrideD stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, 1));
 
     // Build EVT fusion arguments following the tree structure:
+    // IMPORTANT: EVT Arguments order is {child0_args, child1_args, ..., node_op_args}
+    //   (children first, op last — opposite of template params!)
+    //
     // DequantEVT = EVT<Compute<mul>, ScaleProduct, CorrectedAcc>
+    //   Args: {ScaleProduct_args, CorrectedAcc_args, mul_op_args}
+    //
     //   ScaleProduct = EVT<Compute<mul>, Leaf_sx, Leaf_sw>
+    //     Args: {Leaf_sx_args, Leaf_sw_args, mul_op_args}
+    //
     //   CorrectedAcc = EVT<Compute<plus>, AccFetch, BiasCompute>
-    //     BiasCompute = EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
+    //     Args: {AccFetch_args, BiasCompute_args, plus_op_args}
+    //
+    //   BiasCompute = EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
+    //     Args: {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
+
     using FusionArgs = typename Gemm::GemmKernel::CollectiveEpilogue::FusionCallbacks::Arguments;
 
     FusionArgs fusion_args{
-        {},  // DequantEVT: Compute<mul> args (empty)
-        // ScaleProduct args:
+        // ScaleProduct args = {Leaf_sx_args, Leaf_sw_args, mul_op_args}
         {
-            {},  // Compute<mul> args (empty)
-            // Leaf_sx (ColBroadcast): {ptr, null_default, stride}
-            {reinterpret_cast<ElementOutput const*>(ptr_s_x), ElementOutput(0), Stride<_1, _0, int64_t>{_1{}, _0{}, 0}},
-            // Leaf_sw (RowBroadcast): {ptr, null_default, stride}
-            {reinterpret_cast<ElementOutput const*>(ptr_s_w), ElementOutput(0), Stride<_0, _1, int64_t>{_0{}, _1{}, 0}}
+            {reinterpret_cast<ElementOutput const*>(ptr_s_x)},    // Leaf_sx (ColBroadcast): just ptr
+            {reinterpret_cast<ElementOutput const*>(ptr_s_w)},    // Leaf_sw (RowBroadcast): just ptr
+            {}                                                      // Compute<mul> op args (empty)
         },
-        // CorrectedAcc args:
+        // CorrectedAcc args = {AccFetch_args, BiasCompute_args, plus_op_args}
         {
-            {},  // Compute<plus> args (empty)
             {},  // AccFetch args (empty)
-            // BiasCompute args:
+            // BiasCompute args = {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
             {
-                {},  // Compute<mul> args (empty)
-                // Leaf_neg_zero (ColBroadcast): {ptr, null_default, stride}
-                {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x), ElementOutput(0), Stride<_1, _0, int64_t>{_1{}, _0{}, 0}},
-                // Leaf_colsum (RowBroadcast): {ptr, null_default, stride}
-                {reinterpret_cast<ElementCompute const*>(ptr_colsum_w), ElementCompute(0), Stride<_0, _1, int64_t>{_0{}, _1{}, 0}}
-            }
-        }
+                {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x)},   // Leaf_neg_zero (ColBroadcast)
+                {reinterpret_cast<ElementCompute const*>(ptr_colsum_w)},    // Leaf_colsum (RowBroadcast)
+                {}                                                           // Compute<mul> op args (empty)
+            },
+            {}   // Compute<plus> op args (empty)
+        },
+        {}  // DequantEVT top-level Compute<mul> op args (empty)
     };
 
     typename Gemm::Arguments args{
