@@ -403,26 +403,128 @@ class TestQProjDataIntegrity:
 
 
 # ---------------------------------------------------------------------------
-# Tests: CUDA kernel (placeholder — will be filled when kernel is ready)
+# Tests: CUDA baseline kernel (CUTLASS S8S8/U8S8 + EVT dequant)
 # ---------------------------------------------------------------------------
 
+def prepare_kernel_inputs(data: dict):
+    """Convert loaded test data to kernel-expected formats.
+
+    Returns dict with CUDA tensors ready for mixed_gemm.gemm_u8s8_dequant().
+    """
+    # Activation: INT16 [0,15]/[0,255] → UINT8
+    x_main = data["x_main_qint"].reshape(-1, data["x_main_qint"].shape[-1]).to(torch.uint8).cuda()
+    x_high = data["x_high_qint"].reshape(-1, data["x_high_qint"].shape[-1]).to(torch.uint8).cuda()
+
+    # Weight: FP16 (storing integers) → INT8
+    w_main = data["w_main_qint"].to(torch.int8).cuda()
+    w_high = data["w_high_qint"].to(torch.int8).cuda()
+
+    # Per-token scale (first col, since broadcast): (batch*seq,) fp16
+    s_x_m = data["x_main_scale"][:, :, :1].reshape(-1).half().contiguous().cuda()
+    s_x_h = data["x_high_scale"][:, :, :1].reshape(-1).half().contiguous().cuda()
+
+    # Per-token negated zero: (batch*seq,) fp16
+    neg_zero_m = (-data["x_main_zero"][:, :, :1].reshape(-1)).half().contiguous().cuda()
+    neg_zero_h = (-data["x_high_zero"][:, :, :1].reshape(-1)).half().contiguous().cuda()
+
+    # Per-channel weight scale: (N,) fp16
+    s_w_m = data["w_main_scale"].squeeze().half().contiguous().cuda()
+    s_w_h = data["w_high_scale"].squeeze().half().contiguous().cuda()
+
+    # Precomputed column sums: (N,) float32
+    colsum_m = data["colsum_w_main"].float().contiguous().cuda()
+    colsum_h = data["colsum_w_high"].float().contiguous().cuda()
+
+    # Ground truth
+    gt = data["output_real_quant"].reshape(-1, data["output_real_quant"].shape[-1]).cuda()
+
+    return {
+        "x_main": x_main, "x_high": x_high,
+        "w_main": w_main, "w_high": w_high,
+        "s_x_m": s_x_m, "s_x_h": s_x_h,
+        "neg_zero_m": neg_zero_m, "neg_zero_h": neg_zero_h,
+        "s_w_m": s_w_m, "s_w_h": s_w_h,
+        "colsum_m": colsum_m, "colsum_h": colsum_h,
+        "gt": gt,
+    }
+
+
+def run_baseline_kernel(inputs: dict):
+    """Run baseline: 2 CUTLASS GEMMs + torch.add."""
+    import mixed_gemm
+
+    Y_main = mixed_gemm.gemm_u8s8_dequant(
+        inputs["x_main"], inputs["w_main"],
+        inputs["s_x_m"], inputs["s_w_m"],
+        inputs["neg_zero_m"], inputs["colsum_m"])
+
+    Y_high = mixed_gemm.gemm_u8s8_dequant(
+        inputs["x_high"], inputs["w_high"],
+        inputs["s_x_h"], inputs["s_w_h"],
+        inputs["neg_zero_h"], inputs["colsum_h"])
+
+    return Y_main + Y_high
+
+
 class TestQProjKernel:
-    """Test our CUDA mixed_gemm kernel against ground truth."""
+    """Test CUDA baseline kernel against ground truth."""
 
-    @pytest.mark.skip(reason="Kernel not implemented yet")
+    @pytest.fixture(autouse=True)
+    def _check_kernel_available(self):
+        try:
+            import mixed_gemm  # noqa: F401
+        except ImportError:
+            pytest.skip("mixed_gemm not compiled (run setup.py build_ext --inplace in kernels/mixed_gemm/)")
+
     def test_kernel_matches_ground_truth(self, q_proj_dir, batch_size):
-        """Our kernel output should match output_real_quant."""
-        # import mixed_gemm
-        # data = load_operator_data(q_proj_dir, batch_size)
-        # kernel_output = mixed_gemm.forward(...)
-        # gt_output = data["output_real_quant"]
-        # assert close(kernel_output, gt_output)
-        pass
+        """Baseline kernel output should match output_real_quant."""
+        data = load_operator_data(q_proj_dir, batch_size)
+        inputs = prepare_kernel_inputs(data)
+        kernel_output = run_baseline_kernel(inputs)
 
-    @pytest.mark.skip(reason="Kernel not implemented yet")
+        metrics = compute_metrics(kernel_output, inputs["gt"])
+        print_metrics(metrics, prefix=f"[baseline kernel vs GT, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-2, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
+
     def test_kernel_performance(self, q_proj_dir):
-        """Benchmark: kernel should be faster than two separate GEMMs."""
-        pass
+        """Benchmark: measure baseline latency and throughput."""
+        import time
+
+        data = load_operator_data(q_proj_dir, batch_size=1)
+        inputs = prepare_kernel_inputs(data)
+
+        M = inputs["x_main"].shape[0]
+        N = inputs["w_main"].shape[0]
+        K_main = inputs["x_main"].shape[1]
+        K_high = inputs["x_high"].shape[1]
+
+        # Warmup
+        for _ in range(10):
+            run_baseline_kernel(inputs)
+        torch.cuda.synchronize()
+
+        # Benchmark
+        iters = 100
+        t0 = time.time()
+        for _ in range(iters):
+            run_baseline_kernel(inputs)
+        torch.cuda.synchronize()
+        ms = (time.time() - t0) / iters * 1000
+
+        flops = 2 * M * N * (K_main + K_high)
+        tops = flops / ms / 1e9
+        h20_peak_tops = 296  # INT8 theoretical peak
+
+        print(f"\n  [baseline perf] M={M}, N={N}, K_main={K_main}, K_high={K_high}")
+        print(f"    latency:    {ms:.3f} ms")
+        print(f"    throughput: {tops:.1f} TOPS")
+        print(f"    H20 util:   {tops/h20_peak_tops*100:.1f}%")
+
+        # Should achieve at least 40% of peak (relaxed for baseline with 3 launches)
+        assert tops > h20_peak_tops * 0.4, f"Throughput too low: {tops:.1f} TOPS ({tops/h20_peak_tops*100:.1f}%)"
 
 
 # ---------------------------------------------------------------------------
