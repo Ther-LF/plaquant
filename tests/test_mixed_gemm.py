@@ -411,13 +411,13 @@ def prepare_kernel_inputs(data: dict):
 
     Returns dict with CUDA tensors ready for mixed_gemm.gemm_u8s8_dequant().
     """
-    # Activation: INT16 [0,15]/[0,255] → UINT8
-    x_main = data["x_main_qint"].reshape(-1, data["x_main_qint"].shape[-1]).to(torch.uint8).cuda()
-    x_high = data["x_high_qint"].reshape(-1, data["x_high_qint"].shape[-1]).to(torch.uint8).cuda()
+    # Activation: INT16 [0,15]/[0,255] → UINT8, flatten to (M, K)
+    x_main = data["x_main_qint"].reshape(-1, data["x_main_qint"].shape[-1]).to(torch.uint8).contiguous().cuda()
+    x_high = data["x_high_qint"].reshape(-1, data["x_high_qint"].shape[-1]).to(torch.uint8).contiguous().cuda()
 
     # Weight: FP16 (storing integers) → INT8
-    w_main = data["w_main_qint"].to(torch.int8).cuda()
-    w_high = data["w_high_qint"].to(torch.int8).cuda()
+    w_main = data["w_main_qint"].to(torch.int8).contiguous().cuda()
+    w_high = data["w_high_qint"].to(torch.int8).contiguous().cuda()
 
     # Per-token scale (first col, since broadcast): (batch*seq,) fp16
     s_x_m = data["x_main_scale"][:, :, :1].reshape(-1).half().contiguous().cuda()
