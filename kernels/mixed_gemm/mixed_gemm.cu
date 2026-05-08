@@ -174,8 +174,10 @@ cutlass::Status run_gemm_dequant(
         // ScaleProduct args:
         {
             {},  // Compute<mul> args (empty)
-            {reinterpret_cast<ElementOutput const*>(ptr_s_x), ElementOutput(0), {}},   // Leaf_sx: {ptr, null_default, stride}
-            {reinterpret_cast<ElementOutput const*>(ptr_s_w), ElementOutput(0), {}}    // Leaf_sw: {ptr, null_default, stride}
+            // Leaf_sx (ColBroadcast): {ptr, null_default, stride}
+            {reinterpret_cast<ElementOutput const*>(ptr_s_x), ElementOutput(0), Stride<_1, _0, int64_t>{_1{}, _0{}, 0}},
+            // Leaf_sw (RowBroadcast): {ptr, null_default, stride}
+            {reinterpret_cast<ElementOutput const*>(ptr_s_w), ElementOutput(0), Stride<_0, _1, int64_t>{_0{}, _1{}, 0}}
         },
         // CorrectedAcc args:
         {
@@ -184,8 +186,10 @@ cutlass::Status run_gemm_dequant(
             // BiasCompute args:
             {
                 {},  // Compute<mul> args (empty)
-                {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x), ElementOutput(0), {}},  // Leaf_neg_zero
-                {reinterpret_cast<ElementCompute const*>(ptr_colsum_w), ElementCompute(0), {}}   // Leaf_colsum
+                // Leaf_neg_zero (ColBroadcast): {ptr, null_default, stride}
+                {reinterpret_cast<ElementOutput const*>(ptr_neg_zero_x), ElementOutput(0), Stride<_1, _0, int64_t>{_1{}, _0{}, 0}},
+                // Leaf_colsum (RowBroadcast): {ptr, null_default, stride}
+                {reinterpret_cast<ElementCompute const*>(ptr_colsum_w), ElementCompute(0), Stride<_0, _1, int64_t>{_0{}, _1{}, 0}}
             }
         }
     };
