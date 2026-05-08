@@ -243,7 +243,7 @@ cutlass::Status run_gemm_dequant(
 
 /// UINT8×INT8 GEMM + fused dequant → FP16 (high portion)
 torch::Tensor gemm_u8s8_dequant(
-    torch::Tensor A,           // (M, K) uint8
+    torch::Tensor A,           // (M, K) or (batch, seq, K) uint8
     torch::Tensor B,           // (N, K) int8
     torch::Tensor s_x,         // (M,) fp16 per-token scale
     torch::Tensor s_w,         // (N,) fp16 per-channel scale
@@ -253,14 +253,18 @@ torch::Tensor gemm_u8s8_dequant(
     TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
     TORCH_CHECK(A.dtype() == torch::kUInt8, "A must be uint8");
     TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8");
-    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "A, B must be 2D");
-    TORCH_CHECK(A.size(1) == B.size(1), "K dimensions must match");
+    TORCH_CHECK(A.dim() == 2 || A.dim() == 3, "A must be 2D or 3D");
+    TORCH_CHECK(B.dim() == 2, "B must be 2D");
 
-    A = A.contiguous(); B = B.contiguous();
+    auto A_shape = A.sizes().vec();
+    A = A.contiguous().reshape({-1, A.size(-1)});  // flatten to (M, K)
+    B = B.contiguous();
     s_x = s_x.contiguous(); s_w = s_w.contiguous();
     neg_zero_x = neg_zero_x.contiguous(); colsum_w = colsum_w.contiguous();
 
     int M = A.size(0), K = A.size(1), N = B.size(0);
+    TORCH_CHECK(K == B.size(1), "K dimensions must match");
+
     auto output = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -271,12 +275,17 @@ torch::Tensor gemm_u8s8_dequant(
 
     TORCH_CHECK(status == cutlass::Status::kSuccess,
                 "CUTLASS U8S8 dequant GEMM failed: ", cutlass::cutlassGetStatusString(status));
+
+    // Reshape output to match input batch dims: (batch, seq, N)
+    if (A_shape.size() == 3) {
+        output = output.reshape({A_shape[0], A_shape[1], N});
+    }
     return output;
 }
 
 /// INT8×INT8 GEMM + fused dequant → FP16 (main portion, int4 expanded to int8)
 torch::Tensor gemm_s8s8_dequant(
-    torch::Tensor A,           // (M, K) int8 (shifted activation)
+    torch::Tensor A,           // (M, K) or (batch, seq, K) int8
     torch::Tensor B,           // (N, K) int8 weight
     torch::Tensor s_x,         // (M,) fp16 per-token scale
     torch::Tensor s_w,         // (N,) fp16 per-channel scale
@@ -286,14 +295,18 @@ torch::Tensor gemm_s8s8_dequant(
     TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be on CUDA");
     TORCH_CHECK(A.dtype() == torch::kInt8, "A must be int8");
     TORCH_CHECK(B.dtype() == torch::kInt8, "B must be int8");
-    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, "A, B must be 2D");
-    TORCH_CHECK(A.size(1) == B.size(1), "K dimensions must match");
+    TORCH_CHECK(A.dim() == 2 || A.dim() == 3, "A must be 2D or 3D");
+    TORCH_CHECK(B.dim() == 2, "B must be 2D");
 
-    A = A.contiguous(); B = B.contiguous();
+    auto A_shape = A.sizes().vec();
+    A = A.contiguous().reshape({-1, A.size(-1)});
+    B = B.contiguous();
     s_x = s_x.contiguous(); s_w = s_w.contiguous();
     neg_zero_x = neg_zero_x.contiguous(); colsum_w = colsum_w.contiguous();
 
     int M = A.size(0), K = A.size(1), N = B.size(0);
+    TORCH_CHECK(K == B.size(1), "K dimensions must match");
+
     auto output = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -304,6 +317,10 @@ torch::Tensor gemm_s8s8_dequant(
 
     TORCH_CHECK(status == cutlass::Status::kSuccess,
                 "CUTLASS S8S8 dequant GEMM failed: ", cutlass::cutlassGetStatusString(status));
+
+    if (A_shape.size() == 3) {
+        output = output.reshape({A_shape[0], A_shape[1], N});
+    }
     return output;
 }
 
