@@ -257,10 +257,14 @@ torch::Tensor gemm_u8s8_dequant(
     TORCH_CHECK(B.dim() == 2, "B must be 2D");
 
     auto A_shape = A.sizes().vec();
-    A = A.contiguous().reshape({-1, A.size(-1)});  // flatten to (M, K)
-    B = B.contiguous();
-    s_x = s_x.contiguous(); s_w = s_w.contiguous();
-    neg_zero_x = neg_zero_x.contiguous(); colsum_w = colsum_w.contiguous();
+    TORCH_CHECK(A.is_contiguous(), "A must be contiguous");
+    TORCH_CHECK(B.is_contiguous(), "B must be contiguous");
+    TORCH_CHECK(s_x.is_contiguous(), "s_x must be contiguous");
+    TORCH_CHECK(s_w.is_contiguous(), "s_w must be contiguous");
+    TORCH_CHECK(neg_zero_x.is_contiguous(), "neg_zero_x must be contiguous");
+    TORCH_CHECK(colsum_w.is_contiguous(), "colsum_w must be contiguous");
+
+    A = A.reshape({-1, A.size(-1)});  // flatten to (M, K), no copy since already contiguous
 
     int M = A.size(0), K = A.size(1), N = B.size(0);
     TORCH_CHECK(K == B.size(1), "K dimensions must match");
