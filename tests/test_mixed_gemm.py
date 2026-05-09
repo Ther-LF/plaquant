@@ -298,6 +298,14 @@ def q_proj_dir():
     return path
 
 
+@pytest.fixture
+def o_proj_dir():
+    path = os.path.join(GEMM_DATA_DIR, OPERATORS["o_proj"])
+    if not os.path.exists(path):
+        pytest.skip(f"Data not found: {path}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Tests: q_proj (Operator 1: per-token asymmetric activation, per-channel weight)
 # ---------------------------------------------------------------------------
@@ -400,6 +408,214 @@ class TestQProjDataIntegrity:
         assert data["w_main_qint"].shape == (N, K_main)
         assert data["w_high_qint"].shape == (N, K_high)
         assert data["output_real_quant"].shape == (batch_size, 2048, N)
+
+
+# ---------------------------------------------------------------------------
+# o_proj: per-group mixed-precision GEMM
+# ---------------------------------------------------------------------------
+
+def load_oproj_data(data_dir: str, batch_size: int = 1):
+    """Load o_proj operator data.
+
+    o_proj uses per-group quantization (groupsize=head_dim=64).
+    Activation tensors are 4D: (batch, seq, num_groups, group_k)
+    Scale/zero are per-group per-token: (batch, seq, num_groups, 1)
+
+    Additional: column_order for reordering attention output.
+    """
+    d = Path(data_dir)
+    bs = batch_size
+
+    act_main = torch.load(d / f"act_quant_main_bs{bs}.pt", map_location="cpu", weights_only=False)
+    act_high = torch.load(d / f"act_quant_high_bs{bs}.pt", map_location="cpu", weights_only=False)
+    w_main = torch.load(d / "weight_int_main.pt", map_location="cpu", weights_only=False)
+    w_high = torch.load(d / "weight_int_high.pt", map_location="cpu", weights_only=False)
+    col_order = torch.load(d / "column_order.pt", map_location="cpu", weights_only=False)
+
+    output_rq = torch.load(d / f"output_real_quant_bs{bs}.pt", map_location="cpu", weights_only=False)
+    output_fp = torch.load(d / f"output_fp16_baseline_bs{bs}.pt", map_location="cpu", weights_only=False)
+    input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
+    w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
+
+    return {
+        # Activation main: 4D (batch, seq, num_groups, group_k_main)
+        "x_main_qint": act_main["q_int"],           # INT16, [0,15]
+        "x_main_scale": act_main["scale"],           # FP16, (batch, seq, num_groups, 1)
+        "x_main_zero": act_main["zero"],             # FP16
+        # Activation high: 4D (batch, seq, num_groups, group_k_high)
+        "x_high_qint": act_high["q_int"],            # INT16, [0,255]
+        "x_high_scale": act_high["scale"],           # FP16
+        "x_high_zero": act_high["zero"],             # FP16
+        # Weight: global layout (already rearranged with column_order)
+        "w_main_qint": w_main["q_int"],              # FP16, (N, K_main)
+        "w_main_scale": w_main["scale"],             # FP16, (N, 1)
+        "w_high_qint": w_high["q_int"],              # FP16, (N, K_high)
+        "w_high_scale": w_high["scale"],             # FP16, (N, 1)
+        # Column reorder (applied to input before GEMM)
+        "column_order": col_order,                    # INT64, (K,)
+        # FP16 references
+        "weight_fp16": w_fp16,
+        "output_real_quant": output_rq,
+        "output_fp16_baseline": output_fp,
+        "input_fp16": input_fp,
+    }
+
+
+def reference_oproj_dequant(data: dict) -> torch.Tensor:
+    """Reference o_proj: per-group dequant then matmul.
+
+    o_proj activation is quantized per-group (groupsize=head_dim=64).
+    Each group of 64 channels has its own scale/zero.
+    Within each group: 56 channels are INT4 (main), 8 channels are INT8 (high).
+
+    Weight layout is global: [all_main_cols | all_high_cols]
+      W_main: (N, G*56) = (N, 1792) — all groups' main cols concatenated
+      W_high: (N, G*8)  = (N, 256)  — all groups' high cols concatenated
+
+    So we must arrange activation in the same order:
+      x_flat = [group0_main, group1_main, ..., groupG_main, group0_high, ..., groupG_high]
+    """
+    # Dequant main: (batch, seq, G, gk_m)
+    x_main = data["x_main_scale"].float() * (data["x_main_qint"].float() - data["x_main_zero"].float())
+    x_high = data["x_high_scale"].float() * (data["x_high_qint"].float() - data["x_high_zero"].float())
+
+    batch, seq = x_main.shape[:2]
+
+    # Flatten groups for main and high separately to match weight layout
+    x_main_flat = x_main.reshape(batch, seq, -1)  # (batch, seq, G*gk_m) = (batch, seq, 1792)
+    x_high_flat = x_high.reshape(batch, seq, -1)  # (batch, seq, G*gk_h) = (batch, seq, 256)
+
+    # Concatenate in same order as weight: [main | high]
+    x_flat = torch.cat([x_main_flat, x_high_flat], dim=-1)  # (batch, seq, 2048)
+
+    # Dequant weight: symmetric
+    w_main = data["w_main_scale"].float() * data["w_main_qint"].float()  # (N, 1792)
+    w_high = data["w_high_scale"].float() * data["w_high_qint"].float()  # (N, 256)
+    w_full = torch.cat([w_main, w_high], dim=1)  # (N, 2048)
+
+    out = torch.matmul(x_flat, w_full.t())
+    return out.half()
+
+
+def reference_oproj_integer(data: dict) -> torch.Tensor:
+    """Reference o_proj: per-group integer matmul with bias correction.
+
+    For each group g:
+      partial_m[g] = s_x_m[g] * s_w_m * (q_x_m[g] @ q_w_m[g]^T - z_x_m[g] * colsum_w_m[g])
+      partial_h[g] = s_x_h[g] * s_w_h * (q_x_h[g] @ q_w_h[g]^T - z_x_h[g] * colsum_w_h[g])
+
+    output = sum over g of (partial_m[g] + partial_h[g])
+    """
+    # Shapes
+    q_x_m = data["x_main_qint"].float()   # (batch, seq, G, gk_m) [0,15]
+    q_x_h = data["x_high_qint"].float()   # (batch, seq, G, gk_h) [0,255]
+    s_x_m = data["x_main_scale"].float()  # (batch, seq, G, 1)
+    z_x_m = data["x_main_zero"].float()
+    s_x_h = data["x_high_scale"].float()
+    z_x_h = data["x_high_zero"].float()
+
+    q_w_m = data["w_main_qint"].float()   # (N, K_main)
+    q_w_h = data["w_high_qint"].float()   # (N, K_high)
+    s_w_m = data["w_main_scale"].float()  # (N, 1)
+    s_w_h = data["w_high_scale"].float()
+
+    batch, seq, G, gk_m = q_x_m.shape
+    gk_h = q_x_h.shape[-1]
+    N = q_w_m.shape[0]
+
+    # Accumulate over groups
+    output = torch.zeros(batch, seq, N)
+
+    for g in range(G):
+        # Extract group's activation
+        qxm_g = q_x_m[:, :, g, :]  # (batch, seq, gk_m)
+        qxh_g = q_x_h[:, :, g, :]  # (batch, seq, gk_h)
+        sxm_g = s_x_m[:, :, g, :]  # (batch, seq, 1)
+        zxm_g = z_x_m[:, :, g, :]
+        sxh_g = s_x_h[:, :, g, :]
+        zxh_g = z_x_h[:, :, g, :]
+
+        # Extract group's weight columns
+        qwm_g = q_w_m[:, g * gk_m : (g + 1) * gk_m]  # (N, gk_m)
+        qwh_g = q_w_h[:, g * gk_h : (g + 1) * gk_h]  # (N, gk_h)
+
+        # Integer matmul: unsigned activation × signed weight
+        int_out_m = torch.matmul(qxm_g, qwm_g.t())  # (batch, seq, N)
+        int_out_h = torch.matmul(qxh_g, qwh_g.t())
+
+        # Bias correction: -zero * colsum
+        colsum_m = qwm_g.sum(dim=1)  # (N,)
+        colsum_h = qwh_g.sum(dim=1)  # (N,)
+
+        bias_m = -zxm_g * colsum_m    # (batch, seq, N)
+        bias_h = -zxh_g * colsum_h
+
+        # Scale and accumulate
+        output += sxm_g * s_w_m.t() * (int_out_m + bias_m)
+        output += sxh_g * s_w_h.t() * (int_out_h + bias_h)
+
+    return output.half()
+
+
+class TestOProjReference:
+    """Verify o_proj reference implementations match ground truth."""
+
+    def test_dequant_reference_matches_ground_truth(self, o_proj_dir, batch_size):
+        data = load_oproj_data(o_proj_dir, batch_size)
+        ref_output = reference_oproj_dequant(data)
+        gt_output = data["output_real_quant"]
+
+        metrics = compute_metrics(ref_output, gt_output)
+        print_metrics(metrics, prefix=f"[o_proj dequant ref, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-2, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_integer_reference_matches_ground_truth(self, o_proj_dir, batch_size):
+        data = load_oproj_data(o_proj_dir, batch_size)
+        ref_output = reference_oproj_integer(data)
+        gt_output = data["output_real_quant"]
+
+        metrics = compute_metrics(ref_output, gt_output)
+        print_metrics(metrics, prefix=f"[o_proj integer ref, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-2, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_dequant_vs_integer_consistency(self, o_proj_dir, batch_size):
+        data = load_oproj_data(o_proj_dir, batch_size)
+        out_dequant = reference_oproj_dequant(data)
+        out_integer = reference_oproj_integer(data)
+
+        metrics = compute_metrics(out_dequant, out_integer)
+        print_metrics(metrics, prefix=f"[o_proj dequant vs integer, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-4, f"Two refs disagree: rel_err={metrics['rel_err']}"
+
+    def test_quantization_loss(self, o_proj_dir, batch_size):
+        data = load_oproj_data(o_proj_dir, batch_size)
+        gt = data["output_real_quant"]
+        fp_baseline = data["output_fp16_baseline"]
+
+        metrics = compute_metrics(gt, fp_baseline)
+        print_metrics(metrics, prefix=f"[o_proj quant loss, bs={batch_size}]")
+
+    def test_shapes(self, o_proj_dir, batch_size):
+        data = load_oproj_data(o_proj_dir, batch_size)
+        meta = load_metadata(o_proj_dir)
+
+        num_groups = 32
+        gk_main = 56  # 64 * 7/8
+        gk_high = 8   # 64 * 1/8
+
+        assert data["x_main_qint"].shape == (batch_size, 2048, num_groups, gk_main)
+        assert data["x_high_qint"].shape == (batch_size, 2048, num_groups, gk_high)
+        assert data["x_main_scale"].shape == (batch_size, 2048, num_groups, 1)
+        assert data["w_main_qint"].shape == (2048, num_groups * gk_main)
+        assert data["w_high_qint"].shape == (2048, num_groups * gk_high)
+        assert data["column_order"].shape == (2048,)
 
 
 # ---------------------------------------------------------------------------
