@@ -501,8 +501,8 @@ class TestQProjKernel:
         K_main = inputs["x_main"].shape[1]
         K_high = inputs["x_high"].shape[1]
 
-        h20_peak_tops = 592      # INT8 theoretical peak (H20: 296 FP8 TFLOPS × 2 for INT8)
-        h20_peak_bw = 4000       # GB/s HBM bandwidth (H20, 96GB HBM3)
+        h20_peak_tops = 268      # INT8 measured peak on H20 (GEMM 10240^3)
+        h20_peak_bw = 3189       # GB/s HBM measured peak on H20 (256MB copy)
 
         iters = 100
 
