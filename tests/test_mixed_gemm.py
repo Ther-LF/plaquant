@@ -618,6 +618,85 @@ class TestOProjReference:
         assert data["column_order"].shape == (2048,)
 
 
+class TestOProjKernel:
+    """Test o_proj baseline: per-group dequant → FP16 matmul."""
+
+    def test_baseline_matches_ground_truth(self, o_proj_dir, batch_size):
+        """Baseline: dequant per-group to FP16, then cuBLAS FP16 GEMM."""
+        data = load_oproj_data(o_proj_dir, batch_size)
+
+        # Per-group dequant to FP16
+        x_main = data["x_main_scale"].float() * (data["x_main_qint"].float() - data["x_main_zero"].float())
+        x_high = data["x_high_scale"].float() * (data["x_high_qint"].float() - data["x_high_zero"].float())
+
+        # Flatten groups: [all main | all high]
+        batch, seq = x_main.shape[:2]
+        x_flat = torch.cat([
+            x_main.reshape(batch, seq, -1),
+            x_high.reshape(batch, seq, -1)
+        ], dim=-1).half()  # (batch, seq, 2048)
+
+        # Weight dequant (per-channel symmetric)
+        w_main = (data["w_main_scale"] * data["w_main_qint"]).float()
+        w_high = (data["w_high_scale"] * data["w_high_qint"]).float()
+        w_full = torch.cat([w_main, w_high], dim=1).half()  # (N, 2048)
+
+        # FP16 matmul
+        output = torch.matmul(x_flat.float(), w_full.float().t()).half()
+
+        gt = data["output_real_quant"]
+        metrics = compute_metrics(output, gt)
+        print_metrics(metrics, prefix=f"[o_proj baseline kernel, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > 0.999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 25, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_baseline_performance(self, o_proj_dir):
+        """Benchmark o_proj baseline: dequant + FP16 GEMM."""
+        data = load_oproj_data(o_proj_dir, batch_size=1)
+
+        # Prepare FP16 data (simulate the dequant step)
+        x_main = data["x_main_scale"].float() * (data["x_main_qint"].float() - data["x_main_zero"].float())
+        x_high = data["x_high_scale"].float() * (data["x_high_qint"].float() - data["x_high_zero"].float())
+        batch, seq = x_main.shape[:2]
+        x_flat = torch.cat([
+            x_main.reshape(batch, seq, -1),
+            x_high.reshape(batch, seq, -1)
+        ], dim=-1).half().cuda()
+
+        w_main = (data["w_main_scale"] * data["w_main_qint"]).float()
+        w_high = (data["w_high_scale"] * data["w_high_qint"]).float()
+        w_full = torch.cat([w_main, w_high], dim=1).half().cuda()
+
+        M, K = x_flat.shape[1], x_flat.shape[2]  # seq, 2048
+        N = w_full.shape[0]
+
+        # Warmup
+        for _ in range(10):
+            torch.matmul(x_flat, w_full.t())
+        torch.cuda.synchronize()
+
+        # Benchmark with CUDA events
+        iters = 100
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+
+        start.record()
+        for _ in range(iters):
+            torch.matmul(x_flat, w_full.t())
+        end.record()
+        torch.cuda.synchronize()
+        ms_gemm = start.elapsed_time(end) / iters
+
+        flops = 2 * M * N * K
+        tflops = flops / ms_gemm / 1e9
+        h20_fp16_peak = 148  # FP16 TFLOPS
+
+        print(f"\n  [o_proj baseline perf] M={M}, N={N}, K={K}")
+        print(f"    FP16 GEMM: {ms_gemm*1000:.1f} μs, {tflops:.1f} TFLOPS ({tflops/h20_fp16_peak*100:.1f}% FP16 peak)")
+
+
 # ---------------------------------------------------------------------------
 # Tests: CUDA baseline kernel (CUTLASS S8S8/U8S8 + EVT dequant)
 # ---------------------------------------------------------------------------
