@@ -25,13 +25,19 @@ def benchmark_int8_peak():
     """Measure peak INT8 Tensor Core TOPS with large GEMM."""
     M = N = K = 10240
 
-    A = torch.randint(-128, 127, (M, K), dtype=torch.int8, device="cuda")
+    # Use uint8 x int8 (U8S8 WGMMA) — same throughput as S8S8
+    A = torch.randint(0, 255, (M, K), dtype=torch.uint8, device="cuda")
     B = torch.randint(-128, 127, (N, K), dtype=torch.int8, device="cuda")
+    # Dummy dequant params (we only care about GEMM compute time)
+    s_x = torch.ones(M, dtype=torch.float16, device="cuda")
+    s_w = torch.ones(N, dtype=torch.float16, device="cuda")
+    neg_zero = torch.zeros(M, dtype=torch.float16, device="cuda")
+    colsum_w = torch.zeros(N, dtype=torch.float32, device="cuda")
     flush_buf = torch.empty(64 * 1024 * 1024 // 4, dtype=torch.int32, device="cuda")  # 64MB
 
     # Warmup
     for _ in range(5):
-        mixed_gemm.gemm_s8s8(A, B)
+        mixed_gemm.gemm_u8s8_dequant(A, B, s_x, s_w, neg_zero, colsum_w)
     torch.cuda.synchronize()
 
     # Benchmark with cache flush
@@ -42,7 +48,7 @@ def benchmark_int8_peak():
     # First: without cache flush (best case, data in L2)
     start.record()
     for _ in range(iters):
-        mixed_gemm.gemm_s8s8(A, B)
+        mixed_gemm.gemm_u8s8_dequant(A, B, s_x, s_w, neg_zero, colsum_w)
     end.record()
     torch.cuda.synchronize()
     ms_hot = start.elapsed_time(end) / iters
@@ -54,7 +60,7 @@ def benchmark_int8_peak():
         s = torch.cuda.Event(enable_timing=True)
         e = torch.cuda.Event(enable_timing=True)
         s.record()
-        mixed_gemm.gemm_s8s8(A, B)
+        mixed_gemm.gemm_u8s8_dequant(A, B, s_x, s_w, neg_zero, colsum_w)
         e.record()
         torch.cuda.synchronize()
         times_cold.append(s.elapsed_time(e))
