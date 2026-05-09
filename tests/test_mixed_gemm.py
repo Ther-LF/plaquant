@@ -342,10 +342,10 @@ class TestPerTokenReference:
         # v_proj has out_quantizer=4-bit (V cache quantization) which adds extra noise
         meta = load_metadata(op_dir)
         has_output_quant = meta.get("out_quantizer_bits", 16) < 16
-        snr_threshold = 15 if has_output_quant else 20
-        cosine_threshold = 0.99 if has_output_quant else 0.999
+        snr_threshold = 20 if has_output_quant else 60
+        cosine_threshold = 0.99 if has_output_quant else 0.9999
 
-        assert metrics["rel_err"] < 0.1, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
         assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
         assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
 
@@ -360,10 +360,10 @@ class TestPerTokenReference:
 
         meta = load_metadata(op_dir)
         has_output_quant = meta.get("out_quantizer_bits", 16) < 16
-        snr_threshold = 15 if has_output_quant else 20
-        cosine_threshold = 0.99 if has_output_quant else 0.999
+        snr_threshold = 20 if has_output_quant else 60
+        cosine_threshold = 0.99 if has_output_quant else 0.9999
 
-        assert metrics["rel_err"] < 0.1, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
         assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
         assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
 
@@ -794,9 +794,14 @@ class TestPerTokenKernel:
         metrics = compute_metrics(kernel_output, inputs["gt"])
         print_metrics(metrics, prefix=f"[{op_name} kernel vs GT, bs={batch_size}]")
 
-        assert metrics["rel_err"] < 0.1, f"rel_err too high: {metrics['rel_err']}"
-        assert metrics["cosine_sim"] > 0.999, f"cosine_sim too low: {metrics['cosine_sim']}"
-        assert metrics["snr_db"] > 20, f"SNR too low: {metrics['snr_db']} dB"
+        meta = load_metadata(op_dir)
+        has_output_quant = meta.get("out_quantizer_bits", 16) < 16
+        snr_threshold = 20 if has_output_quant else 60
+        cosine_threshold = 0.99 if has_output_quant else 0.9999
+
+        assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
+        assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_kernel_performance(self, per_token_op_dir):
         """Benchmark: measure each kernel's latency, TOPS, and bandwidth separately."""
