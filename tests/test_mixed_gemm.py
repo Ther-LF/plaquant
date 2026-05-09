@@ -491,8 +491,6 @@ class TestQProjKernel:
 
     def test_kernel_performance(self, q_proj_dir):
         """Benchmark: measure baseline latency and throughput."""
-        import time
-
         data = load_operator_data(q_proj_dir, batch_size=1)
         inputs = prepare_kernel_inputs(data)
 
@@ -506,13 +504,18 @@ class TestQProjKernel:
             run_baseline_kernel(inputs)
         torch.cuda.synchronize()
 
-        # Benchmark
+        # Benchmark with CUDA events (precise GPU timing)
         iters = 100
-        t0 = time.time()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        start_event.record()
         for _ in range(iters):
             run_baseline_kernel(inputs)
+        end_event.record()
         torch.cuda.synchronize()
-        ms = (time.time() - t0) / iters * 1000
+
+        ms = start_event.elapsed_time(end_event) / iters
 
         flops = 2 * M * N * (K_main + K_high)
         tops = flops / ms / 1e9
