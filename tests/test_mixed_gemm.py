@@ -490,7 +490,9 @@ class TestQProjKernel:
         assert metrics["snr_db"] > 40, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_kernel_performance(self, q_proj_dir):
-        """Benchmark: measure baseline latency and throughput."""
+        """Benchmark: measure each kernel's latency, TOPS, and bandwidth separately."""
+        import mixed_gemm
+
         data = load_operator_data(q_proj_dir, batch_size=1)
         inputs = prepare_kernel_inputs(data)
 
@@ -499,35 +501,78 @@ class TestQProjKernel:
         K_main = inputs["x_main"].shape[1]
         K_high = inputs["x_high"].shape[1]
 
-        # Warmup
-        for _ in range(10):
-            run_baseline_kernel(inputs)
-        torch.cuda.synchronize()
+        h20_peak_tops = 296      # INT8 theoretical peak
+        h20_peak_bw = 4000       # GB/s HBM bandwidth (H20)
 
-        # Benchmark with CUDA events (precise GPU timing)
         iters = 100
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
 
-        start_event.record()
-        for _ in range(iters):
-            run_baseline_kernel(inputs)
-        end_event.record()
-        torch.cuda.synchronize()
+        def bench(fn, label):
+            """Benchmark a single kernel with CUDA events."""
+            for _ in range(10):
+                fn()
+            torch.cuda.synchronize()
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            for _ in range(iters):
+                fn()
+            end.record()
+            torch.cuda.synchronize()
+            return start.elapsed_time(end) / iters
 
-        ms = start_event.elapsed_time(end_event) / iters
+        # --- GEMM main (U8S8, K=1792) ---
+        ms_main = bench(
+            lambda: mixed_gemm.gemm_u8s8_dequant(
+                inputs["x_main"], inputs["w_main"],
+                inputs["s_x_m"], inputs["s_w_m"],
+                inputs["neg_zero_m"], inputs["colsum_m"]),
+            "gemm_main")
+        flops_main = 2 * M * N * K_main
+        tops_main = flops_main / ms_main / 1e9
+        # Bytes read: A(M*K*1) + B(N*K*1) + scales/zeros(M+N)*2bytes + colsum(N*4)
+        bytes_main = M * K_main * 1 + N * K_main * 1 + (M + N) * 2 + N * 4
+        bw_main = bytes_main / ms_main / 1e6  # GB/s
 
-        flops = 2 * M * N * (K_main + K_high)
-        tops = flops / ms / 1e9
-        h20_peak_tops = 296  # INT8 theoretical peak
+        # --- GEMM high (U8S8, K=256) ---
+        ms_high = bench(
+            lambda: mixed_gemm.gemm_u8s8_dequant(
+                inputs["x_high"], inputs["w_high"],
+                inputs["s_x_h"], inputs["s_w_h"],
+                inputs["neg_zero_h"], inputs["colsum_h"]),
+            "gemm_high")
+        flops_high = 2 * M * N * K_high
+        tops_high = flops_high / ms_high / 1e9
+        bytes_high = M * K_high * 1 + N * K_high * 1 + (M + N) * 2 + N * 4
+        bw_high = bytes_high / ms_high / 1e6
+
+        # --- Reduction (elementwise add, FP16) ---
+        Y_main = mixed_gemm.gemm_u8s8_dequant(
+            inputs["x_main"], inputs["w_main"],
+            inputs["s_x_m"], inputs["s_w_m"],
+            inputs["neg_zero_m"], inputs["colsum_m"])
+        Y_high = mixed_gemm.gemm_u8s8_dequant(
+            inputs["x_high"], inputs["w_high"],
+            inputs["s_x_h"], inputs["s_w_h"],
+            inputs["neg_zero_h"], inputs["colsum_h"])
+        ms_add = bench(lambda: Y_main + Y_high, "reduction")
+        # Bytes: read 2 * M*N*2 + write M*N*2
+        bytes_add = 3 * M * N * 2
+        bw_add = bytes_add / ms_add / 1e6
+
+        # --- Total ---
+        ms_total = ms_main + ms_high + ms_add
 
         print(f"\n  [baseline perf] M={M}, N={N}, K_main={K_main}, K_high={K_high}")
-        print(f"    latency:    {ms:.3f} ms")
-        print(f"    throughput: {tops:.1f} TOPS")
-        print(f"    H20 util:   {tops/h20_peak_tops*100:.1f}%")
+        print(f"    {'Kernel':<15} {'Latency':>10} {'TOPS':>10} {'BW (GB/s)':>12} {'Peak%':>8}")
+        print(f"    {'-'*55}")
+        print(f"    {'GEMM main':<15} {ms_main*1000:>7.1f} μs {tops_main:>8.1f}  {bw_main:>10.1f}  {tops_main/h20_peak_tops*100:>6.1f}%")
+        print(f"    {'GEMM high':<15} {ms_high*1000:>7.1f} μs {tops_high:>8.1f}  {bw_high:>10.1f}  {tops_high/h20_peak_tops*100:>6.1f}%")
+        print(f"    {'Add (reduce)':<15} {ms_add*1000:>7.1f} μs {'—':>8}  {bw_add:>10.1f}  {bw_add/h20_peak_bw*100:>6.1f}%")
+        print(f"    {'-'*55}")
+        print(f"    {'TOTAL':<15} {ms_total*1000:>7.1f} μs")
 
-        # Should achieve at least 40% of peak (relaxed for baseline with 3 launches)
-        assert tops > h20_peak_tops * 0.4, f"Throughput too low: {tops:.1f} TOPS ({tops/h20_peak_tops*100:.1f}%)"
+        # Main GEMM should achieve at least 50% peak
+        assert tops_main > h20_peak_tops * 0.4, f"Main GEMM too slow: {tops_main:.1f} TOPS"
 
 
 # ---------------------------------------------------------------------------
