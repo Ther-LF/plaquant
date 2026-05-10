@@ -342,6 +342,13 @@ torch::Tensor gemm_s8s8_dequant(torch::Tensor A, torch::Tensor B,
 // Python binding
 // =============================================================================
 
+// Forward declaration of fused kernel (defined in fused_mixed_gemm.cu)
+torch::Tensor fused_mixed_gemm(
+    torch::Tensor A_main, torch::Tensor B_main,
+    torch::Tensor A_high, torch::Tensor B_high,
+    torch::Tensor s_x_m, torch::Tensor s_w_m, torch::Tensor neg_zero_m, torch::Tensor colsum_m,
+    torch::Tensor s_x_h, torch::Tensor s_w_h, torch::Tensor neg_zero_h, torch::Tensor colsum_h);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_u8s8_dequant", &gemm_u8s8_dequant,
           "UINT8×INT8 GEMM + fused dequant → FP16 (high portion, single kernel via EVT)",
@@ -351,4 +358,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "INT8×INT8 GEMM + fused dequant → FP16 (main portion, single kernel via EVT)",
           py::arg("A"), py::arg("B"), py::arg("s_x"), py::arg("s_w"),
           py::arg("neg_zero_x"), py::arg("colsum_w"));
+    m.def("fused_mixed_gemm", &fused_mixed_gemm,
+          "Fused dual-phase GEMM: (main U8S8 + high U8S8) with in-register dequant+combine",
+          py::arg("A_main"), py::arg("B_main"), py::arg("A_high"), py::arg("B_high"),
+          py::arg("s_x_m"), py::arg("s_w_m"), py::arg("neg_zero_m"), py::arg("colsum_m"),
+          py::arg("s_x_h"), py::arg("s_w_h"), py::arg("neg_zero_h"), py::arg("colsum_h"));
 }
