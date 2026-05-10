@@ -53,9 +53,13 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     # For v_proj (has 4-bit output quant), this is the GEMM result before out_quantizer
     gemm_only_path = d / f"output_gemm_only_bs{bs}.pt"
     if gemm_only_path.exists():
-        output_gemm_only = torch.load(gemm_only_path, map_location="cpu", weights_only=False)
+        _go = torch.load(gemm_only_path, map_location="cpu", weights_only=False)
+        # Verify shape matches expected batch size
+        if _go.shape[0] == batch_size:
+            output_gemm_only = _go
+        else:
+            output_gemm_only = output_rq  # shape mismatch, fallback to real_quant
     else:
-        # Fallback: for layers without output quant, output_real_quant == gemm_only
         output_gemm_only = output_rq
 
     # Precomputed colsum: compute on-the-fly if not saved
