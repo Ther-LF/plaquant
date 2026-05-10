@@ -891,6 +891,223 @@ class TestPerTokenKernel:
 
 
 # ---------------------------------------------------------------------------
+# Tests: down_proj (pure INT4, no high channel, single GEMM)
+# ---------------------------------------------------------------------------
+
+def load_downproj_data(data_dir: str, batch_size: int = 1):
+    """Load down_proj tensors (no high channel — pure INT4 per-token)."""
+    d = Path(data_dir)
+    bs = batch_size
+
+    act_main = torch.load(d / f"act_quant_main_bs{bs}.pt", map_location="cpu", weights_only=False)
+    w_main = torch.load(d / "weight_int_main.pt", map_location="cpu", weights_only=False)
+
+    output_rq = torch.load(d / f"output_real_quant_bs{bs}.pt", map_location="cpu", weights_only=False)
+    output_fp = torch.load(d / f"output_fp16_baseline_bs{bs}.pt", map_location="cpu", weights_only=False)
+    input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
+    w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
+
+    gemm_only_path = d / f"output_gemm_only_bs{bs}.pt"
+    if gemm_only_path.exists():
+        _go = torch.load(gemm_only_path, map_location="cpu", weights_only=False)
+        output_gemm_only = _go if _go.shape[0] == batch_size else output_rq
+    else:
+        output_gemm_only = output_rq
+
+    # Precomputed colsum
+    colsum_path = d / "colsum_w_main.pt"
+    if colsum_path.exists():
+        colsum_w = torch.load(colsum_path, map_location="cpu", weights_only=False)
+    else:
+        colsum_w = w_main["q_int"].float().sum(dim=1).to(torch.int32)
+
+    return {
+        "x_main_qint": act_main["q_int"],       # (bs, seq, K) int16, [0,15]
+        "x_main_scale": act_main["scale"],       # (bs, seq, K) fp16
+        "x_main_zero": act_main["zero"],         # (bs, seq, K) fp16
+        "w_main_qint": w_main["q_int"],          # (N, K) fp16 storing [-8,7]
+        "w_main_scale": w_main["scale"],         # (N, 1) fp16
+        "colsum_w_main": colsum_w,               # (N,) int32
+        "weight_fp16": w_fp16,
+        "output_real_quant": output_rq,
+        "output_gemm_only": output_gemm_only,
+        "output_fp16_baseline": output_fp,
+        "input_fp16": input_fp,
+    }
+
+
+def reference_downproj_dequant(data: dict) -> torch.Tensor:
+    """Reference: dequant to FP32 then matmul (single GEMM, no high channel)."""
+    x = data["x_main_scale"].float() * (data["x_main_qint"].float() - data["x_main_zero"].float())
+    w = data["w_main_scale"].float() * data["w_main_qint"].float()
+    return torch.matmul(x, w.t()).half()
+
+
+def reference_downproj_integer(data: dict) -> torch.Tensor:
+    """Reference: U4×S4 integer matmul with bias correction (single GEMM).
+
+    Formula: Y = s_x[m] * s_w[n] * (q_x @ q_w^T - z_x[m] * colsum(q_w)[n])
+    """
+    # Per-token scale/zero (take first column since per-token broadcast)
+    s_x = data["x_main_scale"][:, :, :1].float()   # (bs, seq, 1)
+    z_x = data["x_main_zero"][:, :, :1].float()    # (bs, seq, 1)
+    s_w = data["w_main_scale"].float()              # (N, 1)
+
+    q_x = data["x_main_qint"].float()              # (bs, seq, K) unsigned [0, 15]
+    q_w = data["w_main_qint"].float()              # (N, K) signed [-8, 7]
+
+    # Integer matmul
+    int_out = torch.matmul(q_x, q_w.t())           # (bs, seq, N)
+
+    # Bias correction
+    colsum_w = data["colsum_w_main"].float()        # (N,)
+    bias = -z_x * colsum_w                          # (bs, seq, N)
+
+    # Dequant
+    return (s_x * s_w.t() * (int_out + bias)).half()
+
+
+@pytest.fixture
+def down_proj_dir():
+    path = os.path.join(GEMM_DATA_DIR, OPERATORS["down_proj"])
+    if not os.path.exists(path):
+        pytest.skip(f"Data not found: {path}")
+    return path
+
+
+class TestDownProjReference:
+    """Verify reference implementations for down_proj (pure INT4, no high channel)."""
+
+    def test_dequant_reference_matches_ground_truth(self, down_proj_dir, batch_size):
+        data = load_downproj_data(down_proj_dir, batch_size)
+        ref_output = reference_downproj_dequant(data)
+        gt = data["output_gemm_only"]
+
+        metrics = compute_metrics(ref_output, gt)
+        print_metrics(metrics, prefix=f"[down_proj dequant ref, bs={batch_size}]")
+
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_integer_reference_matches_ground_truth(self, down_proj_dir, batch_size):
+        data = load_downproj_data(down_proj_dir, batch_size)
+        ref_output = reference_downproj_integer(data)
+        gt = data["output_gemm_only"]
+
+        metrics = compute_metrics(ref_output, gt)
+        print_metrics(metrics, prefix=f"[down_proj integer ref, bs={batch_size}]")
+
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_dequant_vs_integer_consistency(self, down_proj_dir, batch_size):
+        data = load_downproj_data(down_proj_dir, batch_size)
+        out_dequant = reference_downproj_dequant(data)
+        out_integer = reference_downproj_integer(data)
+
+        metrics = compute_metrics(out_dequant, out_integer)
+        print_metrics(metrics, prefix=f"[down_proj dequant vs integer, bs={batch_size}]")
+
+        assert metrics["rel_err"] < 1e-3, f"Two refs disagree: rel_err={metrics['rel_err']}"
+
+    def test_quantization_loss(self, down_proj_dir, batch_size):
+        """Measure how much quantization degrades vs FP16 baseline."""
+        data = load_downproj_data(down_proj_dir, batch_size)
+        gt = data["output_gemm_only"]
+        fp_baseline = data["output_fp16_baseline"]
+
+        metrics = compute_metrics(gt, fp_baseline)
+        print_metrics(metrics, prefix=f"[down_proj quant loss, bs={batch_size}]")
+
+
+class TestDownProjKernel:
+    """Test CUDA baseline kernel for down_proj (single U8S8 GEMM)."""
+
+    @pytest.fixture(autouse=True)
+    def _check_kernel_available(self):
+        try:
+            import mixed_gemm  # noqa: F401
+        except ImportError:
+            pytest.skip("mixed_gemm not compiled")
+
+    def test_kernel_matches_ground_truth(self, down_proj_dir, batch_size):
+        """Baseline: INT4→INT8 expand + single U8S8 GEMM + EVT dequant."""
+        import mixed_gemm
+
+        data = load_downproj_data(down_proj_dir, batch_size)
+
+        # Activation: INT16 [0,15] → UINT8, flatten to (M, K)
+        x = data["x_main_qint"].reshape(-1, data["x_main_qint"].shape[-1]).to(torch.uint8).contiguous().cuda()
+
+        # Weight: FP16 storing [-8,7] → INT8
+        w = data["w_main_qint"].to(torch.int8).contiguous().cuda()
+
+        # Per-token scale: (M,) fp16
+        s_x = data["x_main_scale"][:, :, :1].reshape(-1).half().contiguous().cuda()
+
+        # Per-token negated zero: (M,) fp16
+        neg_zero = (-data["x_main_zero"][:, :, :1].reshape(-1)).half().contiguous().cuda()
+
+        # Per-channel weight scale: (N,) fp16
+        s_w = data["w_main_scale"].squeeze().half().contiguous().cuda()
+
+        # Precomputed column sum: (N,) float32
+        colsum = data["colsum_w_main"].float().contiguous().cuda()
+
+        # Single GEMM (U8S8 works for both U4→U8 and native U8)
+        output = mixed_gemm.gemm_u8s8_dequant(x, w, s_x, s_w, neg_zero, colsum)
+
+        gt = data["output_gemm_only"].reshape(-1, data["output_gemm_only"].shape[-1]).cuda()
+        metrics = compute_metrics(output, gt)
+        print_metrics(metrics, prefix=f"[down_proj kernel vs GT, bs={batch_size}]")
+
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
+
+    def test_kernel_performance(self, down_proj_dir):
+        """Benchmark down_proj: single U8S8 GEMM (K=8192)."""
+        import mixed_gemm
+
+        data = load_downproj_data(down_proj_dir, batch_size=1)
+
+        x = data["x_main_qint"].reshape(-1, data["x_main_qint"].shape[-1]).to(torch.uint8).contiguous().cuda()
+        w = data["w_main_qint"].to(torch.int8).contiguous().cuda()
+        s_x = data["x_main_scale"][:, :, :1].reshape(-1).half().contiguous().cuda()
+        neg_zero = (-data["x_main_zero"][:, :, :1].reshape(-1)).half().contiguous().cuda()
+        s_w = data["w_main_scale"].squeeze().half().contiguous().cuda()
+        colsum = data["colsum_w_main"].float().contiguous().cuda()
+
+        M, K = x.shape
+        N = w.shape[0]
+
+        h20_peak_tops = 268
+
+        # Warmup
+        for _ in range(10):
+            mixed_gemm.gemm_u8s8_dequant(x, w, s_x, s_w, neg_zero, colsum)
+        torch.cuda.synchronize()
+
+        # Benchmark
+        iters = 100
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(iters):
+            mixed_gemm.gemm_u8s8_dequant(x, w, s_x, s_w, neg_zero, colsum)
+        end.record()
+        torch.cuda.synchronize()
+        ms = start.elapsed_time(end) / iters
+
+        flops = 2 * M * N * K
+        tops = flops / ms / 1e9
+
+        print(f"\n  [down_proj perf] M={M}, N={N}, K={K}")
+        print(f"    Latency: {ms*1000:.1f} μs, {tops:.1f} TOPS ({tops/h20_peak_tops*100:.1f}% peak)")
+
+        assert tops > h20_peak_tops * 0.4, f"down_proj GEMM too slow: {tops:.1f} TOPS"
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
