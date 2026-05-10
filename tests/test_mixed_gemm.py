@@ -48,6 +48,11 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
     w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
 
+    # GEMM-only output (before output quantization) — use as GT for kernel verification
+    # Falls back to output_real_quant if not available
+    gemm_only_path = d / f"output_gemm_only_bs{bs}.pt"
+    output_gemm_only = torch.load(gemm_only_path, map_location="cpu", weights_only=False) if gemm_only_path.exists() else output_rq
+
     # Precomputed colsum: compute on-the-fly if not saved
     colsum_main_path = d / "colsum_w_main.pt"
     colsum_high_path = d / "colsum_w_high.pt"
@@ -91,6 +96,7 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
         "colsum_w_high": colsum_w_h,             # (N,) int32
         # Ground truth
         "output_real_quant": _assert_fp16(output_rq, "output_real_quant"),
+        "output_gemm_only": _assert_fp16(output_gemm_only, "output_gemm_only"),
         "output_fp16_baseline": _assert_fp16(output_fp, "output_fp16_baseline"),
         "input_fp16": _assert_fp16(input_fp, "input_fp16"),
     }
@@ -334,38 +340,27 @@ class TestPerTokenReference:
         op_dir, op_name = per_token_op_dir
         data = load_operator_data(op_dir, batch_size)
         ref_output = reference_mixed_gemm_dequant(data)
-        gt_output = data["output_real_quant"]
+        gt_output = data["output_gemm_only"]  # GEMM output before output quantization
 
         metrics = compute_metrics(ref_output, gt_output)
         print_metrics(metrics, prefix=f"[{op_name} dequant ref, bs={batch_size}]")
 
-        # v_proj has out_quantizer=4-bit (V cache quantization) which adds extra noise
-        meta = load_metadata(op_dir)
-        has_output_quant = meta.get("out_quantizer_bits", 16) < 16
-        snr_threshold = 20 if has_output_quant else 60
-        cosine_threshold = 0.99 if has_output_quant else 0.9999
-
         assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
-        assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
-        assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_integer_reference_matches_ground_truth(self, per_token_op_dir, batch_size):
         op_dir, op_name = per_token_op_dir
         data = load_operator_data(op_dir, batch_size)
         ref_output = reference_mixed_gemm_integer(data)
-        gt_output = data["output_real_quant"]
+        gt_output = data["output_gemm_only"]
 
         metrics = compute_metrics(ref_output, gt_output)
         print_metrics(metrics, prefix=f"[{op_name} integer ref, bs={batch_size}]")
 
-        meta = load_metadata(op_dir)
-        has_output_quant = meta.get("out_quantizer_bits", 16) < 16
-        snr_threshold = 20 if has_output_quant else 60
-        cosine_threshold = 0.99 if has_output_quant else 0.9999
-
         assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
-        assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
-        assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_dequant_vs_integer_consistency(self, per_token_op_dir, batch_size):
         op_dir, op_name = per_token_op_dir
@@ -744,7 +739,8 @@ def prepare_kernel_inputs(data: dict):
     colsum_h = data["colsum_w_high"].float().contiguous().cuda()
 
     # Ground truth
-    gt = data["output_real_quant"].reshape(-1, data["output_real_quant"].shape[-1]).cuda()
+    # Ground truth: use GEMM-only output (before output quantization)
+    gt = data["output_gemm_only"].reshape(-1, data["output_gemm_only"].shape[-1]).cuda()
 
     return {
         "x_main": x_main, "x_high": x_high,
@@ -794,14 +790,9 @@ class TestPerTokenKernel:
         metrics = compute_metrics(kernel_output, inputs["gt"])
         print_metrics(metrics, prefix=f"[{op_name} kernel vs GT, bs={batch_size}]")
 
-        meta = load_metadata(op_dir)
-        has_output_quant = meta.get("out_quantizer_bits", 16) < 16
-        snr_threshold = 20 if has_output_quant else 60
-        cosine_threshold = 0.99 if has_output_quant else 0.9999
-
         assert metrics["rel_err"] < 0.05, f"rel_err too high: {metrics['rel_err']}"
-        assert metrics["cosine_sim"] > cosine_threshold, f"cosine_sim too low: {metrics['cosine_sim']}"
-        assert metrics["snr_db"] > snr_threshold, f"SNR too low: {metrics['snr_db']} dB"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine_sim too low: {metrics['cosine_sim']}"
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
 
     def test_kernel_performance(self, per_token_op_dir):
         """Benchmark: measure each kernel's latency, TOPS, and bandwidth separately."""
