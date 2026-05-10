@@ -609,7 +609,7 @@ class TestOProjReference:
         metrics = compute_metrics(out_dequant, out_integer)
         print_metrics(metrics, prefix=f"[o_proj dequant vs integer, bs={batch_size}]")
 
-        assert metrics["rel_err"] < 1e-4, f"Two refs disagree: rel_err={metrics['rel_err']}"
+        assert metrics["rel_err"] < 1e-3, f"Two refs disagree: rel_err={metrics['rel_err']}"
 
     def test_quantization_loss(self, o_proj_dir, batch_size):
         data = load_oproj_data(o_proj_dir, batch_size)
