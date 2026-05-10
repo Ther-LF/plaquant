@@ -48,25 +48,15 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
     input_fp = torch.load(d / f"input_fp16_bs{bs}.pt", map_location="cpu", weights_only=False)
     w_fp16 = torch.load(d / "weight_fp16.pt", map_location="cpu", weights_only=False)
 
-    # GEMM-only output (before output quantization) — use as GT for kernel verification
-    # For layers without output quantization, output_real_quant == gemm_only output
-    # For v_proj (has 4-bit output quant), compute from act_quant + weight (proven inf dB match)
+    # GEMM-only output (before output quantization) — the true GT for kernel verification
+    # For layers without output quant, this equals output_real_quant
+    # For v_proj (has 4-bit output quant), this is the GEMM result before out_quantizer
     gemm_only_path = d / f"output_gemm_only_bs{bs}.pt"
     if gemm_only_path.exists():
         output_gemm_only = torch.load(gemm_only_path, map_location="cpu", weights_only=False)
     else:
-        # Check if this layer has output quantization
-        meta_path = d / "metadata.json"
-        if meta_path.exists():
-            with open(meta_path) as f:
-                _meta = json.load(f)
-            if _meta.get("out_quantizer_bits", 16) < 16:
-                # Has output quant: compute GEMM-only from act_quant + weight (reference formula)
-                output_gemm_only = None  # will be computed by reference function when needed
-            else:
-                output_gemm_only = output_rq
-        else:
-            output_gemm_only = output_rq
+        # Fallback: for layers without output quant, output_real_quant == gemm_only
+        output_gemm_only = output_rq
 
     # Precomputed colsum: compute on-the-fly if not saved
     colsum_main_path = d / "colsum_w_main.pt"
@@ -111,7 +101,7 @@ def load_operator_data(data_dir: str, batch_size: int = 1):
         "colsum_w_high": colsum_w_h,             # (N,) int32
         # Ground truth
         "output_real_quant": _assert_fp16(output_rq, "output_real_quant"),
-        "output_gemm_only": _assert_fp16(output_gemm_only, "output_gemm_only") if output_gemm_only is not None else None,
+        "output_gemm_only": _assert_fp16(output_gemm_only, "output_gemm_only"),
         "output_fp16_baseline": _assert_fp16(output_fp, "output_fp16_baseline"),
         "input_fp16": _assert_fp16(input_fp, "input_fp16"),
     }
@@ -355,11 +345,7 @@ class TestPerTokenReference:
         op_dir, op_name = per_token_op_dir
         data = load_operator_data(op_dir, batch_size)
         ref_output = reference_mixed_gemm_dequant(data)
-
-        # Use GEMM-only GT; if None (v_proj without file), use reference as self-consistency check
         gt_output = data["output_gemm_only"]
-        if gt_output is None:
-            gt_output = reference_mixed_gemm_integer(data)  # proven inf dB match with actual GEMM
 
         metrics = compute_metrics(ref_output, gt_output)
         print_metrics(metrics, prefix=f"[{op_name} dequant ref, bs={batch_size}]")
@@ -372,10 +358,7 @@ class TestPerTokenReference:
         op_dir, op_name = per_token_op_dir
         data = load_operator_data(op_dir, batch_size)
         ref_output = reference_mixed_gemm_integer(data)
-
         gt_output = data["output_gemm_only"]
-        if gt_output is None:
-            gt_output = reference_mixed_gemm_dequant(data)
 
         metrics = compute_metrics(ref_output, gt_output)
         print_metrics(metrics, prefix=f"[{op_name} integer ref, bs={batch_size}]")
@@ -762,8 +745,7 @@ def prepare_kernel_inputs(data: dict):
 
     # Ground truth
     # Ground truth: use GEMM-only output (before output quantization)
-    gt_data = data["output_gemm_only"] if data["output_gemm_only"] is not None else data["output_real_quant"]
-    gt = gt_data.reshape(-1, gt_data.shape[-1]).cuda()
+    gt = data["output_gemm_only"].reshape(-1, data["output_gemm_only"].shape[-1]).cuda()
 
     return {
         "x_main": x_main, "x_high": x_high,
