@@ -179,15 +179,15 @@ __global__ void fused_dequant_combine_kernel(
     int m = idx / N;
     int n = idx % N;
 
-    // Load scales (broadcast)
-    float sx_m = __half2float(s_x_m[m]);
-    float sw_m = __half2float(s_w_m[n]);
-    float nz_m = __half2float(neg_zero_m[m]);
+    // Load scales (broadcast) — use float() conversion for cutlass::half_t
+    float sx_m = float(s_x_m[m]);
+    float sw_m = float(s_w_m[n]);
+    float nz_m = float(neg_zero_m[m]);
     float cs_m = colsum_m[n];
 
-    float sx_h = __half2float(s_x_h[m]);
-    float sw_h = __half2float(s_w_h[n]);
-    float nz_h = __half2float(neg_zero_h[m]);
+    float sx_h = float(s_x_h[m]);
+    float sw_h = float(s_w_h[n]);
+    float nz_h = float(neg_zero_h[m]);
     float cs_h = colsum_h[n];
 
     // Load raw GEMM outputs (FP32, representing INT32 accumulator values)
@@ -198,7 +198,7 @@ __global__ void fused_dequant_combine_kernel(
     float out_main = sx_m * sw_m * (y_main + nz_m * cs_m);
     float out_high = sx_h * sw_h * (y_high + nz_h * cs_h);
 
-    D[idx] = __float2half(out_main + out_high);
+    D[idx] = cutlass::half_t(out_main + out_high);
 }
 
 // =============================================================================
