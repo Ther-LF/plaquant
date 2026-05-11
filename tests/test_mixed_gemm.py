@@ -891,6 +891,121 @@ class TestPerTokenKernel:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Fused kernel (single launch: 2-phase GEMM + in-register dequant)
+# ---------------------------------------------------------------------------
+
+def run_fused_kernel(inputs: dict):
+    """Run fused kernel: single launch doing both GEMMs + combine."""
+    import mixed_gemm
+
+    return mixed_gemm.fused_mixed_gemm(
+        inputs["x_main"], inputs["w_main"],
+        inputs["x_high"], inputs["w_high"],
+        inputs["s_x_m"], inputs["s_w_m"],
+        inputs["neg_zero_m"], inputs["colsum_m"],
+        inputs["s_x_h"], inputs["s_w_h"],
+        inputs["neg_zero_h"], inputs["colsum_h"])
+
+
+class TestFusedKernel:
+    """Test fused dual-phase GEMM kernel (single launch vs baseline 3-launch)."""
+
+    @pytest.fixture(autouse=True)
+    def _check_kernel_available(self):
+        try:
+            import mixed_gemm
+            assert hasattr(mixed_gemm, 'fused_mixed_gemm')
+        except (ImportError, AssertionError):
+            pytest.skip("mixed_gemm.fused_mixed_gemm not available")
+
+    def test_fused_matches_baseline(self, per_token_op_dir, batch_size):
+        """Fused kernel output should match baseline (2 GEMM + add)."""
+        op_dir, op_name = per_token_op_dir
+        data = load_operator_data(op_dir, batch_size)
+        inputs = prepare_kernel_inputs(data)
+
+        baseline_output = run_baseline_kernel(inputs)
+        fused_output = run_fused_kernel(inputs)
+
+        metrics = compute_metrics(fused_output, baseline_output)
+        print_metrics(metrics, prefix=f"[{op_name} fused vs baseline, bs={batch_size}]")
+
+        # Should be near bit-exact (only FP32 rounding differences)
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine too low: {metrics['cosine_sim']}"
+
+    def test_fused_matches_ground_truth(self, per_token_op_dir, batch_size):
+        """Fused kernel output should match ground truth."""
+        op_dir, op_name = per_token_op_dir
+        data = load_operator_data(op_dir, batch_size)
+        inputs = prepare_kernel_inputs(data)
+
+        fused_output = run_fused_kernel(inputs)
+
+        metrics = compute_metrics(fused_output, inputs["gt"])
+        print_metrics(metrics, prefix=f"[{op_name} fused vs GT, bs={batch_size}]")
+
+        assert metrics["snr_db"] > 60, f"SNR too low: {metrics['snr_db']} dB"
+        assert metrics["cosine_sim"] > 0.9999, f"cosine too low: {metrics['cosine_sim']}"
+
+    def test_fused_vs_baseline_performance(self, per_token_op_dir):
+        """Benchmark: fused single-launch vs baseline 3-launch."""
+        import mixed_gemm
+
+        op_dir, op_name = per_token_op_dir
+        data = load_operator_data(op_dir, batch_size=1)
+        inputs = prepare_kernel_inputs(data)
+
+        M = inputs["x_main"].shape[0]
+        N = inputs["w_main"].shape[0]
+        K_main = inputs["x_main"].shape[1]
+        K_high = inputs["x_high"].shape[1]
+
+        iters = 100
+
+        # --- Baseline: 2 GEMMs + add (3 launches) ---
+        for _ in range(10):
+            run_baseline_kernel(inputs)
+        torch.cuda.synchronize()
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(iters):
+            run_baseline_kernel(inputs)
+        end.record()
+        torch.cuda.synchronize()
+        ms_baseline = start.elapsed_time(end) / iters
+
+        # --- Fused: single launch ---
+        for _ in range(10):
+            run_fused_kernel(inputs)
+        torch.cuda.synchronize()
+
+        start.record()
+        for _ in range(iters):
+            run_fused_kernel(inputs)
+        end.record()
+        torch.cuda.synchronize()
+        ms_fused = start.elapsed_time(end) / iters
+
+        # --- Report ---
+        speedup = ms_baseline / ms_fused
+        flops_total = 2 * M * N * (K_main + K_high)
+        tops_baseline = flops_total / ms_baseline / 1e9
+        tops_fused = flops_total / ms_fused / 1e9
+        h20_peak_tops = 268
+
+        print(f"\n  [{op_name} fused vs baseline perf] M={M}, N={N}, K_main={K_main}, K_high={K_high}")
+        print(f"    {'Method':<20} {'Latency':>10} {'TOPS':>8} {'Peak%':>8}")
+        print(f"    {'-'*50}")
+        print(f"    {'Baseline (3 launch)':<20} {ms_baseline*1000:>7.1f} μs {tops_baseline:>6.1f}  {tops_baseline/h20_peak_tops*100:>5.1f}%")
+        print(f"    {'Fused (1 launch)':<20} {ms_fused*1000:>7.1f} μs {tops_fused:>6.1f}  {tops_fused/h20_peak_tops*100:>5.1f}%")
+        print(f"    {'-'*50}")
+        print(f"    Speedup: {speedup:.2f}x")
+
+
+# ---------------------------------------------------------------------------
 # Tests: down_proj (pure INT4, no high channel, single GEMM)
 # ---------------------------------------------------------------------------
 
