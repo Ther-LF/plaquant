@@ -230,7 +230,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                 acc_main,
                 k_tile_count_main,
                 warp_group_thread_idx,
-                shared_storage.tensors,
+                shared_storage.tensors.mainloop,
                 params.mainloop_main);
             collective_mainloop.mma_tail(mainloop_pipeline, pipe_consumer_state, k_tile_count_main);
         }
@@ -285,7 +285,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                 acc_high,
                 k_tile_count_high,
                 warp_group_thread_idx,
-                shared_storage.tensors,
+                shared_storage.tensors.mainloop,
                 params.mainloop_high);
             collective_mainloop.mma_tail(mainloop_pipeline2, pipe_consumer_state2, k_tile_count_high);
         }
