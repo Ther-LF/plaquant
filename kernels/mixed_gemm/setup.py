@@ -19,7 +19,7 @@ setup(
             extra_compile_args={
                 "nvcc": [
                     "-gencode", "arch=compute_90a,code=sm_90a",
-                    "-O3",
+                    "-O3", "-DNDEBUG",
                     "--use_fast_math",
                     "-std=c++17",
                     "-DCUTLASS_ARCH_MMA_SM90_SUPPORTED=1",
