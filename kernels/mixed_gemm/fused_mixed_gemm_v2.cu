@@ -209,8 +209,10 @@ fused_gemm_kernel_v2(__grid_constant__ FusedV2Params const params) {
         auto pipe_consumer_release = pipe_consumer_state;
 
         if (warp_group_role == WarpGroupRole::Producer) {
-            // Producer: TMA load loop (single elected lane)
-            if (lane_predicate) {
+            // Only warp 0 of producer group (the "mainloop" warp) does TMA loads.
+            // Warps 1-3 are idle. lane_predicate selects the single elected lane.
+            int warp_in_group = (thread_idx / 32) % 4;
+            if (warp_in_group == 0 && lane_predicate) {
                 CUTLASS_PRAGMA_NO_UNROLL
                 for (int k = 0; k < k_tile_count_main; ++k) {
                     pipeline.producer_acquire(pipe_producer_state);
@@ -304,7 +306,8 @@ fused_gemm_kernel_v2(__grid_constant__ FusedV2Params const params) {
         auto pipe_consumer_release2 = pipe_consumer_state2;
 
         if (warp_group_role == WarpGroupRole::Producer) {
-            if (lane_predicate) {
+            int warp_in_group = (thread_idx / 32) % 4;
+            if (warp_in_group == 0 && lane_predicate) {
                 CUTLASS_PRAGMA_NO_UNROLL
                 for (int k = 0; k < k_tile_count_high; ++k) {
                     pipeline2.producer_acquire(pipe_producer_state2);
