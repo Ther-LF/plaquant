@@ -204,11 +204,13 @@ fused_gemm_kernel(FusedKernelParams params) {
     __syncthreads();
 
     // ==================================================================
-    // PHASE 1: Main GEMM
+    // PHASE 1: Main GEMM (SKIP MAINLOOP — just test epilogue path)
     // ==================================================================
     auto acc_main = partition_fragment_C(tiled_mma, take<0,2>(TileShape_MNK{}));
     clear(acc_main);
 
+    // SKIP load/mma for debugging — go straight to epilogue with zeroed acc
+    #if 0
     {
         auto load_inputs = collective_mainloop.load_init(problem_shape_main, params.mainloop_main);
         auto k_tile_iter = cute::make_coord_iterator(shape<3>(get<0>(load_inputs)));
@@ -248,6 +250,7 @@ fused_gemm_kernel(FusedKernelParams params) {
             collective_mainloop.mma_tail(mainloop_pipeline, pipe_consumer_state, k_tile_count_main);
         }
     }
+    #endif
 
     // Sync between phases: all threads must finish phase 1
     __syncthreads();
