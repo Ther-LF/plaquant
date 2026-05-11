@@ -174,8 +174,20 @@ torch::Tensor fused_mixed_gemm(
     dim3 grid(grid_m, grid_n, 1);
     dim3 block(MaxThreadsPerBlock_, 1, 1);
 
-    // No dynamic smem needed for this debug version
-    fused_gemm_kernel<<<grid, block, 0, stream>>>(kernel_params);
+    // Dynamic smem test: request full FusedSmemSize
+    int smem_size = static_cast<int>(sizeof(typename CollectiveMainloop::TensorStorage))
+                  + static_cast<int>(sizeof(typename CollectiveMainloop::MainloopPipeline::SharedStorage));
+    printf("[host] smem_size = %d bytes (%.1f KB)\n", smem_size, smem_size / 1024.0);
+
+    auto err = cudaFuncSetAttribute(fused_gemm_kernel,
+        cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+    if (err != cudaSuccess) {
+        printf("[host] cudaFuncSetAttribute FAILED: %s\n", cudaGetErrorString(err));
+        // Try with 0 smem
+        smem_size = 0;
+    }
+
+    fused_gemm_kernel<<<grid, block, smem_size, stream>>>(kernel_params);
 
     auto err = cudaGetLastError();
     TORCH_CHECK(err == cudaSuccess, "fused_gemm_kernel launch failed: ", cudaGetErrorString(err));
