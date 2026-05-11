@@ -143,6 +143,12 @@ fused_gemm_kernel(FusedKernelParams params) {
 
 #if defined(__CUDA_ARCH_FEAT_SM90_ALL)
 
+    // DEBUG: confirm kernel enters
+    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+        printf("fused_gemm_kernel: entered, smem=%p, M=%d N=%d K_main=%d K_high=%d\\n",
+               smem_buf, params.M, params.N, params.K_main, params.K_high);
+    }
+
     // ---- Warp role setup (same as CUTLASS GemmKernel) ----
     enum class WarpGroupRole { Producer = 0, Consumer = 1 };
     enum class ProducerWarpRole { Mainloop = 0, Warp1 = 1, Warp2 = 2, Warp3 = 3 };
@@ -194,7 +200,7 @@ fused_gemm_kernel(FusedKernelParams params) {
     int k_tile_count_main = cute::ceil_div(params.K_main, get<2>(TileShape_MNK{}));
     int k_tile_count_high = cute::ceil_div(params.K_high, get<2>(TileShape_MNK{}));
 
-    // Ensure cluster sync before mainloop
+    // Barrier: ensure pipeline init is visible to all threads before mainloop
     __syncthreads();
 
     // ==================================================================
