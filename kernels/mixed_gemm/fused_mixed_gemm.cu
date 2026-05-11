@@ -216,8 +216,11 @@ fused_gemm_kernel(FusedKernelParams params) {
         auto pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
         PipelineState_ pipe_consumer_state;
 
+        if (threadIdx.x == 0 && blockIdx.x == 0) printf("Phase1: before dispatch, k_tiles=%d\n", k_tile_count_main);
+
         if (warp_group_role == WarpGroupRole::Producer) {
             if (producer_warp_role == ProducerWarpRole::Mainloop) {
+                if (threadIdx.x == 0) printf("Phase1: starting load\n");
                 collective_mainloop.load(
                     params.mainloop_main,
                     mainloop_pipeline,
@@ -233,6 +236,7 @@ fused_gemm_kernel(FusedKernelParams params) {
             }
         }
         else if (warp_group_role == WarpGroupRole::Consumer) {
+            if (threadIdx.x == 128) printf("Phase1: starting mma\n");
             collective_mainloop.mma(
                 mainloop_pipeline,
                 pipe_consumer_state,
