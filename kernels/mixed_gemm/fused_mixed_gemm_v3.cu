@@ -105,67 +105,7 @@ struct FusedV3Params {
 // Returns via the accumulator reference.
 // =============================================================================
 
-// Inlined producer load loop — only executed by producer warp 0's elected lane
-#define INLINE_PRODUCER_LOAD(pipeline_ref, state_ref, tma_a, tma_b, tAgA_ref, tAsA_ref, tBgB_ref, tBsB_ref, k_count) \
-    do { \
-        CUTLASS_PRAGMA_NO_UNROLL \
-        for (int _k = 0; _k < (k_count); ++_k) { \
-            (pipeline_ref).producer_acquire(state_ref); \
-            auto* _barrier = (pipeline_ref).producer_get_barrier(state_ref); \
-            int _ws = (state_ref).index(); \
-            copy((tma_a).with(*_barrier, 0), (tAgA_ref)(_,_,_,_k), (tAsA_ref)(_,_,_,_ws)); \
-            copy((tma_b).with(*_barrier, 0), (tBgB_ref)(_,_,_,_k), (tBsB_ref)(_,_,_,_ws)); \
-            ++(state_ref); \
-        } \
-        (pipeline_ref).producer_tail(state_ref); \
-    } while(0)
-
-// Inlined consumer MMA loop
-#define INLINE_CONSUMER_MMA(pipeline_ref, read_state_ref, release_state_ref, tCrA_ref, tCrB_ref, acc_ref, k_count, tiled_mma_ref) \
-    do { \
-        /* Prologue: first tile */ \
-        (tiled_mma_ref).accumulate_ = GMMA::ScaleOut::Zero; \
-        warpgroup_fence_operand(acc_ref); \
-        { \
-            auto _bt = (pipeline_ref).consumer_try_wait(read_state_ref); \
-            (pipeline_ref).consumer_wait(read_state_ref, _bt); \
-            int _rs = (read_state_ref).index(); \
-            warpgroup_arrive(); \
-            CUTLASS_PRAGMA_UNROLL \
-            for (int _kb = 0; _kb < size<2>(tCrA_ref); ++_kb) { \
-                cute::gemm((tiled_mma_ref), (tCrA_ref)(_,_,_kb,_rs), (tCrB_ref)(_,_,_kb,_rs), acc_ref); \
-                (tiled_mma_ref).accumulate_ = GMMA::ScaleOut::One; \
-            } \
-            warpgroup_commit_batch(); \
-            ++(read_state_ref); \
-        } \
-        (tiled_mma_ref).accumulate_ = GMMA::ScaleOut::One; \
-        warpgroup_fence_operand(acc_ref); \
-        /* Mainloop: remaining tiles */ \
-        { \
-            int _rem = (k_count) - 1; \
-            CUTLASS_PRAGMA_NO_UNROLL \
-            for (; _rem > 0; --_rem) { \
-                auto _bt = (pipeline_ref).consumer_try_wait(read_state_ref); \
-                (pipeline_ref).consumer_wait(read_state_ref, _bt); \
-                int _rs = (read_state_ref).index(); \
-                warpgroup_fence_operand(acc_ref); \
-                warpgroup_arrive(); \
-                cute::gemm((tiled_mma_ref), (tCrA_ref)(_,_,_,_rs), (tCrB_ref)(_,_,_,_rs), acc_ref); \
-                warpgroup_commit_batch(); \
-                warpgroup_wait<K_PIPE_MMAS>(); \
-                warpgroup_fence_operand(acc_ref); \
-                (pipeline_ref).consumer_release(release_state_ref); \
-                ++(read_state_ref); \
-                ++(release_state_ref); \
-            } \
-        } \
-        /* mma_tail */ \
-        warpgroup_fence_operand(acc_ref); \
-        warpgroup_wait<0>(); \
-        (pipeline_ref).consumer_release(release_state_ref); \
-        ++(release_state_ref); \
-    } while(0)
+// (Macros removed — producer/consumer loops are inlined directly in the kernel body)
 
 // =============================================================================
 // v3 Kernel
@@ -265,14 +205,58 @@ fused_gemm_kernel_v3(__grid_constant__ FusedV3Params const params) {
 
         if (warp_group_role == WarpGroupRole::Producer) {
             if (warp_in_group == 0 && lane_predicate) {
-                INLINE_PRODUCER_LOAD(pipeline, pipe_prod,
-                    params.mainloop_main.tma_load_a, params.mainloop_main.tma_load_b,
-                    tAgA, tAsA, tBgB, tBsB, k_tile_count_main);
+                CUTLASS_PRAGMA_NO_UNROLL
+                for (int k = 0; k < k_tile_count_main; ++k) {
+                    pipeline.producer_acquire(pipe_prod);
+                    auto* barrier = pipeline.producer_get_barrier(pipe_prod);
+                    int ws = pipe_prod.index();
+                    copy(params.mainloop_main.tma_load_a.with(*barrier, 0), tAgA(_,_,_,k), tAsA(_,_,_,ws));
+                    copy(params.mainloop_main.tma_load_b.with(*barrier, 0), tBgB(_,_,_,k), tBsB(_,_,_,ws));
+                    ++pipe_prod;
+                }
+                pipeline.producer_tail(pipe_prod);
             }
         }
-        else { // Consumer
-            INLINE_CONSUMER_MMA(pipeline, pipe_read, pipe_release,
-                tCrA, tCrB, acc, k_tile_count_main, tiled_mma);
+        else { // Consumer — Phase 1 MMA
+            tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
+            warpgroup_fence_operand(acc);
+            {
+                auto bt = pipeline.consumer_try_wait(pipe_read);
+                pipeline.consumer_wait(pipe_read, bt);
+                int rs = pipe_read.index();
+                warpgroup_arrive();
+                CUTLASS_PRAGMA_UNROLL
+                for (int kb = 0; kb < size<2>(tCrA); ++kb) {
+                    cute::gemm(tiled_mma, tCrA(_,_,kb,rs), tCrB(_,_,kb,rs), acc);
+                    tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+                }
+                warpgroup_commit_batch();
+                ++pipe_read;
+            }
+            tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+            warpgroup_fence_operand(acc);
+            {
+                int rem = k_tile_count_main - 1;
+                CUTLASS_PRAGMA_NO_UNROLL
+                for (; rem > 0; --rem) {
+                    auto bt = pipeline.consumer_try_wait(pipe_read);
+                    pipeline.consumer_wait(pipe_read, bt);
+                    int rs = pipe_read.index();
+                    warpgroup_fence_operand(acc);
+                    warpgroup_arrive();
+                    cute::gemm(tiled_mma, tCrA(_,_,_,rs), tCrB(_,_,_,rs), acc);
+                    warpgroup_commit_batch();
+                    warpgroup_wait<K_PIPE_MMAS>();
+                    warpgroup_fence_operand(acc);
+                    pipeline.consumer_release(pipe_release);
+                    ++pipe_read;
+                    ++pipe_release;
+                }
+            }
+            warpgroup_fence_operand(acc);
+            warpgroup_wait<0>();
+            pipeline.consumer_release(pipe_release);
+            ++pipe_release;
 
             // Dequant main and store to workspace
             CUTLASS_PRAGMA_UNROLL
@@ -322,14 +306,58 @@ fused_gemm_kernel_v3(__grid_constant__ FusedV3Params const params) {
 
         if (warp_group_role == WarpGroupRole::Producer) {
             if (warp_in_group == 0 && lane_predicate) {
-                INLINE_PRODUCER_LOAD(pipeline2, pipe_prod2,
-                    params.mainloop_high.tma_load_a, params.mainloop_high.tma_load_b,
-                    tAgA_h, tAsA_h, tBgB_h, tBsB_h, k_tile_count_high);
+                CUTLASS_PRAGMA_NO_UNROLL
+                for (int k = 0; k < k_tile_count_high; ++k) {
+                    pipeline2.producer_acquire(pipe_prod2);
+                    auto* barrier = pipeline2.producer_get_barrier(pipe_prod2);
+                    int ws = pipe_prod2.index();
+                    copy(params.mainloop_high.tma_load_a.with(*barrier, 0), tAgA_h(_,_,_,k), tAsA_h(_,_,_,ws));
+                    copy(params.mainloop_high.tma_load_b.with(*barrier, 0), tBgB_h(_,_,_,k), tBsB_h(_,_,_,ws));
+                    ++pipe_prod2;
+                }
+                pipeline2.producer_tail(pipe_prod2);
             }
         }
-        else { // Consumer
-            INLINE_CONSUMER_MMA(pipeline2, pipe_read2, pipe_release2,
-                tCrA, tCrB, acc, k_tile_count_high, tiled_mma);
+        else { // Consumer — Phase 2 MMA
+            tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
+            warpgroup_fence_operand(acc);
+            {
+                auto bt = pipeline2.consumer_try_wait(pipe_read2);
+                pipeline2.consumer_wait(pipe_read2, bt);
+                int rs = pipe_read2.index();
+                warpgroup_arrive();
+                CUTLASS_PRAGMA_UNROLL
+                for (int kb = 0; kb < size<2>(tCrA); ++kb) {
+                    cute::gemm(tiled_mma, tCrA(_,_,kb,rs), tCrB(_,_,kb,rs), acc);
+                    tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+                }
+                warpgroup_commit_batch();
+                ++pipe_read2;
+            }
+            tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+            warpgroup_fence_operand(acc);
+            {
+                int rem = k_tile_count_high - 1;
+                CUTLASS_PRAGMA_NO_UNROLL
+                for (; rem > 0; --rem) {
+                    auto bt = pipeline2.consumer_try_wait(pipe_read2);
+                    pipeline2.consumer_wait(pipe_read2, bt);
+                    int rs = pipe_read2.index();
+                    warpgroup_fence_operand(acc);
+                    warpgroup_arrive();
+                    cute::gemm(tiled_mma, tCrA(_,_,_,rs), tCrB(_,_,_,rs), acc);
+                    warpgroup_commit_batch();
+                    warpgroup_wait<K_PIPE_MMAS>();
+                    warpgroup_fence_operand(acc);
+                    pipeline2.consumer_release(pipe_release2);
+                    ++pipe_read2;
+                    ++pipe_release2;
+                }
+            }
+            warpgroup_fence_operand(acc);
+            warpgroup_wait<0>();
+            pipeline2.consumer_release(pipe_release2);
+            ++pipe_release2;
 
             // Dequant high + load workspace (Phase 1 result) + combine + store final
             CUTLASS_PRAGMA_UNROLL
