@@ -226,7 +226,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                     blk_coord,
                     k_tile_iter, k_tile_count_main,
                     thread_idx % 32,
-                    cute::block_rank_in_cluster(),
+                    0,  // block_rank_in_cluster (always 0 for ClusterShape 1,1,1)
                     shared_storage.tensors);
                 pipe_producer_state.advance(k_tile_count_main);
                 collective_mainloop.load_tail(mainloop_pipeline, pipe_producer_state);
@@ -283,7 +283,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                     blk_coord,
                     k_tile_iter_h, k_tile_count_high,
                     thread_idx % 32,
-                    cute::block_rank_in_cluster(),
+                    0,  // block_rank_in_cluster (always 0 for ClusterShape 1,1,1)
                     shared_storage.tensors);
                 pipe_producer_state2.advance(k_tile_count_high);
                 collective_mainloop.load_tail(mainloop_pipeline2, pipe_producer_state2);
