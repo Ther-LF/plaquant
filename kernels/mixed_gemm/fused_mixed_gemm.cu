@@ -151,6 +151,9 @@ fused_gemm_kernel(FusedKernelParams params) {
 
     // DEBUG: test just pipeline init + epilogue store (no load/mma)
 
+    // SKIP pipeline construction for debugging
+    #if 0
+
     // ---- Warp role setup (same as CUTLASS GemmKernel) ----
     enum class WarpGroupRole { Producer = 0, Consumer = 1 };
     enum class ProducerWarpRole { Mainloop = 0, Warp1 = 1, Warp2 = 2, Warp3 = 3 };
@@ -166,7 +169,8 @@ fused_gemm_kernel(FusedKernelParams params) {
     extern __shared__ char smem_buf[];
     FusedSharedStorage& shared_storage = *reinterpret_cast<FusedSharedStorage*>(smem_buf);
 
-    // ---- Pipeline setup ----
+    // ---- Pipeline setup ---- (TEMPORARILY DISABLED)
+    #if 0
     typename MainloopPipeline::Params pipeline_params;
     if (warp_group_role == WarpGroupRole::Producer && producer_warp_role == ProducerWarpRole::Mainloop) {
         pipeline_params.role = MainloopPipeline::ThreadCategory::Producer;
@@ -184,6 +188,7 @@ fused_gemm_kernel(FusedKernelParams params) {
     if (thread_idx == 0) {
         CollectiveMainloop::prefetch_tma_descriptors(params.mainloop_main);
     }
+    #endif
 
     // ---- Block coordinates ----
     int m_coord = int(blockIdx.x);
