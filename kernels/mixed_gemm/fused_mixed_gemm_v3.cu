@@ -258,22 +258,55 @@ fused_gemm_kernel_v3(__grid_constant__ FusedV3Params const params) {
             pipeline.consumer_release(pipe_release);
             ++pipe_release;
 
-            // Dequant main and store to workspace
+            // Dequant main into FP16 fragment (consumer threads only have acc)
+            auto acc_fp16 = make_fragment_like<ElementOutput>(acc);
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(acc); ++i) {
                 auto coord = tCcD(i);
                 int m_g = tile_m_start + get<0>(coord);
                 int n_g = tile_n_start + get<1>(coord);
-                if (m_g >= params.M || n_g >= params.N) continue;
+                float result = 0.0f;
+                if (m_g < params.M && n_g < params.N) {
+                    float a = static_cast<float>(acc(i));
+                    float sx = float(params.s_x_m[m_g]);
+                    float sw = float(params.s_w_m[n_g]);
+                    float nz = float(params.neg_zero_m[m_g]);
+                    float cs = params.colsum_m[n_g];
+                    result = sx * sw * (a + nz * cs);
+                }
+                acc_fp16(i) = ElementOutput(result);
+            }
 
-                float a = static_cast<float>(acc(i));
-                float sx = float(params.s_x_m[m_g]);
-                float sw = float(params.s_w_m[n_g]);
-                float nz = float(params.neg_zero_m[m_g]);
-                float cs = params.colsum_m[n_g];
-                float result = sx * sw * (a + nz * cs);
+            // Scatter dequanted results to SMEM (reuse mainloop SMEM as epilogue buffer)
+            auto* smem_epi = reinterpret_cast<ElementOutput*>(smem_buf);
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < size(acc_fp16); ++i) {
+                auto coord = tCcD(i);
+                int m_local = get<0>(coord);
+                int n_local = get<1>(coord);
+                smem_epi[m_local * 128 + n_local] = acc_fp16(i);
+            }
+        }
+    }
 
-                params.workspace[m_g * params.ldd + n_g] = ElementOutput(result);
+    // Block-wide sync: all 256 threads (producer done with load_tail, consumer done with dequant→SMEM)
+    __syncthreads();
+
+    // Coalesced store from SMEM to workspace — ALL 256 threads participate
+    {
+        auto* smem_epi = reinterpret_cast<ElementOutput*>(smem_buf);
+        constexpr int TILE_SIZE = 128 * 128;
+        // 256 threads, each stores TILE_SIZE/256 = 64 elements
+        constexpr int ELEMS_PER_THREAD = TILE_SIZE / 256;
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < ELEMS_PER_THREAD; ++e) {
+            int flat_idx = thread_idx + e * 256;
+            int m_local = flat_idx / 128;
+            int n_local = flat_idx % 128;
+            int m_g = tile_m_start + m_local;
+            int n_g = tile_n_start + n_local;
+            if (m_g < params.M && n_g < params.N) {
+                params.workspace[m_g * params.ldd + n_g] = smem_epi[flat_idx];
             }
         }
     }
@@ -359,38 +392,71 @@ fused_gemm_kernel_v3(__grid_constant__ FusedV3Params const params) {
             pipeline2.consumer_release(pipe_release2);
             ++pipe_release2;
 
-            // Dequant high + load workspace (Phase 1 result) + combine + store final
+            // Dequant high + combine → scatter to SMEM
+            auto* smem_epi2 = reinterpret_cast<ElementOutput*>(smem_buf);
+            auto acc_fp16_2 = make_fragment_like<ElementOutput>(acc);
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(acc); ++i) {
                 auto coord = tCcD(i);
                 int m_g = tile_m_start + get<0>(coord);
                 int n_g = tile_n_start + get<1>(coord);
-                if (m_g >= params.M || n_g >= params.N) continue;
+                float combined = 0.0f;
+                if (m_g < params.M && n_g < params.N) {
+                    float a_h = static_cast<float>(acc(i));
+                    float sx_h = float(params.s_x_h[m_g]);
+                    float sw_h = float(params.s_w_h[n_g]);
+                    float nz_h = float(params.neg_zero_h[m_g]);
+                    float cs_h = params.colsum_h[n_g];
+                    float out_high = sx_h * sw_h * (a_h + nz_h * cs_h);
+                    float out_main = float(params.workspace[m_g * params.ldd + n_g]);
+                    combined = out_main + out_high;
+                }
+                acc_fp16_2(i) = ElementOutput(combined);
+            }
+            // Scatter to SMEM
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < size(acc_fp16_2); ++i) {
+                auto coord = tCcD(i);
+                smem_epi2[get<0>(coord) * 128 + get<1>(coord)] = acc_fp16_2(i);
+            }
+        }
+    }
 
-                float a_h = static_cast<float>(acc(i));
-                float sx_h = float(params.s_x_h[m_g]);
-                float sw_h = float(params.s_w_h[n_g]);
-                float nz_h = float(params.neg_zero_h[m_g]);
-                float cs_h = params.colsum_h[n_g];
-                float out_high = sx_h * sw_h * (a_h + nz_h * cs_h);
+    // Block-wide sync for Phase 2 epilogue
+    __syncthreads();
 
-                // Load Phase 1 result from workspace
-                float out_main = float(params.workspace[m_g * params.ldd + n_g]);
-
-                params.D[m_g * params.ldd + n_g] = ElementOutput(out_main + out_high);
+    // Coalesced store from SMEM to D — all 256 threads
+    if (k_tile_count_high > 0) {
+        auto* smem_epi2 = reinterpret_cast<ElementOutput*>(smem_buf);
+        constexpr int TILE_SIZE = 128 * 128;
+        constexpr int ELEMS_PER_THREAD = TILE_SIZE / 256;
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < ELEMS_PER_THREAD; ++e) {
+            int flat_idx = thread_idx + e * 256;
+            int m_g = tile_m_start + flat_idx / 128;
+            int n_g = tile_n_start + flat_idx % 128;
+            if (m_g < params.M && n_g < params.N) {
+                params.D[m_g * params.ldd + n_g] = smem_epi2[flat_idx];
             }
         }
     }
     else {
-        // No high phase — just copy workspace to output (consumer only)
+        // No high phase — coalesced copy workspace to output
         if (warp_group_role == WarpGroupRole::Consumer) {
+            constexpr int TILE_M = 128;
+            constexpr int TILE_N = 128;
+            constexpr int ELEMS_PER_THREAD = (TILE_M * TILE_N) / 128;
+            int tid = warp_group_thread_idx;
             CUTLASS_PRAGMA_UNROLL
-            for (int i = 0; i < size(acc); ++i) {
-                auto coord = tCcD(i);
-                int m_g = tile_m_start + get<0>(coord);
-                int n_g = tile_n_start + get<1>(coord);
-                if (m_g >= params.M || n_g >= params.N) continue;
-                params.D[m_g * params.ldd + n_g] = params.workspace[m_g * params.ldd + n_g];
+            for (int e = 0; e < ELEMS_PER_THREAD; ++e) {
+                int flat_idx = tid + e * 128;
+                int m_local = flat_idx / TILE_N;
+                int n_local = flat_idx % TILE_N;
+                int m_g = tile_m_start + m_local;
+                int n_g = tile_n_start + n_local;
+                if (m_g < params.M && n_g < params.N) {
+                    params.D[m_g * params.ldd + n_g] = params.workspace[m_g * params.ldd + n_g];
+                }
             }
         }
     }
