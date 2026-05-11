@@ -86,7 +86,7 @@ using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
 // Extract types we need
 using TiledMma = typename CollectiveMainloop::TiledMma;
 using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
-using PipelineState = cutlass::PipelineState<CollectiveMainloop::DispatchPolicy::Stages>;
+using PipelineState_ = cutlass::PipelineState<CollectiveMainloop::DispatchPolicy::Stages>;
 using StrideA = typename GemmKernel::StrideA;
 using StrideB = typename GemmKernel::StrideB;
 
@@ -95,8 +95,8 @@ using KernelSharedStorage = typename GemmKernel::SharedStorage;
 using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
 using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
 
-static constexpr uint32_t NumThreadsPerWarpGroup = cutlass::NumThreadsPerWarpGroup;  // 128
-static constexpr uint32_t MaxThreadsPerBlock = GemmKernel::MaxThreadsPerBlock;        // 256
+static constexpr uint32_t NumThreadsPerWarpGroup_ = cutlass::NumThreadsPerWarpGroup;  // 128
+static constexpr uint32_t MaxThreadsPerBlock_ = GemmKernel::MaxThreadsPerBlock;        // 256
 static constexpr int Stages = CollectiveMainloop::DispatchPolicy::Stages;
 
 // =============================================================================
@@ -129,7 +129,7 @@ struct FusedKernelParams {
 // The fused kernel — mirrors GemmKernel::operator() structure
 // =============================================================================
 
-__global__ void __launch_bounds__(MaxThreadsPerBlock, 1)
+__global__ void __launch_bounds__(MaxThreadsPerBlock_, 1)
 fused_gemm_kernel(FusedKernelParams params) {
     using namespace cute;
     using namespace cutlass;
@@ -142,8 +142,8 @@ fused_gemm_kernel(FusedKernelParams params) {
 
     int thread_idx = int(threadIdx.x);
     int warp_idx_in_warp_group = (thread_idx / 32) % 4;
-    int warp_group_thread_idx = thread_idx % NumThreadsPerWarpGroup;
-    auto warp_group_role = WarpGroupRole(thread_idx / NumThreadsPerWarpGroup);
+    int warp_group_thread_idx = thread_idx % NumThreadsPerWarpGroup_;
+    auto warp_group_role = WarpGroupRole(thread_idx / NumThreadsPerWarpGroup_);
     auto producer_warp_role = ProducerWarpRole(warp_idx_in_warp_group);
     int lane_predicate = cute::elect_one_sync();
 
@@ -167,7 +167,7 @@ fused_gemm_kernel(FusedKernelParams params) {
         pipeline_params.role = MainloopPipeline::ThreadCategory::Consumer;
     }
     pipeline_params.is_leader = warp_group_thread_idx == 0;
-    pipeline_params.num_consumers = NumThreadsPerWarpGroup;
+    pipeline_params.num_consumers = NumThreadsPerWarpGroup_;
     pipeline_params.transaction_bytes = params.mainloop_main.tma_transaction_bytes;
 
     MainloopPipeline mainloop_pipeline(shared_storage.pipeline, pipeline_params, ClusterShape_MNK{});
@@ -208,7 +208,7 @@ fused_gemm_kernel(FusedKernelParams params) {
         auto k_tile_iter = cute::make_coord_iterator(shape<3>(get<0>(load_inputs)));
 
         auto pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
-        PipelineState pipe_consumer_state;
+        PipelineState_ pipe_consumer_state;
 
         if (warp_group_role == WarpGroupRole::Producer) {
             if (producer_warp_role == ProducerWarpRole::Mainloop) {
@@ -264,7 +264,7 @@ fused_gemm_kernel(FusedKernelParams params) {
         auto k_tile_iter_h = cute::make_coord_iterator(shape<3>(get<0>(load_inputs_h)));
 
         auto pipe_producer_state2 = cutlass::make_producer_start_state<MainloopPipeline>();
-        PipelineState pipe_consumer_state2;
+        PipelineState_ pipe_consumer_state2;
 
         if (warp_group_role == WarpGroupRole::Producer) {
             if (producer_warp_role == ProducerWarpRole::Mainloop) {
@@ -435,7 +435,7 @@ torch::Tensor fused_mixed_gemm(
     int grid_m = cute::ceil_div(M, get<0>(TileShape_MNK{}));
     int grid_n = cute::ceil_div(N, get<1>(TileShape_MNK{}));
     dim3 grid(grid_m, grid_n, 1);
-    dim3 block(MaxThreadsPerBlock, 1, 1);
+    dim3 block(MaxThreadsPerBlock_, 1, 1);
 
     // Shared memory = MainloopTensorStorage + PipelineStorage
     int smem_size = static_cast<int>(sizeof(MainloopTensorStorage) + sizeof(MainloopPipelineStorage));
