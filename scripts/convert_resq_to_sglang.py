@@ -116,12 +116,22 @@ def convert_resq_checkpoint(
         maxq_high = 2 ** (high_bits - 1) - 1  # 127 for 8-bit
 
         if w_fp16 is not None:
-            # Compute scale from original FP16 weight
-            w_fp16_main = w_fp16[:, :main_len]
-            w_fp16_high = w_fp16[:, main_len:] if high_len > 0 else None
+            # Derive scale from W_fp16 / w_int (GPTQ uses MSE-optimized scale)
+            w_fp16_main = w_fp16[:, :main_len].float()
+            w_main_f = w_main.float()
+            # Per-channel: use ratio at max-abs position per row for stability
+            abs_main = w_main_f.abs()
+            max_idx = abs_main.argmax(dim=1, keepdim=True)
+            s_w_main = (w_fp16_main.gather(1, max_idx) / w_main_f.gather(1, max_idx)).abs()
 
-            s_w_main = w_fp16_main.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / maxq_main
-            s_w_high = w_fp16_high.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / maxq_high if w_fp16_high is not None else None
+            if high_len > 0:
+                w_fp16_high = w_fp16[:, main_len:].float()
+                w_high_f = w_high.float()
+                abs_high = w_high_f.abs()
+                max_idx_h = abs_high.argmax(dim=1, keepdim=True)
+                s_w_high = (w_fp16_high.gather(1, max_idx_h) / w_high_f.gather(1, max_idx_h)).abs()
+            else:
+                s_w_high = None
         else:
             # Fallback: derive from int range (less accurate)
             s_w_main = w_main.float().abs().amax(dim=1, keepdim=True) / maxq_main
