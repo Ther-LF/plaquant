@@ -189,8 +189,8 @@ torch::Tensor fused_mixed_gemm(
 
     fused_gemm_kernel<<<grid, block, smem_size, stream>>>(kernel_params);
 
-    auto err = cudaGetLastError();
-    TORCH_CHECK(err == cudaSuccess, "fused_gemm_kernel launch failed: ", cudaGetErrorString(err));
+    auto launch_err = cudaGetLastError();
+    TORCH_CHECK(launch_err == cudaSuccess, "fused_gemm_kernel launch failed: ", cudaGetErrorString(launch_err));
 
     if (A_main_shape.size() == 3) {
         output = output.reshape({A_main_shape[0], A_main_shape[1], N});
