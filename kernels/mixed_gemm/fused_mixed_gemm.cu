@@ -145,8 +145,8 @@ fused_gemm_kernel(FusedKernelParams params) {
 
     // DEBUG: confirm kernel enters
     if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-        printf("fused_gemm_kernel: entered, smem=%p, M=%d N=%d K_main=%d K_high=%d\\n",
-               smem_buf, params.M, params.N, params.K_main, params.K_high);
+        printf("fused_gemm_kernel: entered, M=%d N=%d K_main=%d K_high=%d\n",
+               params.M, params.N, params.K_main, params.K_high);
     }
 
     // ---- Warp role setup (same as CUTLASS GemmKernel) ----
