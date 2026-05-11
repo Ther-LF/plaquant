@@ -95,6 +95,13 @@ using KernelSharedStorage = typename GemmKernel::SharedStorage;
 using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
 using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
 
+// Shared storage for our fused kernel (just mainloop, no epilogue)
+struct FusedSharedStorage {
+    MainloopTensorStorage tensors;
+    alignas(16) MainloopPipelineStorage pipeline;
+};
+static constexpr int FusedSmemSize = sizeof(FusedSharedStorage);
+
 static constexpr uint32_t NumThreadsPerWarpGroup_ = cutlass::NumThreadsPerWarpGroup;  // 128
 static constexpr uint32_t MaxThreadsPerBlock_ = GemmKernel::MaxThreadsPerBlock;        // 256
 static constexpr int Stages = CollectiveMainloop::DispatchPolicy::Stages;
@@ -149,10 +156,7 @@ fused_gemm_kernel(FusedKernelParams params) {
 
     // ---- Shared memory ----
     extern __shared__ char smem_buf[];
-
-    // Use the EXACT SharedStorage type from GemmKernel (proven correct)
-    using SharedStorage = typename GemmKernel::SharedStorage;
-    SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
+    FusedSharedStorage& shared_storage = *reinterpret_cast<FusedSharedStorage*>(smem_buf);
 
     // ---- Pipeline setup ----
     typename MainloopPipeline::Params pipeline_params;
@@ -166,7 +170,7 @@ fused_gemm_kernel(FusedKernelParams params) {
     pipeline_params.num_consumers = NumThreadsPerWarpGroup_;
     pipeline_params.transaction_bytes = params.mainloop_main.tma_transaction_bytes;
 
-    MainloopPipeline mainloop_pipeline(shared_storage.pipelines.mainloop, pipeline_params, ClusterShape_MNK{});
+    MainloopPipeline mainloop_pipeline(shared_storage.pipeline, pipeline_params, ClusterShape_MNK{});
 
     // ---- TMA descriptor prefetch ----
     if (thread_idx == 0) {
@@ -208,7 +212,6 @@ fused_gemm_kernel(FusedKernelParams params) {
 
         if (warp_group_role == WarpGroupRole::Producer) {
             if (producer_warp_role == ProducerWarpRole::Mainloop) {
-                cutlass::arch::wait_on_dependent_grids();
                 collective_mainloop.load(
                     params.mainloop_main,
                     mainloop_pipeline,
@@ -218,7 +221,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                     k_tile_iter, k_tile_count_main,
                     thread_idx % 32,
                     cute::block_rank_in_cluster(),
-                    shared_storage.tensors.mainloop);
+                    shared_storage.tensors);
                 pipe_producer_state.advance(k_tile_count_main);
                 collective_mainloop.load_tail(mainloop_pipeline, pipe_producer_state);
             }
@@ -230,7 +233,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                 acc_main,
                 k_tile_count_main,
                 warp_group_thread_idx,
-                shared_storage.tensors.mainloop,
+                shared_storage.tensors,
                 params.mainloop_main);
             collective_mainloop.mma_tail(mainloop_pipeline, pipe_consumer_state, k_tile_count_main);
         }
@@ -248,7 +251,7 @@ fused_gemm_kernel(FusedKernelParams params) {
     if (k_tile_count_high > 0) {
         // Re-initialize pipeline for phase 2 (reset barriers)
         pipeline_params.transaction_bytes = params.mainloop_high.tma_transaction_bytes;
-        MainloopPipeline mainloop_pipeline2(shared_storage.pipelines.mainloop, pipeline_params, ClusterShape_MNK{});
+        MainloopPipeline mainloop_pipeline2(shared_storage.pipeline, pipeline_params, ClusterShape_MNK{});
 
         // Prefetch phase 2 TMA descriptors
         if (thread_idx == 0) {
@@ -273,7 +276,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                     k_tile_iter_h, k_tile_count_high,
                     thread_idx % 32,
                     cute::block_rank_in_cluster(),
-                    shared_storage.tensors.mainloop);
+                    shared_storage.tensors);
                 pipe_producer_state2.advance(k_tile_count_high);
                 collective_mainloop.load_tail(mainloop_pipeline2, pipe_producer_state2);
             }
@@ -285,7 +288,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                 acc_high,
                 k_tile_count_high,
                 warp_group_thread_idx,
-                shared_storage.tensors.mainloop,
+                shared_storage.tensors,
                 params.mainloop_high);
             collective_mainloop.mma_tail(mainloop_pipeline2, pipe_consumer_state2, k_tile_count_high);
         }
@@ -433,8 +436,9 @@ torch::Tensor fused_mixed_gemm(
     dim3 grid(grid_m, grid_n, 1);
     dim3 block(MaxThreadsPerBlock_, 1, 1);
 
-    // Shared memory size = GemmKernel::SharedStorageSize (exact CUTLASS value)
-    int smem_size = GemmKernel::SharedStorageSize;
+    // Shared memory size: just mainloop tensors + pipeline (NOT epilogue)
+    // GemmKernel::SharedStorage uses union(mainloop, epilogue), we only need mainloop part
+    int smem_size = FusedSmemSize;
 
     // Set max dynamic shared memory for this kernel
     auto err = cudaFuncSetAttribute(fused_gemm_kernel,
