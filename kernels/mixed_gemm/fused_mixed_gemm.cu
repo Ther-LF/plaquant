@@ -462,6 +462,7 @@ torch::Tensor fused_mixed_gemm(
     // Shared memory size: just mainloop tensors + pipeline (NOT epilogue)
     // GemmKernel::SharedStorage uses union(mainloop, epilogue), we only need mainloop part
     int smem_size = FusedSmemSize;
+    printf("[host] FusedSmemSize = %d bytes (%.1f KB), H20 max = 233472 bytes (228 KB)\n", smem_size, smem_size / 1024.0);
 
     // Set max dynamic shared memory for this kernel
     auto err = cudaFuncSetAttribute(fused_gemm_kernel,
