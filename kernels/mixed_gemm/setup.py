@@ -14,7 +14,7 @@ setup(
     ext_modules=[
         CUDAExtension(
             "mixed_gemm",
-            sources=["mixed_gemm.cu", "fused_mixed_gemm.cu", "fused_mixed_gemm_v2.cu"],
+            sources=["mixed_gemm.cu", "fused_mixed_gemm.cu", "fused_mixed_gemm_v2.cu", "fused_mixed_gemm_v3.cu"],
             include_dirs=[CUTLASS_INCLUDE, CUTLASS_TOOLS_INCLUDE],
             extra_compile_args={
                 "nvcc": [

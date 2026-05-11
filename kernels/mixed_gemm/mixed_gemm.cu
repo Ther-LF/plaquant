@@ -355,6 +355,12 @@ torch::Tensor fused_mixed_gemm_v2(
     torch::Tensor s_x_m, torch::Tensor s_w_m, torch::Tensor neg_zero_m, torch::Tensor colsum_m,
     torch::Tensor s_x_h, torch::Tensor s_w_h, torch::Tensor neg_zero_h, torch::Tensor colsum_h);
 
+torch::Tensor fused_mixed_gemm_v3(
+    torch::Tensor A_main, torch::Tensor B_main,
+    torch::Tensor A_high, torch::Tensor B_high,
+    torch::Tensor s_x_m, torch::Tensor s_w_m, torch::Tensor neg_zero_m, torch::Tensor colsum_m,
+    torch::Tensor s_x_h, torch::Tensor s_w_h, torch::Tensor neg_zero_h, torch::Tensor colsum_h);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_u8s8_dequant", &gemm_u8s8_dequant,
           "UINT8×INT8 GEMM + fused dequant → FP16 (high portion, single kernel via EVT)",
@@ -371,6 +377,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("s_x_h"), py::arg("s_w_h"), py::arg("neg_zero_h"), py::arg("colsum_h"));
     m.def("fused_mixed_gemm_v2", &fused_mixed_gemm_v2,
           "Fused dual-phase GEMM v2 (hand-written inline K-loop, no serialization)",
+          py::arg("A_main"), py::arg("B_main"), py::arg("A_high"), py::arg("B_high"),
+          py::arg("s_x_m"), py::arg("s_w_m"), py::arg("neg_zero_m"), py::arg("colsum_m"),
+          py::arg("s_x_h"), py::arg("s_w_h"), py::arg("neg_zero_h"), py::arg("colsum_h"));
+    m.def("fused_mixed_gemm_v3", &fused_mixed_gemm_v3,
+          "Fused dual-phase GEMM v3 (single accumulator + workspace, lowest register pressure)",
           py::arg("A_main"), py::arg("B_main"), py::arg("A_high"), py::arg("B_high"),
           py::arg("s_x_m"), py::arg("s_w_m"), py::arg("neg_zero_m"), py::arg("colsum_m"),
           py::arg("s_x_h"), py::arg("s_w_h"), py::arg("neg_zero_h"), py::arg("colsum_h"));
