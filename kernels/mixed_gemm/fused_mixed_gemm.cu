@@ -243,11 +243,13 @@ fused_gemm_kernel(FusedKernelParams params) {
     __syncthreads();
 
     // ==================================================================
-    // PHASE 2: High GEMM
+    // PHASE 2: High GEMM (TEMPORARILY DISABLED FOR DEBUGGING)
     // ==================================================================
     auto acc_high = partition_fragment_C(tiled_mma, take<0,2>(TileShape_MNK{}));
     clear(acc_high);
 
+    // SKIP phase 2 for now — debug phase 1 first
+    #if 0
     if (k_tile_count_high > 0) {
         // Re-initialize pipeline for phase 2 (reset barriers)
         pipeline_params.transaction_bytes = params.mainloop_high.tma_transaction_bytes;
@@ -293,6 +295,7 @@ fused_gemm_kernel(FusedKernelParams params) {
             collective_mainloop.mma_tail(mainloop_pipeline2, pipe_consumer_state2, k_tile_count_high);
         }
     }
+    #endif  // DISABLED phase 2
 
     // ==================================================================
     // EPILOGUE: In-register dequant + combine + store
