@@ -149,6 +149,9 @@ fused_gemm_kernel(FusedKernelParams params) {
                params.M, params.N, params.K_main, params.K_high);
     }
 
+    // ULTRA MINIMAL: just return without doing anything
+    return;
+
     // ---- Warp role setup (same as CUTLASS GemmKernel) ----
     enum class WarpGroupRole { Producer = 0, Consumer = 1 };
     enum class ProducerWarpRole { Mainloop = 0, Warp1 = 1, Warp2 = 2, Warp3 = 3 };
