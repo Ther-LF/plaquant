@@ -149,8 +149,7 @@ fused_gemm_kernel(FusedKernelParams params) {
                params.M, params.N, params.K_main, params.K_high);
     }
 
-    // ULTRA MINIMAL: just return without doing anything
-    return;
+    // DEBUG: test just pipeline init + epilogue store (no load/mma)
 
     // ---- Warp role setup (same as CUTLASS GemmKernel) ----
     enum class WarpGroupRole { Producer = 0, Consumer = 1 };
