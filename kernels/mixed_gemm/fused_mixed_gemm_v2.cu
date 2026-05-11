@@ -186,14 +186,19 @@ fused_gemm_kernel_v2(__grid_constant__ FusedV2Params const params) {
     // ==================================================================
     {
         // Producer: set up TMA tensors for phase 1
+        // Use CollectiveMainloop::load_init (lightweight device function, just creates CuTe tensors)
+        CollectiveMainloop collective_mainloop;
         auto problem_shape_main = make_shape(params.M, params.N, params.K_main, 1);
-        Tensor mA = params.mainloop_main.tma_load_a.get_tma_tensor(make_shape(params.M, params.K_main, 1));
-        Tensor mB = params.mainloop_main.tma_load_b.get_tma_tensor(make_shape(params.N, params.K_main, 1));
-        Tensor gA = local_tile(mA, TileShape_MNK{}, make_coord(m_coord, _, 0), Step<_1, X, _1>{});  // (BLK_M, BLK_K, k)
-        Tensor gB = local_tile(mB, TileShape_MNK{}, make_coord(n_coord, _, 0), Step<X, _1, _1>{});  // (BLK_N, BLK_K, k)
+        auto load_inputs = collective_mainloop.load_init(problem_shape_main, params.mainloop_main);
+        Tensor gA_mkl = get<0>(load_inputs);  // (BLK_M, BLK_K, m, k, l)
+        Tensor gB_nkl = get<1>(load_inputs);  // (BLK_N, BLK_K, n, k, l)
 
-        auto block_tma_a = params.mainloop_main.tma_load_a.get_slice(0);  // cluster_id.y = 0
-        auto block_tma_b = params.mainloop_main.tma_load_b.get_slice(0);  // cluster_id.x = 0
+        // Slice for this block's m,n coordinates
+        Tensor gA = gA_mkl(_,_,m_coord,_,0);  // (BLK_M, BLK_K, k)
+        Tensor gB = gB_nkl(_,_,n_coord,_,0);  // (BLK_N, BLK_K, k)
+
+        auto block_tma_a = params.mainloop_main.tma_load_a.get_slice(0);
+        auto block_tma_b = params.mainloop_main.tma_load_b.get_slice(0);
         Tensor tAgA = block_tma_a.partition_S(gA);  // (TMA, TMA_M, TMA_K, k)
         Tensor tAsA = block_tma_a.partition_D(sA);  // (TMA, TMA_M, TMA_K, PIPE)
         Tensor tBgB = block_tma_b.partition_S(gB);  // (TMA, TMA_N, TMA_K, k)
@@ -279,10 +284,13 @@ fused_gemm_kernel_v2(__grid_constant__ FusedV2Params const params) {
         pipeline_params.transaction_bytes = params.mainloop_high.tma_transaction_bytes;
         MainloopPipeline pipeline2(shared_storage.pipelines.mainloop, pipeline_params, ClusterShape_MNK{});
 
-        Tensor mA_h = params.mainloop_high.tma_load_a.get_tma_tensor(make_shape(params.M, params.K_high, 1));
-        Tensor mB_h = params.mainloop_high.tma_load_b.get_tma_tensor(make_shape(params.N, params.K_high, 1));
-        Tensor gA_h = local_tile(mA_h, TileShape_MNK{}, make_coord(m_coord, _, 0), Step<_1, X, _1>{});
-        Tensor gB_h = local_tile(mB_h, TileShape_MNK{}, make_coord(n_coord, _, 0), Step<X, _1, _1>{});
+        CollectiveMainloop collective_mainloop_h;
+        auto problem_shape_high = make_shape(params.M, params.N, params.K_high, 1);
+        auto load_inputs_h = collective_mainloop_h.load_init(problem_shape_high, params.mainloop_high);
+        Tensor gA_h_mkl = get<0>(load_inputs_h);
+        Tensor gB_h_nkl = get<1>(load_inputs_h);
+        Tensor gA_h = gA_h_mkl(_,_,m_coord,_,0);
+        Tensor gB_h = gB_h_nkl(_,_,n_coord,_,0);
 
         auto block_tma_a_h = params.mainloop_high.tma_load_a.get_slice(0);
         auto block_tma_b_h = params.mainloop_high.tma_load_b.get_slice(0);
