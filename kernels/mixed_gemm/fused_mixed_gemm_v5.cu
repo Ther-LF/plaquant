@@ -55,48 +55,12 @@ constexpr int AlignmentOutput = 128 / cutlass::sizeof_bits<ElementOutput>::value
 // Mainloop (same as baseline)
 // =============================================================================
 
-using Mainloop = typename cutlass::gemm::collective::CollectiveBuilder<
-    cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
-    ElementA, cutlass::layout::RowMajor, AlignmentA,
-    ElementB, cutlass::layout::ColumnMajor, AlignmentB,
-    ElementAccum,
-    TileShape_MNK, ClusterShape_MNK,
-    cutlass::gemm::collective::StageCountAutoCarveout<
-        static_cast<int>(sizeof(typename cutlass::epilogue::collective::detail::Sm90TmaWarpSpecializedAdapter<
-            cutlass::epilogue::collective::Sm90EpilogueTmaWarpSpecialized<
-                cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp, TileShape_MNK, ClusterShape_MNK,
-                cutlass::epilogue::collective::EpilogueTileAuto,
-                ElementAccum, ElementCompute,
-                ElementOutput, cutlass::layout::RowMajor, AlignmentOutput,
-                ElementOutput, cutlass::layout::RowMajor, AlignmentOutput,
-                cutlass::epilogue::TmaWarpSpecialized
-            >
-        >::SharedStorage))>,
-    cutlass::gemm::KernelTmaWarpSpecialized
->::CollectiveOp;
+// =============================================================================
+// Mainloop — uses StageCountAutoCarveout with the epilogue smem size
+// (defined after epilogue is built, see below)
+// =============================================================================
 
-// Wait, this is getting complicated. Let me use the simpler approach — just
-// use the same EVT as baseline (DequantEVT) and run two CUTLASS GEMMs
-// sequentially. The second GEMM uses beta=1 to add the workspace result.
-// But DequantEVT doesn't support beta*C...
-//
-// SIMPLEST approach: use two different CUTLASS GemmUniversalAdapter instances
-// with the SAME kernel type. Run them in sequence from a SINGLE custom kernel.
-// But that's back to v1 with function-call serialization...
-//
-// OK let me try the cleanest possible approach:
-// Use the BASELINE EVT (DequantEVT) for Phase 1 → writes workspace
-// Use a simple epilogue for Phase 2 → reads workspace, adds dequant_high, writes D
-//
-// Phase 2's epilogue: D = alpha * (s_x_h * s_w_h * (acc + nz_h * cs_h)) + beta * C
-// = DequantEVT(acc) + C
-// This is exactly: the standard linear combination with alpha=1, beta=1,
-// where the "accumulator" is already transformed by DequantEVT.
-//
-// Actually in CUTLASS's EVT framework, the linear combination IS the EVT tree.
-// So I need: D = DequantEVT_compute(acc) + Sm90SrcFetch
-//
-// Let me just build this properly.
+// Forward declaration pattern: build epilogue first, then mainloop with carveout
 
 using namespace cutlass::epilogue::fusion;
 
