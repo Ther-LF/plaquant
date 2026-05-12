@@ -85,27 +85,15 @@ using ScaleProduct = Sm90EVT<
     Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
     Leaf_sx, Leaf_sw>;
 
-// dequant_fp32 = scale_product * corrected_acc  (output is FP32)
-using DequantF32 = Sm90EVT<
-    Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
+// dequant: D = scale_product * corrected_acc (same as baseline DequantEVT)
+using PlainDequantEVT = Sm90EVT<
+    Sm90Compute<cutlass::multiplies, ElementOutput, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
     ScaleProduct, CorrectedAcc>;
 
-// Final: D = beta * C + DequantF32(acc)
-// Phase 1: beta=0 → D = dequant(acc)
-// Phase 2: beta=1, C=workspace → D = workspace + dequant(acc)
-using Leaf_beta = Sm90ScalarBroadcast<ElementCompute, Stride<_0,_0,int64_t>>;
-using FusedEVT = Sm90EVT<
-    Sm90Compute<cutlass::homogeneous_multiply_add, ElementOutput, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
-    Leaf_beta,      // beta scalar
-    Sm90SrcFetch,   // C matrix
-    DequantF32      // dequanted accumulator
->;
-
 // =============================================================================
-// Build the GemmKernel with FusedEVT epilogue
+// Build GemmKernel with PlainDequantEVT (same as baseline, for 2-launch+add)
 // =============================================================================
 
-// First build epilogue with our FusedEVT
 using EpilogueOp = typename cutlass::epilogue::collective::CollectiveBuilder<
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
     TileShape_MNK, ClusterShape_MNK,
@@ -114,7 +102,7 @@ using EpilogueOp = typename cutlass::epilogue::collective::CollectiveBuilder<
     ElementOutput, cutlass::layout::RowMajor, AlignmentOutput,
     ElementOutput, cutlass::layout::RowMajor, AlignmentOutput,
     cutlass::epilogue::TmaWarpSpecialized,
-    FusedEVT
+    PlainDequantEVT
 >::CollectiveOp;
 
 // Shared memory carveout for epilogue
@@ -141,55 +129,33 @@ using FusedGemm = cutlass::gemm::device::GemmUniversalAdapter<FusedGemmKernel>;
 // =============================================================================
 
 static typename FusedGemmKernel::CollectiveEpilogue::FusionCallbacks::Arguments
-make_fused_evt_args(
+make_dequant_evt_args(
     ElementOutput const* s_x, ElementOutput const* s_w,
-    ElementOutput const* neg_zero, float const* colsum,
-    float beta)
+    ElementOutput const* neg_zero, float const* colsum)
 {
-    // FusedEVT = Sm90EVT<Compute<homogeneous_multiply_add>, Leaf_beta, Sm90SrcFetch, DequantF32>
-    // Args order: {Leaf_beta_args, Sm90SrcFetch_args, DequantF32_args, hmma_op_args}
-    //
-    // DequantF32 = Sm90EVT<Compute<mul>, ScaleProduct, CorrectedAcc>
-    //   Args: {ScaleProduct_args, CorrectedAcc_args, mul_op_args}
-    //
-    // ScaleProduct = Sm90EVT<Compute<mul>, Leaf_sx, Leaf_sw>
-    //   Args: {Leaf_sx_args, Leaf_sw_args, mul_op_args}
-    //
-    // CorrectedAcc = Sm90EVT<Compute<plus>, AccFetch, BiasCompute>
-    //   Args: {AccFetch_args, BiasCompute_args, plus_op_args}
-    //
-    // BiasCompute = Sm90EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
-    //   Args: {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
+    // PlainDequantEVT = Sm90EVT<Compute<mul>, ScaleProduct, CorrectedAcc>
+    // Same as baseline DequantEVT args
 
     using FusionArgs = typename FusedGemmKernel::CollectiveEpilogue::FusionCallbacks::Arguments;
 
     return FusionArgs{
-        // Leaf_beta args (Sm90ScalarBroadcast)
-        {{beta}},
-        // Sm90SrcFetch args
-        {},
-        // DequantF32 args = {ScaleProduct_args, CorrectedAcc_args, mul_op_args}
+        // ScaleProduct = {Leaf_sx, Leaf_sw, mul_op}
         {
-            // ScaleProduct = {Leaf_sx, Leaf_sw, mul_op}
-            {
-                {s_x},  // ColBroadcast
-                {s_w},  // RowBroadcast
-                {}       // mul
-            },
-            // CorrectedAcc = {AccFetch, BiasCompute, plus_op}
-            {
-                {},  // AccFetch
-                // BiasCompute = {Leaf_neg_zero, Leaf_colsum, mul_op}
-                {
-                    {neg_zero},  // ColBroadcast
-                    {colsum},    // RowBroadcast
-                    {}            // mul
-                },
-                {}  // plus
-            },
-            {}  // mul (DequantF32 top)
+            {s_x},
+            {s_w},
+            {}
         },
-        {}  // homogeneous_multiply_add op args
+        // CorrectedAcc = {AccFetch, BiasCompute, plus_op}
+        {
+            {},
+            {
+                {neg_zero},
+                {colsum},
+                {}
+            },
+            {}
+        },
+        {}  // mul op (top)
     };
 }
 
@@ -242,19 +208,19 @@ torch::Tensor fused_mixed_gemm_v5(
         void const* ptr_A, void const* ptr_B, int K,
         ElementOutput const* s_x, ElementOutput const* s_w,
         ElementOutput const* neg_zero, float const* colsum,
-        float beta, ElementOutput const* C_ptr, ElementOutput* D_ptr)
+        ElementOutput* D_ptr)
     {
         auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, 1));
         auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, 1));
 
-        auto fusion_args = make_fused_evt_args(s_x, s_w, neg_zero, colsum, beta);
+        auto fusion_args = make_dequant_evt_args(s_x, s_w, neg_zero, colsum);
 
         typename FusedGemm::Arguments args{
             cutlass::gemm::GemmUniversalMode::kGemm,
             {M, N, K, 1},
             {reinterpret_cast<ElementA const*>(ptr_A), stride_A,
              reinterpret_cast<ElementB const*>(ptr_B), stride_B},
-            {fusion_args, C_ptr, stride_C, D_ptr, stride_D}
+            {fusion_args, nullptr, stride_C, D_ptr, stride_D}
         };
 
         FusedGemm gemm_op;
@@ -275,23 +241,24 @@ torch::Tensor fused_mixed_gemm_v5(
                     "run failed: ", cutlass::cutlassGetStatusString(status));
     };
 
-    // Phase 1: D=workspace, beta=0 (no C contribution)
+    // Phase 1: GEMM main → workspace (with dequant EVT)
     run_phase(A_main.data_ptr(), B_main.data_ptr(), K_main,
               reinterpret_cast<ElementOutput const*>(s_x_m.data_ptr()),
               reinterpret_cast<ElementOutput const*>(s_w_m.data_ptr()),
               reinterpret_cast<ElementOutput const*>(neg_zero_m.data_ptr()),
               reinterpret_cast<float const*>(colsum_m.data_ptr()),
-              0.0f, nullptr,
               reinterpret_cast<ElementOutput*>(workspace.data_ptr()));
 
-    // Phase 2: D=output, C=workspace, beta=1
+    // Phase 2: GEMM high → output (with dequant EVT)
     run_phase(A_high.data_ptr(), B_high.data_ptr(), K_high,
               reinterpret_cast<ElementOutput const*>(s_x_h.data_ptr()),
               reinterpret_cast<ElementOutput const*>(s_w_h.data_ptr()),
               reinterpret_cast<ElementOutput const*>(neg_zero_h.data_ptr()),
               reinterpret_cast<float const*>(colsum_h.data_ptr()),
-              1.0f, reinterpret_cast<ElementOutput const*>(workspace.data_ptr()),
               reinterpret_cast<ElementOutput*>(output.data_ptr()));
+
+    // Phase 3: combine — output += workspace
+    output.add_(workspace);
 
     if (A_main_shape.size() == 3) {
         output = output.reshape({A_main_shape[0], A_main_shape[1], N});
