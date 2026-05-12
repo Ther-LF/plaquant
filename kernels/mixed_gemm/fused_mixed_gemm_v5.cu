@@ -85,23 +85,21 @@ using ScaleProduct = Sm90EVT<
     Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
     Leaf_sx, Leaf_sw>;
 
-// dequant_fp32 = scale_product * corrected_acc  (output is FP32, not FP16)
+// dequant_fp32 = scale_product * corrected_acc  (output is FP32)
 using DequantF32 = Sm90EVT<
     Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
     ScaleProduct, CorrectedAcc>;
 
-// beta * C (beta is scalar, C is the workspace/source matrix)
-using Leaf_beta = Sm90ScalarBroadcast<ElementCompute>;
-using BetaC = Sm90EVT<
-    Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
-    Leaf_beta, Sm90SrcFetch>;
-
-// Final: D = DequantF32(acc) + beta * C
+// Final: D = beta * C + DequantF32(acc)
 // Phase 1: beta=0 → D = dequant(acc)
-// Phase 2: beta=1, C=workspace → D = dequant(acc) + workspace
+// Phase 2: beta=1, C=workspace → D = workspace + dequant(acc)
+using Leaf_beta = Sm90ScalarBroadcast<ElementCompute, Stride<_0,_0,int64_t>>;
 using FusedEVT = Sm90EVT<
-    Sm90Compute<cutlass::plus, ElementOutput, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
-    DequantF32, BetaC>;
+    Sm90Compute<cutlass::homogeneous_multiply_add, ElementOutput, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>,
+    Leaf_beta,      // beta scalar
+    Sm90SrcFetch,   // C matrix
+    DequantF32      // dequanted accumulator
+>;
 
 // =============================================================================
 // Build the GemmKernel with FusedEVT epilogue
@@ -148,52 +146,50 @@ make_fused_evt_args(
     ElementOutput const* neg_zero, float const* colsum,
     float beta)
 {
-    // FusedEVT = Sm90EVT<Compute<plus>, DequantF32, BetaC>
-    // Args order: {DequantF32_args, BetaC_args, plus_op_args}
+    // FusedEVT = Sm90EVT<Compute<homogeneous_multiply_add>, Leaf_beta, Sm90SrcFetch, DequantF32>
+    // Args order: {Leaf_beta_args, Sm90SrcFetch_args, DequantF32_args, hmma_op_args}
     //
     // DequantF32 = Sm90EVT<Compute<mul>, ScaleProduct, CorrectedAcc>
     //   Args: {ScaleProduct_args, CorrectedAcc_args, mul_op_args}
-    //   ScaleProduct = Sm90EVT<Compute<mul>, Leaf_sx, Leaf_sw>
-    //     Args: {Leaf_sx_args, Leaf_sw_args, mul_op_args}
-    //   CorrectedAcc = Sm90EVT<Compute<plus>, AccFetch, BiasCompute>
-    //     Args: {AccFetch_args, BiasCompute_args, plus_op_args}
-    //     BiasCompute = Sm90EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
-    //       Args: {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
     //
-    // BetaC = Sm90EVT<Compute<mul>, Leaf_beta, Sm90SrcFetch>
-    //   Args: {Leaf_beta_args, Sm90SrcFetch_args, mul_op_args}
+    // ScaleProduct = Sm90EVT<Compute<mul>, Leaf_sx, Leaf_sw>
+    //   Args: {Leaf_sx_args, Leaf_sw_args, mul_op_args}
+    //
+    // CorrectedAcc = Sm90EVT<Compute<plus>, AccFetch, BiasCompute>
+    //   Args: {AccFetch_args, BiasCompute_args, plus_op_args}
+    //
+    // BiasCompute = Sm90EVT<Compute<mul>, Leaf_neg_zero, Leaf_colsum>
+    //   Args: {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
 
     using FusionArgs = typename FusedGemmKernel::CollectiveEpilogue::FusionCallbacks::Arguments;
 
     return FusionArgs{
+        // Leaf_beta args (Sm90ScalarBroadcast)
+        {{beta}},
+        // Sm90SrcFetch args
+        {},
         // DequantF32 args = {ScaleProduct_args, CorrectedAcc_args, mul_op_args}
         {
-            // ScaleProduct args = {Leaf_sx_args, Leaf_sw_args, mul_op_args}
+            // ScaleProduct = {Leaf_sx, Leaf_sw, mul_op}
             {
-                {s_x},   // Leaf_sx (ColBroadcast)
-                {s_w},   // Leaf_sw (RowBroadcast)
-                {}        // mul op
+                {s_x},  // ColBroadcast
+                {s_w},  // RowBroadcast
+                {}       // mul
             },
-            // CorrectedAcc args = {AccFetch_args, BiasCompute_args, plus_op_args}
+            // CorrectedAcc = {AccFetch, BiasCompute, plus_op}
             {
                 {},  // AccFetch
-                // BiasCompute args = {Leaf_neg_zero_args, Leaf_colsum_args, mul_op_args}
+                // BiasCompute = {Leaf_neg_zero, Leaf_colsum, mul_op}
                 {
-                    {neg_zero},   // Leaf_neg_zero (ColBroadcast)
-                    {colsum},     // Leaf_colsum (RowBroadcast)
-                    {}            // mul op
+                    {neg_zero},  // ColBroadcast
+                    {colsum},    // RowBroadcast
+                    {}            // mul
                 },
-                {}  // plus op
+                {}  // plus
             },
-            {}  // mul op (DequantF32 top)
+            {}  // mul (DequantF32 top)
         },
-        // BetaC args = {Leaf_beta_args, Sm90SrcFetch_args, mul_op_args}
-        {
-            {{beta}},  // Leaf_beta (ScalarBroadcast): {scalar_value}
-            {},        // Sm90SrcFetch: empty args (C ptr is in epilogue params)
-            {}         // mul op
-        },
-        {}  // plus op (FusedEVT top)
+        {}  // homogeneous_multiply_add op args
     };
 }
 
