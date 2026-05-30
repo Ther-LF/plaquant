@@ -47,7 +47,7 @@ using OpClass = cutlass::arch::OpClassTensorOp;
 using ThreadblockShape_High = cutlass::gemm::GemmShape<128, 64, 64>;
 using WarpShape_High = cutlass::gemm::GemmShape<64, 32, 64>;
 using InstructionShape_High = cutlass::gemm::GemmShape<16, 8, 32>;
-constexpr int kStages_High = 4;
+constexpr int kStages_High = 3;
 constexpr int kAlignmentA_High = 16;   // 128 bits / 8 bits = 16
 constexpr int kAlignmentB_High = 16;
 
@@ -70,7 +70,7 @@ using GemmHigh = cutlass::gemm::device::Gemm<
 using ThreadblockShape_Low = cutlass::gemm::GemmShape<128, 64, 128>;
 using WarpShape_Low = cutlass::gemm::GemmShape<64, 32, 128>;
 using InstructionShape_Low = cutlass::gemm::GemmShape<16, 8, 64>;
-constexpr int kStages_Low = 4;
+constexpr int kStages_Low = 3;
 constexpr int kAlignmentA_Low = 32;    // 128 bits / 4 bits = 32
 constexpr int kAlignmentB_Low = 32;
 
