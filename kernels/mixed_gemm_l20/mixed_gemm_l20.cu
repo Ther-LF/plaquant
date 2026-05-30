@@ -299,13 +299,14 @@ torch::Tensor fused_mixed_gemm(
         LayoutA::packed({M, K_low}));
     TensorRefB ref_B_low(
         reinterpret_cast<ElementB*>(B_low.data_ptr()),
-        LayoutB(N));  // ColumnMajor leading dim = N (stored as (N,K) contiguous)
+        LayoutB(K_low));  // ColumnMajor(K_low, N): leading dim = K_low
+                          // B stored as (N, K_low) row-major = (K_low, N) col-major
     TensorRefA ref_A_high(
         reinterpret_cast<ElementA*>(A_high.data_ptr()),
         LayoutA::packed({M, K_high}));
     TensorRefB ref_B_high(
         reinterpret_cast<ElementB*>(B_high.data_ptr()),
-        LayoutB(N));  // ColumnMajor leading dim = N
+        LayoutB(K_high));  // ColumnMajor(K_high, N): leading dim = K_high
     TensorRefD ref_D(
         reinterpret_cast<ElementC*>(D.data_ptr()),
         LayoutC::packed({M, N}));
