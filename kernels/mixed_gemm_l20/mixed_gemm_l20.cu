@@ -70,7 +70,7 @@ using GemmHigh = cutlass::gemm::device::Gemm<
 using ThreadblockShape_Low = cutlass::gemm::GemmShape<128, 64, 128>;
 using WarpShape_Low = cutlass::gemm::GemmShape<64, 32, 128>;
 using InstructionShape_Low = cutlass::gemm::GemmShape<16, 8, 64>;
-constexpr int kStages_Low = 3;
+constexpr int kStages_Low = 5;   // More stages for low (14 K-iterations benefit from deeper pipeline)
 constexpr int kAlignmentA_Low = 32;    // 128 bits / 4 bits = 32
 constexpr int kAlignmentB_Low = 32;
 
