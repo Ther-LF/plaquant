@@ -41,17 +41,20 @@ def main():
     print()
 
     # Generate random INT8 inputs
+    # A: (M, K) RowMajor
+    # B: (N, K) contiguous — equivalent to (K, N) ColumnMajor in CUTLASS convention
     A_low = torch.randint(-128, 127, (M, K_low), dtype=torch.int8, device=device)
-    B_low = torch.randint(-128, 127, (K_low, N), dtype=torch.int8, device=device)
+    B_low = torch.randint(-128, 127, (N, K_low), dtype=torch.int8, device=device)
     A_high = torch.randint(-128, 127, (M, K_high), dtype=torch.int8, device=device)
-    B_high = torch.randint(-128, 127, (K_high, N), dtype=torch.int8, device=device)
+    B_high = torch.randint(-128, 127, (N, K_high), dtype=torch.int8, device=device)
 
     # === Correctness check ===
     print("Correctness check...")
     out_fused = mixed_gemm_l20.fused_mixed_gemm(A_low, B_low, A_high, B_high)
 
     # Reference: compute in FP32
-    ref = (A_low.float() @ B_low.float() + A_high.float() @ B_high.float()).half()
+    # B is (N, K), so we need A @ B.T for the matmul
+    ref = (A_low.float() @ B_low.float().t() + A_high.float() @ B_high.float().t()).half()
 
     cos_sim = torch.nn.functional.cosine_similarity(
         out_fused.flatten().float(), ref.flatten().float(), dim=0).item()
@@ -68,12 +71,12 @@ def main():
 
     # Baseline: 2x matmul + add (PyTorch/cuBLAS)
     A_low_f = A_low.half()
-    B_low_f = B_low.half()
+    B_low_f = B_low.half()  # (N, K_low)
     A_high_f = A_high.half()
-    B_high_f = B_high.half()
+    B_high_f = B_high.half()  # (N, K_high)
 
     def baseline():
-        return torch.matmul(A_low_f, B_low_f) + torch.matmul(A_high_f, B_high_f)
+        return torch.matmul(A_low_f, B_low_f.t()) + torch.matmul(A_high_f, B_high_f.t())
 
     lat_baseline = benchmark_fn(baseline)
 

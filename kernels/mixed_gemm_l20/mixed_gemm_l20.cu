@@ -27,7 +27,7 @@ using ElementAccumulator = int32_t;
 using ElementCompute = float;
 
 using LayoutA = cutlass::layout::RowMajor;
-using LayoutB = cutlass::layout::RowMajor;
+using LayoutB = cutlass::layout::ColumnMajor;
 using LayoutC = cutlass::layout::RowMajor;
 
 using ArchTag = cutlass::arch::Sm80;  // SM89 is compatible with SM80 tensor ops
@@ -264,13 +264,13 @@ fused_mixed_gemm_kernel(FusedMixedGemmKernel::Params params) {
 // ============================================================================
 
 torch::Tensor fused_mixed_gemm(
-    torch::Tensor A_low,   // (M, K_low) INT8
-    torch::Tensor B_low,   // (K_low, N) INT8
-    torch::Tensor A_high,  // (M, K_high) INT8
-    torch::Tensor B_high   // (K_high, N) INT8
+    torch::Tensor A_low,   // (M, K_low) INT8, RowMajor
+    torch::Tensor B_low,   // (N, K_low) INT8, contiguous — treated as (K_low, N) ColumnMajor
+    torch::Tensor A_high,  // (M, K_high) INT8, RowMajor
+    torch::Tensor B_high   // (N, K_high) INT8, contiguous — treated as (K_high, N) ColumnMajor
 ) {
     int M = A_low.size(0);
-    int N = B_low.size(1);
+    int N = B_low.size(0);
     int K_low = A_low.size(1);
     int K_high = A_high.size(1);
 
@@ -295,13 +295,13 @@ torch::Tensor fused_mixed_gemm(
         LayoutA::packed({M, K_low}));
     TensorRefB ref_B_low(
         reinterpret_cast<ElementB*>(B_low.data_ptr()),
-        LayoutB::packed({K_low, N}));
+        LayoutB(N));  // ColumnMajor leading dim = N (stored as (N,K) contiguous)
     TensorRefA ref_A_high(
         reinterpret_cast<ElementA*>(A_high.data_ptr()),
         LayoutA::packed({M, K_high}));
     TensorRefB ref_B_high(
         reinterpret_cast<ElementB*>(B_high.data_ptr()),
-        LayoutB::packed({K_high, N}));
+        LayoutB(N));  // ColumnMajor leading dim = N
     TensorRefD ref_D(
         reinterpret_cast<ElementC*>(D.data_ptr()),
         LayoutC::packed({M, N}));
@@ -348,23 +348,18 @@ torch::Tensor fused_mixed_gemm(
 
 torch::Tensor baseline_mixed_gemm(
     torch::Tensor A_low,   // (M, K_low) INT8
-    torch::Tensor B_low,   // (K_low, N) INT8
+    torch::Tensor B_low,   // (N, K_low) INT8
     torch::Tensor A_high,  // (M, K_high) INT8
-    torch::Tensor B_high   // (K_high, N) INT8
+    torch::Tensor B_high   // (N, K_high) INT8
 ) {
-    int M = A_low.size(0);
-    int N = B_low.size(1);
-    int K_low = A_low.size(1);
-    int K_high = A_high.size(1);
-
     // Use PyTorch's matmul for baseline (will use cuBLAS internally)
     auto A_low_f = A_low.to(torch::kFloat16);
-    auto B_low_f = B_low.to(torch::kFloat16);
+    auto B_low_f = B_low.to(torch::kFloat16);  // (N, K_low)
     auto A_high_f = A_high.to(torch::kFloat16);
-    auto B_high_f = B_high.to(torch::kFloat16);
+    auto B_high_f = B_high.to(torch::kFloat16);  // (N, K_high)
 
-    auto out_low = torch::matmul(A_low_f, B_low_f);
-    auto out_high = torch::matmul(A_high_f, B_high_f);
+    auto out_low = torch::matmul(A_low_f, B_low_f.t());
+    auto out_high = torch::matmul(A_high_f, B_high_f.t());
 
     return out_low + out_high;
 }
