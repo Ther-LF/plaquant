@@ -40,13 +40,13 @@ def main():
     print(f"  Device: {torch.cuda.get_device_name()}")
     print()
 
-    # Generate random INT8 inputs
+    # Generate random INT8 inputs (small range to avoid FP16 overflow)
     # A: (M, K) RowMajor
     # B: (N, K) contiguous — equivalent to (K, N) ColumnMajor in CUTLASS convention
-    A_low = torch.randint(-128, 127, (M, K_low), dtype=torch.int8, device=device)
-    B_low = torch.randint(-128, 127, (N, K_low), dtype=torch.int8, device=device)
-    A_high = torch.randint(-128, 127, (M, K_high), dtype=torch.int8, device=device)
-    B_high = torch.randint(-128, 127, (N, K_high), dtype=torch.int8, device=device)
+    A_low = torch.randint(-4, 4, (M, K_low), dtype=torch.int8, device=device)
+    B_low = torch.randint(-4, 4, (N, K_low), dtype=torch.int8, device=device)
+    A_high = torch.randint(-4, 4, (M, K_high), dtype=torch.int8, device=device)
+    B_high = torch.randint(-4, 4, (N, K_high), dtype=torch.int8, device=device)
 
     # === Correctness check ===
     print("Correctness check...")
