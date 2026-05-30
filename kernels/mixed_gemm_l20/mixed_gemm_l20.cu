@@ -80,6 +80,8 @@ using Epilogue = typename GemmKernel::Epilogue;
 using OutputOp = typename Epilogue::OutputOp;
 using ThreadblockSwizzle = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
 
+static constexpr int kThreadCount = GemmKernel::kThreadCount;
+
 // ============================================================================
 // Custom Fused Kernel
 // ============================================================================
@@ -249,7 +251,7 @@ struct FusedMixedGemmKernel {
 // Global kernel entry point
 // ============================================================================
 
-__global__ void __launch_bounds__(Mma::kThreads)
+__global__ void __launch_bounds__(kThreadCount)
 fused_mixed_gemm_kernel(FusedMixedGemmKernel::Params params) {
     extern __shared__ char smem_buf[];
     auto& shared_storage = *reinterpret_cast<FusedMixedGemmKernel::SharedStorage*>(smem_buf);
@@ -325,7 +327,7 @@ torch::Tensor fused_mixed_gemm(
 
     // Launch
     dim3 grid(grid_tiled_shape.m(), grid_tiled_shape.n());
-    dim3 block(Mma::kThreads);
+    dim3 block(kThreadCount);
     int smem_size = sizeof(FusedMixedGemmKernel::SharedStorage);
 
     if (smem_size > 48 * 1024) {
