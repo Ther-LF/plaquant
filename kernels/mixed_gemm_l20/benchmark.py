@@ -82,21 +82,30 @@ def main():
     print()
 
     # Test matrix: multiple problem sizes
-    # Llama-3.2-1B dimensions:
-    #   q/k/v/o_proj: hidden=2048, K_high=256, K_low=1792
-    #   gate/up_proj: hidden=2048→8192, K_high=256, K_low=1792
-    #   down_proj: hidden=8192→2048, K_high=1024, K_low=7168
+    # Varying M, N, K_high, K_low
     test_cases = [
         # (M, N, K_high, K_low) — description
-        (1,    2048, 256, 1792),    # bs=1, q_proj
-        (8,    2048, 256, 1792),    # bs=8, q_proj
-        (16,   2048, 256, 1792),    # bs=16, q_proj
-        (32,   2048, 256, 1792),    # bs=32, q_proj
-        (64,   2048, 256, 1792),    # bs=64, q_proj
-        (128,  2048, 256, 1792),    # bs=128, q_proj
-        (256,  2048, 256, 1792),    # bs=256, q_proj
-        (128,  8192, 256, 1792),    # bs=128, gate/up_proj
-        (128,  2048, 1024, 7168),   # bs=128, down_proj
+        # === Vary M (batch size) with q_proj dims ===
+        (1,    2048, 256, 1792),    # bs=1
+        (16,   2048, 256, 1792),    # bs=16
+        (64,   2048, 256, 1792),    # bs=64
+        (128,  2048, 256, 1792),    # bs=128
+        (256,  2048, 256, 1792),    # bs=256
+        (512,  2048, 256, 1792),    # bs=512
+        (1024, 2048, 256, 1792),    # bs=1024
+        (2048, 2048, 256, 1792),    # bs=2048
+        (4096, 2048, 256, 1792),    # bs=4096
+        # === Vary N (output hidden dim) ===
+        (128,  4096, 256, 1792),    # larger N
+        (128,  8192, 256, 1792),    # gate/up_proj N
+        # === Vary K_high/K_low ratio ===
+        (128,  2048, 128, 1920),    # 1/16 high fraction
+        (128,  2048, 256, 1792),    # 1/8 high fraction (default)
+        (128,  2048, 512, 1536),    # 1/4 high fraction
+        (128,  2048, 1024, 1024),   # 1/2 high fraction
+        # === down_proj (larger K) ===
+        (128,  2048, 1024, 7168),   # down_proj
+        (256,  2048, 1024, 7168),   # down_proj large M
     ]
 
     print(f"{'M':>4} {'N':>5} {'K_h':>4} {'K_l':>5} | {'Fused(μs)':>9} {'Base(μs)':>9} | {'F-TOPS':>6} {'B-TOPS':>6} | {'Speedup':>7} | {'cos':>6}")
