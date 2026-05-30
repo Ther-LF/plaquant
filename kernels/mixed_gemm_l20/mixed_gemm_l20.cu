@@ -44,10 +44,10 @@ using OpClass = cutlass::arch::OpClassTensorOp;
 // ============================================================================
 // High precision GEMM config: INT8, InstructionShape<16,8,32>
 // ============================================================================
-using ThreadblockShape_High = cutlass::gemm::GemmShape<128, 64, 64>;
-using WarpShape_High = cutlass::gemm::GemmShape<64, 32, 64>;
+using ThreadblockShape_High = cutlass::gemm::GemmShape<64, 64, 64>;
+using WarpShape_High = cutlass::gemm::GemmShape<32, 32, 64>;
 using InstructionShape_High = cutlass::gemm::GemmShape<16, 8, 32>;
-constexpr int kStages_High = 3;
+constexpr int kStages_High = 4;
 constexpr int kAlignmentA_High = 16;   // 128 bits / 8 bits = 16
 constexpr int kAlignmentB_High = 16;
 
@@ -67,8 +67,8 @@ using GemmHigh = cutlass::gemm::device::Gemm<
 // ============================================================================
 // Low precision GEMM config: INT4, InstructionShape<16,8,64>
 // ============================================================================
-using ThreadblockShape_Low = cutlass::gemm::GemmShape<128, 64, 128>;
-using WarpShape_Low = cutlass::gemm::GemmShape<64, 32, 128>;
+using ThreadblockShape_Low = cutlass::gemm::GemmShape<64, 64, 128>;
+using WarpShape_Low = cutlass::gemm::GemmShape<32, 32, 128>;
 using InstructionShape_Low = cutlass::gemm::GemmShape<16, 8, 64>;
 constexpr int kStages_Low = 5;   // More stages for low (14 K-iterations benefit from deeper pipeline)
 constexpr int kAlignmentA_Low = 32;    // 128 bits / 4 bits = 32
