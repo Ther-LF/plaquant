@@ -96,26 +96,32 @@ def main():
     lat_fused = benchmark_fn(mixed_gemm_l20.fused_mixed_gemm,
                              A_low_packed, B_low_packed, A_high, B_high)
 
-    # Baseline: 2x FP16 matmul + add (simulates 2-launch approach)
+    # Baseline 1: CUTLASS SM80 tensor core (same instructions, 2 launch + add)
+    lat_cutlass_baseline = benchmark_fn(mixed_gemm_l20.baseline_cutlass_mixed_gemm,
+                                         A_low_packed, B_low_packed, A_high, B_high)
+
+    # Baseline 2: cuBLAS FP16 (2x matmul + add) — may use WGMMA on H20
     A_low_f = A_low_unpacked.half()
     B_low_f = B_low_unpacked.half()
     A_high_f = A_high.half()
     B_high_f = B_high.half()
 
-    def baseline():
+    def baseline_cublas():
         return torch.matmul(A_low_f, B_low_f.t()) + torch.matmul(A_high_f, B_high_f.t())
 
-    lat_baseline = benchmark_fn(baseline)
+    lat_cublas = benchmark_fn(baseline_cublas)
 
     # TOPS calculation
-    # INT4 path: 2*M*N*K_low ops, INT8 path: 2*M*N*K_high ops
     total_ops = 2 * M * N * (K_low + K_high)
     tops_fused = total_ops / (lat_fused * 1e-6) / 1e12
-    tops_baseline = total_ops / (lat_baseline * 1e-6) / 1e12
+    tops_cutlass = total_ops / (lat_cutlass_baseline * 1e-6) / 1e12
+    tops_cublas = total_ops / (lat_cublas * 1e-6) / 1e12
 
-    print(f"  Fused kernel (INT4+INT8):   {lat_fused:.1f} μs  ({tops_fused:.2f} TOPS)")
-    print(f"  Baseline (2x FP16 matmul):  {lat_baseline:.1f} μs  ({tops_baseline:.2f} TOPS)")
-    print(f"  Speedup: {lat_baseline / lat_fused:.2f}x")
+    print(f"  Fused kernel (INT4+INT8):          {lat_fused:.1f} μs  ({tops_fused:.2f} TOPS)")
+    print(f"  CUTLASS baseline (2x launch+add):  {lat_cutlass_baseline:.1f} μs  ({tops_cutlass:.2f} TOPS)")
+    print(f"  cuBLAS FP16 (2x matmul+add):       {lat_cublas:.1f} μs  ({tops_cublas:.2f} TOPS)")
+    print(f"  Speedup vs CUTLASS baseline:       {lat_cutlass_baseline / lat_fused:.2f}x")
+    print(f"  Speedup vs cuBLAS FP16:            {lat_cublas / lat_fused:.2f}x")
 
 
 if __name__ == '__main__':

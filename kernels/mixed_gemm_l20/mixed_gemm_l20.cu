@@ -378,10 +378,77 @@ torch::Tensor fused_mixed_gemm(
 }  // namespace mixed_gemm_l20
 
 // ============================================================================
+// Baseline: 2x CUTLASS GEMM (same SM80 tensor core) + add
+// ============================================================================
+
+torch::Tensor baseline_cutlass_mixed_gemm(
+    torch::Tensor A_low,   // (M, K_low/2) packed INT4
+    torch::Tensor B_low,   // (N, K_low/2) packed INT4
+    torch::Tensor A_high,  // (M, K_high) INT8
+    torch::Tensor B_high   // (N, K_high) INT8
+) {
+    using namespace mixed_gemm_l20;
+
+    int M = A_high.size(0);
+    int N = B_high.size(0);
+    int K_high = A_high.size(1);
+    int K_low = A_low.size(1) * 2;
+
+    // Output buffers
+    auto D_high = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A_high.device()));
+    auto D_low = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A_high.device()));
+
+    // === Launch 1: INT8 GEMM (high precision path) ===
+    {
+        using TensorRefA = typename MmaHigh::IteratorA::TensorRef;
+        using TensorRefB = typename MmaHigh::IteratorB::TensorRef;
+        using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
+
+        TensorRefA ref_A(reinterpret_cast<ElementA_High*>(A_high.data_ptr()), LayoutA::packed({M, K_high}));
+        TensorRefB ref_B(reinterpret_cast<ElementB_High*>(B_high.data_ptr()), LayoutB(K_high));
+        TensorRefD ref_D(reinterpret_cast<ElementC*>(D_high.data_ptr()), LayoutC::packed({M, N}));
+
+        typename GemmHigh::Arguments args(
+            {M, N, K_high},
+            ref_A, ref_B, ref_D, ref_D,
+            {ElementCompute(1.0f), ElementCompute(0.0f)});
+
+        GemmHigh gemm_high;
+        gemm_high.initialize(args);
+        gemm_high();
+    }
+
+    // === Launch 2: INT4 GEMM (low precision path) ===
+    {
+        using TensorRefA = typename MmaLow::IteratorA::TensorRef;
+        using TensorRefB = typename MmaLow::IteratorB::TensorRef;
+        using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
+
+        TensorRefA ref_A(reinterpret_cast<ElementA_Low*>(A_low.data_ptr()), LayoutA::packed({M, K_low}));
+        TensorRefB ref_B(reinterpret_cast<ElementB_Low*>(B_low.data_ptr()), LayoutB(K_low));
+        TensorRefD ref_D(reinterpret_cast<ElementC*>(D_low.data_ptr()), LayoutC::packed({M, N}));
+
+        typename GemmLow::Arguments args(
+            {M, N, K_low},
+            ref_A, ref_B, ref_D, ref_D,
+            {ElementCompute(1.0f), ElementCompute(0.0f)});
+
+        GemmLow gemm_low;
+        gemm_low.initialize(args);
+        gemm_low();
+    }
+
+    // === Launch 3: elementwise add ===
+    return D_high.add_(D_low);
+}
+
+// ============================================================================
 // Python binding
 // ============================================================================
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_mixed_gemm", &mixed_gemm_l20::fused_mixed_gemm,
           "Fused mixed-precision GEMM: INT4(low) + INT8(high) single launch");
+    m.def("baseline_cutlass_mixed_gemm", &baseline_cutlass_mixed_gemm,
+          "Baseline: 2x CUTLASS GEMM (INT4 + INT8) + add");
 }
