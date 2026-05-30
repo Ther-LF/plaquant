@@ -99,6 +99,7 @@ struct FusedMixedGemmKernel {
         typename Mma::IteratorB::Params params_B_high;
         typename Mma::IteratorB::TensorRef ref_B_high;
         int gemm_k_iterations_high;
+        int k_high;
 
         // Low precision operands (INT4→INT8, same MMA type)
         typename Mma::IteratorA::Params params_A_low;
@@ -106,6 +107,7 @@ struct FusedMixedGemmKernel {
         typename Mma::IteratorB::Params params_B_low;
         typename Mma::IteratorB::TensorRef ref_B_low;
         int gemm_k_iterations_low;
+        int k_low;
 
         // Output
         typename Epilogue::OutputTileIterator::Params params_D;
@@ -136,11 +138,13 @@ struct FusedMixedGemmKernel {
             params_B_high(ref_B_high_.layout()),
             ref_B_high(ref_B_high_),
             gemm_k_iterations_high((k_high + ThreadblockShape::kK - 1) / ThreadblockShape::kK),
+            k_high(k_high),
             params_A_low(ref_A_low_.layout()),
             ref_A_low(ref_A_low_),
             params_B_low(ref_B_low_.layout()),
             ref_B_low(ref_B_low_),
             gemm_k_iterations_low((k_low + ThreadblockShape::kK - 1) / ThreadblockShape::kK),
+            k_low(k_low),
             params_D(ref_D_.layout()),
             ref_D(ref_D_),
             output_op(output_op_) {}
@@ -184,14 +188,14 @@ struct FusedMixedGemmKernel {
             typename Mma::IteratorA iterator_A_low(
                 params.params_A_low,
                 params.ref_A_low.data(),
-                {params.problem_size.m(), params.gemm_k_iterations_low * ThreadblockShape::kK},
+                {params.problem_size.m(), params.k_low},
                 thread_idx,
                 tb_offset_A);
 
             typename Mma::IteratorB iterator_B_low(
                 params.params_B_low,
                 params.ref_B_low.data(),
-                {params.gemm_k_iterations_low * ThreadblockShape::kK, params.problem_size.n()},
+                {params.k_low, params.problem_size.n()},
                 thread_idx,
                 tb_offset_B);
 
@@ -206,14 +210,14 @@ struct FusedMixedGemmKernel {
             typename Mma::IteratorA iterator_A_high(
                 params.params_A_high,
                 params.ref_A_high.data(),
-                {params.problem_size.m(), params.gemm_k_iterations_high * ThreadblockShape::kK},
+                {params.problem_size.m(), params.k_high},
                 thread_idx,
                 tb_offset_A);
 
             typename Mma::IteratorB iterator_B_high(
                 params.params_B_high,
                 params.ref_B_high.data(),
-                {params.gemm_k_iterations_high * ThreadblockShape::kK, params.problem_size.n()},
+                {params.k_high, params.problem_size.n()},
                 thread_idx,
                 tb_offset_B);
 
