@@ -27,7 +27,7 @@ using ElementAccumulator = int32_t;
 using ElementCompute = float;
 
 using LayoutA = cutlass::layout::RowMajor;
-using LayoutB = cutlass::layout::ColumnMajor;
+using LayoutB = cutlass::layout::RowMajor;
 using LayoutC = cutlass::layout::RowMajor;
 
 using ArchTag = cutlass::arch::Sm80;  // SM89 is compatible with SM80 tensor ops
