@@ -3,18 +3,12 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/device/gemm.h"
-#include "cutlass/gemm/threadblock/default_mma.h"
-#include "cutlass/gemm/threadblock/default_mma_core_sm80.h"
-#include "cutlass/gemm/threadblock/mma_multistage.h"
-#include "cutlass/epilogue/threadblock/default_epilogue_tensor_op.h"
-#include "cutlass/epilogue/threadblock/epilogue.h"
-#include "cutlass/epilogue/thread/linear_combination.h"
 #include "cutlass/arch/arch.h"
 #include "cutlass/layout/matrix.h"
 #include "cutlass/numeric_types.h"
-#include "cutlass/gemm/kernel/gemm.h"
-#include "cutlass/gemm/kernel/default_gemm.h"
-#include "cutlass/gemm/device/gemm_universal_adapter.h"
+#include "cutlass/epilogue/thread/linear_combination.h"
+#include "cutlass/gemm/threadblock/default_mma.h"
+#include "cutlass/gemm/threadblock/threadblock_swizzle.h"
 #include "cutlass/util/host_tensor.h"
 
 #include <cuda_fp16.h>
@@ -79,28 +73,10 @@ using GemmBaseline = cutlass::gemm::device::Gemm<
 // We use the same MMA type for both low and high precision (both are INT8×INT8)
 // The difference is just the K dimension (number of iterations)
 
-// Get the underlying kernel type from GemmBaseline to reuse its MMA and Epilogue
-using DefaultGemmKernel = typename cutlass::gemm::kernel::DefaultGemm<
-    ElementA, LayoutA, kAlignmentA,
-    ElementB, LayoutB, kAlignmentB,
-    ElementC, LayoutC,
-    ElementAccumulator,
-    OpClass,
-    ArchTag,
-    ThreadblockShape,
-    WarpShape,
-    InstructionShape,
-    cutlass::epilogue::thread::LinearCombination<
-        ElementC,
-        128 / cutlass::sizeof_bits<ElementC>::value,
-        ElementAccumulator,
-        ElementCompute>,
-    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
-    kStages,
-    cutlass::arch::OpMultiplyAddSaturate>::GemmKernel;
-
-using Mma = typename DefaultGemmKernel::Mma;
-using Epilogue = typename DefaultGemmKernel::Epilogue;
+// Extract Mma and Epilogue types from the device::Gemm type
+using GemmKernel = typename GemmBaseline::GemmKernel;
+using Mma = typename GemmKernel::Mma;
+using Epilogue = typename GemmKernel::Epilogue;
 using OutputOp = typename Epilogue::OutputOp;
 using ThreadblockSwizzle = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
 
