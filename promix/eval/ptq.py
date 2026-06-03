@@ -127,15 +127,16 @@ def main():
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
 
-    # Evaluate — use wikitext perplexity directly (avoid lm_eval device issues)
+    # Evaluate — delegate to ResQ's evaluator (handles device management correctly)
     print("Evaluating wikitext perplexity...")
     from utils.data_utils import get_wikitext2
     from utils.eval_utils import evaluator as ppl_evaluator
+    from utils import utils
 
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
-    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=2048, tokenizer=tokenizer, eval_mode=True)
+    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True)
 
-    ppl = ppl_evaluator(model, testloader, 'cuda', ptq_args)
+    ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
     print(f"\n{'='*50}")
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
