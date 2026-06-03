@@ -130,8 +130,7 @@ def main():
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
 
-    # Ensure model is fully on GPU after ptq_model (it may move layers to CPU)
-    model = model.cuda()
+    # Note: DO NOT call model.cuda() here — evaluator manages device per-layer
 
     # Quick sanity check: run one forward pass
     print("Sanity check: forward pass...")
@@ -152,7 +151,7 @@ def main():
     from utils import utils
 
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
-    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True)
+    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
 
     ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
     print(f"\n{'='*50}")
