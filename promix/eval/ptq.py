@@ -127,7 +127,7 @@ def main():
     from utils.eval_utils import evaluator as ppl_evaluator
 
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
-    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=2048, tokenizer=tokenizer)
+    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=2048, tokenizer=tokenizer, eval_mode=True)
 
     ppl = ppl_evaluator(model, testloader, 'cuda', ptq_args)
     print(f"\n{'='*50}")
