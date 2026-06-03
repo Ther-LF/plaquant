@@ -91,8 +91,7 @@ def main():
     model = LlamaForCausalLM.from_pretrained(
         ptq_args.input_model,
         torch_dtype=torch.float16,
-        device_map='auto',
-    )
+    ).cuda()
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
 
     # Run PTQ
