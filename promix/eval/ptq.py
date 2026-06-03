@@ -106,6 +106,9 @@ def main():
         capture_layer_io=False,
         eval_dataset='wikitext2',
         layer_idx=10,
+        vision_lm=False,
+        multigpu=False,
+        model_name=config['model']['name'].split('/')[-1],
     )
 
     # Initialize distributed if not already done (torchrun handles this normally)
@@ -126,6 +129,18 @@ def main():
     # Run PTQ
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
+
+    # Quick sanity check: run one forward pass
+    print("Sanity check: forward pass...")
+    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
+    test_input = tokenizer("Hello world", return_tensors="pt").input_ids.cuda()
+    with torch.no_grad():
+        out = model(test_input)
+    logits = out.logits
+    print(f"  Logits shape: {logits.shape}")
+    print(f"  Logits sample: {logits[0, -1, :5]}")
+    print(f"  Has NaN: {logits.isnan().any().item()}")
+    print(f"  Has Inf: {logits.isinf().any().item()}")
 
     # Evaluate — delegate to ResQ's evaluator (handles device management correctly)
     print("Evaluating wikitext perplexity...")
