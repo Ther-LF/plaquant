@@ -101,6 +101,11 @@ def main():
         lm_eval=True,
         lm_eval_batch_size='auto',
         distribute_model=False,
+        # Eval utils
+        bsz=config['eval']['batch_size'],
+        capture_layer_io=False,
+        eval_dataset='wikitext2',
+        layer_idx=0,
     )
 
     # Initialize distributed if not already done (torchrun handles this normally)
