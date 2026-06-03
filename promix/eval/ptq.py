@@ -123,7 +123,7 @@ def main():
         ptq_args.input_model,
         torch_dtype=torch.float16,
     ).cuda()
-    model.seqlen = ptq_args.model_max_length
+    # Note: model.seqlen is set AFTER ptq_model (matching ResQ ptq.py line 393)
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
 
     # Run PTQ
@@ -132,16 +132,28 @@ def main():
     # Note: after ptq_model, model layers are on CPU
     # evaluator() handles per-layer GPU placement internally
 
-    # Evaluate — delegate to ResQ's evaluator (handles device management correctly)
-    print("Evaluating wikitext perplexity...")
+    # Set seqlen after ptq_model (matching ResQ's ptq.py line 393)
+    model.seqlen = config['eval']['max_length']
+    ptq_args.vision_lm = False
+    ptq_args.model_name = config['model']['name'].split('/')[-1]
+
+    # Use ResQ's evaluate() function directly to ensure identical behavior
+    print("Evaluating (using ResQ evaluate function)...")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("resq_ptq",
+        os.path.join(_resq_path, "ptq.py"))
+    resq_ptq = importlib.util.module_from_spec(spec)
+
+    # We only need the evaluate function, extract it manually
+    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
     from utils.data_utils import get_wikitext2
     from utils.eval_utils import evaluator as ppl_evaluator
     from utils import utils
 
-    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
+    model.config.use_cache = False
     testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
-
     ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
+    model.config.use_cache = True
     print(f"\n{'='*50}")
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
