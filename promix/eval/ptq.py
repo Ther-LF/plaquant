@@ -123,12 +123,13 @@ def main():
 
     # Evaluate — use wikitext perplexity directly (avoid lm_eval device issues)
     print("Evaluating wikitext perplexity...")
-    from utils.data_utils import get_data
+    from utils.data_utils import get_wikitext2
     from utils.eval_utils import evaluator as ppl_evaluator
 
-    testdata = get_data('wikitext2', ptq_args.input_model, 2048, eval_mode=True)
+    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
+    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=2048, tokenizer=tokenizer)
 
-    ppl = ppl_evaluator(model, testdata, 'cuda', ptq_args)
+    ppl = ppl_evaluator(model, testloader, 'cuda', ptq_args)
     print(f"\n{'='*50}")
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
