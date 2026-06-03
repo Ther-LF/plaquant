@@ -49,47 +49,61 @@ def main():
     from lm_eval.utils import make_table
 
     # Build args namespace from config (mimicking ResQ's argparse)
+    # Include ALL attributes that ptq_model() might access
     ptq_args = argparse.Namespace(
         input_model=config['model']['name'],
         per_device_eval_batch_size=config['eval']['batch_size'],
         model_max_length=config['eval']['max_length'],
         fp16=True,
         bf16=False,
+        # Weight quantization
         w_bits=config['quantize']['w_bits'],
+        w_clip=config['quantize']['w_clip'],
+        w_asym=False,
+        w_groupsize=-1,
+        w_rtn=False,
+        # Activation quantization
         a_bits=config['quantize']['a_bits'],
+        a_asym=config['quantize']['a_asym'],
+        a_groupsize=-1,
+        a_clip_ratio=1.0,
+        # KV cache quantization
         k_bits=config['quantize']['k_bits'],
         v_bits=config['quantize']['v_bits'],
-        high_bits=config['quantize']['high_bits'],
-        low_bits=config['quantize']['low_bits'],
-        w_clip=config['quantize']['w_clip'],
-        a_asym=config['quantize']['a_asym'],
         k_asym=config['quantize']['k_asym'],
         v_asym=config['quantize']['v_asym'],
         k_groupsize=config['quantize']['k_groupsize'],
         v_groupsize=config['quantize']['v_groupsize'],
+        k_clip_ratio=1.0,
+        v_clip_ratio=1.0,
+        k_pre_rope=False,
+        # Mixed precision
+        high_bits=config['quantize']['high_bits'],
+        low_bits=config['quantize']['low_bits'],
         high_fraction=config['quantize']['high_fraction'],
         low_fraction=config['quantize']['low_fraction'],
+        # Rotation
         rotate_mode=config['quantize']['rotate_mode'],
         optimized_rotation_path=config['paths']['rotation'],
         optimized_basis_path=config['paths']['basis'],
         rotation_granularity=config['quantize']['rotation_granularity'],
         rotate=True,
+        train_rotations=False,
+        sparse_fraction=0.0,
+        residual_fraction=0.0,
+        # Hadamard
+        fp32_had=False,
+        # Misc
+        int8_down_proj=False,
+        load_qmodel_path=None,
+        save_qmodel_path=None,
         tasks=",".join(config['eval']['tasks']),
         output_dir=config['paths']['output_dir'],
         seed=42,
-        w_groupsize=-1,
-        a_groupsize=-1,
-        a_clip_ratio=1.0,
-        w_asym=False,
+        nsamples=128,
         lm_eval=True,
         lm_eval_batch_size='auto',
         distribute_model=False,
-        train_rotations=False,
-        sparse_fraction=0.0,
-        nsamples=128,
-        cal_dataset='wikitext2',
-        cal_nsamples=128,
-        cal_seqlen=512,
     )
 
     # Initialize single-process distributed (ResQ code uses torch.distributed.barrier())
