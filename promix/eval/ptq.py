@@ -92,6 +92,12 @@ def main():
         cal_seqlen=512,
     )
 
+    # Initialize single-process distributed (ResQ code uses torch.distributed.barrier())
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(
+            backend='nccl', init_method='tcp://127.0.0.1:29500',
+            world_size=1, rank=0)
+
     # Load model
     print("Loading model...")
     model = LlamaForCausalLM.from_pretrained(
