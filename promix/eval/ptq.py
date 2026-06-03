@@ -45,71 +45,33 @@ def main():
     from eval_utils.modeling_llama_2 import LlamaForCausalLM
     from transformers import AutoTokenizer
 
-    # Build args namespace from config (mimicking ResQ's argparse)
-    # Include ALL attributes that ptq_model() might access
-    ptq_args = argparse.Namespace(
-        input_model=config['model']['name'],
-        per_device_eval_batch_size=config['eval']['batch_size'],
-        model_max_length=config['eval']['max_length'],
-        fp16=True,
-        bf16=False,
-        # Weight quantization
-        w_bits=config['quantize']['w_bits'],
-        w_clip=config['quantize']['w_clip'],
-        w_asym=False,
-        w_groupsize=-1,
-        w_rtn=False,
-        # Activation quantization
-        a_bits=config['quantize']['a_bits'],
-        a_asym=config['quantize']['a_asym'],
-        a_groupsize=-1,
-        a_clip_ratio=1.0,
-        # KV cache quantization
-        k_bits=config['quantize']['k_bits'],
-        v_bits=config['quantize']['v_bits'],
-        k_asym=config['quantize']['k_asym'],
-        v_asym=config['quantize']['v_asym'],
-        k_groupsize=config['quantize']['k_groupsize'],
-        v_groupsize=config['quantize']['v_groupsize'],
-        k_clip_ratio=1.0,
-        v_clip_ratio=1.0,
-        k_pre_rope=False,
-        # Mixed precision
-        high_bits=config['quantize']['high_bits'],
-        low_bits=config['quantize']['low_bits'],
-        high_fraction=config['quantize']['high_fraction'],
-        low_fraction=config['quantize']['low_fraction'],
-        # Rotation
-        rotate_mode=config['quantize']['rotate_mode'],
-        optimized_rotation_path=config['paths']['rotation'],
-        optimized_basis_path=config['paths']['basis'],
-        rotation_granularity=config['quantize']['rotation_granularity'],
-        rotate=True,
-        train_rotations=False,
-        sparse_fraction=0.0,
-        residual_fraction=0.0,
-        # Hadamard
-        fp32_had=False,
-        # Misc
-        int8_down_proj=False,
-        load_qmodel_path=None,
-        save_qmodel_path=None,
-        tasks=",".join(config['eval']['tasks']),
-        output_dir=config['paths']['output_dir'],
-        seed=0,
-        nsamples=128,
-        lm_eval=True,
-        lm_eval_batch_size='auto',
-        distribute_model=False,
-        # Eval utils
-        bsz=config['eval']['batch_size'],
-        capture_layer_io=False,
-        eval_dataset='wikitext2',
-        layer_idx=10,
-        vision_lm=False,
-        multigpu=False,
-        model_name=config['model']['name'].split('/')[-1],
-    )
+    # Use ResQ's process_args_ptq to construct args (ensures 100% match)
+    import sys
+    saved_argv = sys.argv
+    sys.argv = ['ptq.py',
+        '--input_model', config['model']['name'],
+        '--per_device_eval_batch_size', str(config['eval']['batch_size']),
+        '--model_max_length', str(config['eval']['max_length']),
+        '--fp16', 'True', '--bf16', 'False',
+        '--w_bits', str(config['quantize']['w_bits']),
+        '--a_bits', str(config['quantize']['a_bits']),
+        '--high_bits', str(config['quantize']['high_bits']),
+        '--low_bits', str(config['quantize']['low_bits']),
+        '--w_clip', '--a_asym', '--k_asym', '--v_asym',
+        '--k_groupsize', str(config['quantize']['k_groupsize']),
+        '--v_groupsize', str(config['quantize']['v_groupsize']),
+        '--high_fraction', str(config['quantize']['high_fraction']),
+        '--low_fraction', str(config['quantize']['low_fraction']),
+        '--rotate_mode', config['quantize']['rotate_mode'],
+        '--optimized_rotation_path', config['paths']['rotation'],
+        '--optimized_basis_path', config['paths']['basis'],
+        '--rotation_granularity', config['quantize']['rotation_granularity'],
+        '--rotate',
+        '--output_dir', config['paths']['output_dir'],
+    ]
+    from utils.process_args import process_args_ptq
+    model_args, training_args, ptq_args = process_args_ptq()
+    sys.argv = saved_argv
 
     # Initialize distributed if not already done (torchrun handles this normally)
     if not torch.distributed.is_initialized():
@@ -120,36 +82,26 @@ def main():
     # Load model
     print("Loading model...")
     model = LlamaForCausalLM.from_pretrained(
-        ptq_args.input_model,
+        model_args.input_model,
         torch_dtype=torch.float16,
     ).cuda()
-    # Note: model.seqlen is set AFTER ptq_model (matching ResQ ptq.py line 393)
-    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
 
-    # Run PTQ
+    # Run PTQ (pass model_args for calibration data loading)
     print("Running PTQ pipeline...")
-    ptq_model(ptq_args, model)
-    # Note: after ptq_model, model layers are on CPU
-    # evaluator() handles per-layer GPU placement internally
+    ptq_model(ptq_args, model, model_args)
 
-    # Set seqlen after ptq_model (matching ResQ's ptq.py line 393)
-    model.seqlen = config['eval']['max_length']
+    # Set seqlen after ptq_model (matching ResQ ptq.py line 393)
+    model.seqlen = training_args.model_max_length
     ptq_args.vision_lm = False
-    ptq_args.model_name = config['model']['name'].split('/')[-1]
+    ptq_args.model_name = model_args.input_model.split('/')[-1]
 
-    # Use ResQ's evaluate() function directly to ensure identical behavior
-    print("Evaluating (using ResQ evaluate function)...")
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("resq_ptq",
-        os.path.join(_resq_path, "ptq.py"))
-    resq_ptq = importlib.util.module_from_spec(spec)
-
-    # We only need the evaluate function, extract it manually
-    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
+    # Evaluate
+    print("Evaluating wikitext perplexity...")
     from utils.data_utils import get_wikitext2
     from utils.eval_utils import evaluator as ppl_evaluator
     from utils import utils
 
+    tokenizer = AutoTokenizer.from_pretrained(model_args.input_model)
     model.config.use_cache = False
     testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
     ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
