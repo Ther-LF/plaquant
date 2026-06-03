@@ -84,6 +84,12 @@ def main():
         lm_eval=True,
         lm_eval_batch_size='auto',
         distribute_model=False,
+        train_rotations=False,
+        sparse_fraction=0.0,
+        nsamples=128,
+        cal_dataset='wikitext2',
+        cal_nsamples=128,
+        cal_seqlen=512,
     )
 
     # Load model
