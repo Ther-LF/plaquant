@@ -45,6 +45,9 @@ def main():
     from eval_utils.modeling_llama_2 import LlamaForCausalLM
     from transformers import AutoTokenizer
 
+    # Change to fake_quant directory (ResQ's imports assume cwd = fake_quant)
+    os.chdir(_resq_path)
+
     # Use ResQ's process_args_ptq to construct args (ensures 100% match)
     import sys
     saved_argv = sys.argv
