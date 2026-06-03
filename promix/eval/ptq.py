@@ -130,6 +130,9 @@ def main():
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
 
+    # Ensure model is fully on GPU after ptq_model (it may move layers to CPU)
+    model = model.cuda()
+
     # Quick sanity check: run one forward pass
     print("Sanity check: forward pass...")
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
