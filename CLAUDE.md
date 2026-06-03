@@ -91,6 +91,47 @@ The shift-128 trick converts UINT8 activations to INT8 for Tensor Core compatibi
 - CUDA workaround: `LD_PRELOAD=/usr/local/cuda/lib64/libcudart.so`
 - GEMM test data: `/vllm-workspace/plaquant/project-resq/fake_quant/gemm_data/`
 
+### 连接远程服务器
+
+通过 tmux 后台 session 连接（非交互式环境必须用 tmux）：
+
+```bash
+# 创建 tmux session 并连接
+tmux kill-session -t remote 2>/dev/null
+tmux new-session -d -s remote -x 200 -y 50
+tmux send-keys -t remote "~/gemini-go gemini@general-1295685810-geminijob-0 UERzVUR5cTFrd2hnUndvRnY3NVRUcEt1QWdFVUhqSzZteFVxVFdSUmFaT1dzaEFvNVpTWExsN2RjZVdSVWtGeTo6OjM0MzY6OjpzcGFuYWx1bzo6OnByb2plY3Q=" Enter
+
+# 等待连接后执行命令
+sleep 8
+tmux send-keys -t remote "cd /vllm-workspace/plaquant && git pull" Enter
+
+# 获取输出
+sleep 5 && tmux capture-pane -t remote -p | tail -20
+```
+
+### 远程编译和运行 kernel
+
+```bash
+# 在远程编译（base 环境有 torch 2.9.1+cu128）
+tmux send-keys -t remote "cd /vllm-workspace/plaquant/kernels/mixed_gemm_l20 && rm -rf build *.so && LD_PRELOAD=/usr/local/cuda/lib64/libcudart.so python setup.py build_ext --inplace 2>&1 | tail -5" Enter
+
+# 运行 benchmark
+tmux send-keys -t remote "LD_PRELOAD=/usr/local/cuda/lib64/libcudart.so python benchmark.py 2>&1" Enter
+```
+
+注意：
+- 远程连接会因超时断开（默认 24h），需要重新连接
+- 编译用 base 环境（不要 activate .venv，里面没有 torch）
+- `LD_PRELOAD=/usr/local/cuda/lib64/libcudart.so` 是 H20 上的必需 workaround
+- 先 `git push` 本地改动，再在远程 `git pull`
+
+### 本地环境（L20）
+
+- 8× NVIDIA L20 (SM89, Ada Lovelace, 48GB)
+- 没有完整 CUDA toolkit（无 nvcc），不能本地编译 CUDA kernel
+- 有 PyTorch（torch 2.x + CUDA 12.8），可以跑 Python 代码
+- CUTLASS 源码在 `third_party/cutlass/`（用于代码阅读和 IDE 跳转）
+
 ## Technical Notes
 
 - Asymmetric quantization: `a_sym=False` means activations are asymmetrically quantized
