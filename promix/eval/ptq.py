@@ -96,7 +96,7 @@ def main():
         save_qmodel_path=None,
         tasks=",".join(config['eval']['tasks']),
         output_dir=config['paths']['output_dir'],
-        seed=42,
+        seed=0,
         nsamples=128,
         lm_eval=True,
         lm_eval_batch_size='auto',
@@ -105,7 +105,7 @@ def main():
         bsz=config['eval']['batch_size'],
         capture_layer_io=False,
         eval_dataset='wikitext2',
-        layer_idx=0,
+        layer_idx=10,
     )
 
     # Initialize distributed if not already done (torchrun handles this normally)
