@@ -23,18 +23,22 @@ def pack_int4(tensor_int8):
 
 
 def benchmark_fn(fn, *args, warmup=10, iters=100):
-    """Benchmark a function, return average latency in microseconds."""
+    """Benchmark a function using CUDA events, return average latency in microseconds."""
     for _ in range(warmup):
         fn(*args)
     torch.cuda.synchronize()
 
-    start = time.perf_counter()
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+
+    start_event.record()
     for _ in range(iters):
         fn(*args)
+    end_event.record()
     torch.cuda.synchronize()
-    end = time.perf_counter()
 
-    return (end - start) / iters * 1e6
+    # elapsed_time returns milliseconds
+    return start_event.elapsed_time(end_event) / iters * 1000  # convert to microseconds
 
 
 def run_single_config(M, N, K_high, K_low, device='cuda'):
