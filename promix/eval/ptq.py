@@ -126,7 +126,8 @@ def main():
 
     # Evaluate
     print("Evaluating...")
-    lm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=ptq_args.per_device_eval_batch_size)
+    lm = HFLM(pretrained=model, tokenizer=tokenizer,
+              batch_size=ptq_args.per_device_eval_batch_size, device='cuda')
     results = evaluator.simple_evaluate(
         model=lm,
         tasks=config['eval']['tasks'],
