@@ -44,9 +44,6 @@ def main():
     from eval_utils.main import ptq_model
     from eval_utils.modeling_llama_2 import LlamaForCausalLM
     from transformers import AutoTokenizer
-    from lm_eval import evaluator
-    from lm_eval.models.huggingface import HFLM
-    from lm_eval.utils import make_table
 
     # Build args namespace from config (mimicking ResQ's argparse)
     # Include ALL attributes that ptq_model() might access
@@ -124,24 +121,27 @@ def main():
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
 
-    # Evaluate
-    print("Evaluating...")
-    lm = HFLM(pretrained=model, tokenizer=tokenizer,
-              batch_size=ptq_args.per_device_eval_batch_size, device='cuda')
-    results = evaluator.simple_evaluate(
-        model=lm,
-        tasks=config['eval']['tasks'],
-        batch_size=ptq_args.per_device_eval_batch_size,
-    )
+    # Evaluate — use wikitext perplexity directly (avoid lm_eval device issues)
+    print("Evaluating wikitext perplexity...")
+    from utils.data_utils import get_loaders
+    from utils.eval_utils import evaluator as ppl_evaluator
 
-    print("\n" + make_table(results))
+    _, testloader = get_loaders(
+        'wikitext2', seed=42, model=ptq_args.input_model,
+        seqlen=2048)
+
+    ppl = ppl_evaluator(model, testloader, 'cuda', torch.float16)
+    print(f"\n{'='*50}")
+    print(f"Wikitext-2 Perplexity: {ppl:.2f}")
+    print(f"{'='*50}")
 
     # Save results
     os.makedirs(config['paths']['output_dir'], exist_ok=True)
     import json
+    results = {"wikitext2_ppl": ppl}
     with open(os.path.join(config['paths']['output_dir'], 'results.json'), 'w') as f:
-        json.dump(results['results'], f, indent=2)
-    print(f"\nResults saved to {config['paths']['output_dir']}/results.json")
+        json.dump(results, f, indent=2)
+    print(f"Results saved to {config['paths']['output_dir']}/results.json")
 
 
 if __name__ == "__main__":
