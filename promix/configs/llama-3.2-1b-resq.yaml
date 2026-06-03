@@ -1,0 +1,46 @@
+# ProMix Quantization Config: Llama-3.2-1B with ResQ settings
+model:
+  name: "unsloth/Llama-3.2-1B-Instruct"
+  type: "llama"
+
+quantize:
+  w_bits: 16
+  a_bits: 4
+  high_bits: 8
+  low_bits: 2
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  k_bits: 4
+  v_bits: 4
+  k_asym: true
+  v_asym: true
+  k_groupsize: 64
+  v_groupsize: 64
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  w_clip: true
+
+paths:
+  basis: "./rotation/U-wikitext-512-Llama-3.2-1B.bin"
+  rotation: "./rotation/R-high-0.125-low-0.0-sparse-0.0-Llama-3.2-1B.bin"
+  output_dir: "./output/llama-3.2-1b-resq"
+
+calibration:
+  dataset: "wikitext2"
+  nsamples: 128
+  seqlen: 512
+
+eval:
+  tasks:
+    - mmlu
+    - boolq
+    - piqa
+    - social_iqa
+    - hellaswag
+    - winogrande
+    - arc_easy
+    - arc_challenge
+    - openbookqa
+  batch_size: 1
+  max_length: 2048
