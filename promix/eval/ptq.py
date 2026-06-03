@@ -115,6 +115,7 @@ def main():
         ptq_args.input_model,
         torch_dtype=torch.float16,
     ).cuda()
+    model.seqlen = ptq_args.model_max_length
     tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
 
     # Run PTQ
