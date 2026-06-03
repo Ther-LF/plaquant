@@ -129,20 +129,8 @@ def main():
     # Run PTQ
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model)
-
-    # Note: DO NOT call model.cuda() here — evaluator manages device per-layer
-
-    # Quick sanity check: run one forward pass
-    print("Sanity check: forward pass...")
-    tokenizer = AutoTokenizer.from_pretrained(ptq_args.input_model)
-    test_input = tokenizer("Hello world", return_tensors="pt").input_ids.cuda()
-    with torch.no_grad():
-        out = model(test_input)
-    logits = out.logits
-    print(f"  Logits shape: {logits.shape}")
-    print(f"  Logits sample: {logits[0, -1, :5]}")
-    print(f"  Has NaN: {logits.isnan().any().item()}")
-    print(f"  Has Inf: {logits.isinf().any().item()}")
+    # Note: after ptq_model, model layers are on CPU
+    # evaluator() handles per-layer GPU placement internally
 
     # Evaluate — delegate to ResQ's evaluator (handles device management correctly)
     print("Evaluating wikitext perplexity...")
