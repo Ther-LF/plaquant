@@ -152,6 +152,7 @@ def optimize_rotation(
         rotation_granularity=rotation_granularity,
         optimized_basis_path=basis_path,
         optimized_rotation_path=output_dir,
+        train_rotations=True,
         w_bits=16,
         a_bits=16,
         k_bits=k_bits,
@@ -172,6 +173,9 @@ def optimize_rotation(
         k_pre_rope=False,
         fp32_had=True,
         down_proj_blocksize=256,
+        bsz=eval_batch_size,
+        capture_layer_io=False,
+        layer_idx=0,
     )
     model, R_dict = prepare_model(ptq_args, model)
 
