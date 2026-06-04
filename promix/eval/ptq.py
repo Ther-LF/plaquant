@@ -126,6 +126,14 @@ def main():
     from utils.eval_utils import evaluator as ppl_evaluator
     from utils import utils
 
+    # Monkey-patch rotary_emb to fix position_ids device issue
+    import eval_utils.modeling_llama_2 as llama_mod
+    _orig_rotary_forward = llama_mod.LlamaRotaryEmbedding.forward
+    def _patched_rotary_forward(self, x, position_ids):
+        position_ids = position_ids.to(self.inv_freq.device)
+        return _orig_rotary_forward(self, x, position_ids)
+    llama_mod.LlamaRotaryEmbedding.forward = _patched_rotary_forward
+
     tokenizer = AutoTokenizer.from_pretrained(model_args.input_model)
     model.config.use_cache = False
     testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
