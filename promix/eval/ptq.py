@@ -88,14 +88,25 @@ def main():
     print("Loading model...")
     from transformers import AutoConfig
     config = AutoConfig.from_pretrained(model_args.input_model)
+    process_word_embeddings = False
     if config.tie_word_embeddings:
         config.tie_word_embeddings = False
+        process_word_embeddings = True
     dtype = torch.float16
     model = LlamaForCausalLM.from_pretrained(
         model_args.input_model,
         torch_dtype=dtype,
         config=config,
     ).cuda()
+
+    # Clone embed_tokens to lm_head (ResQ ptq.py line 334)
+    if process_word_embeddings:
+        model.lm_head.weight.data = model.model.embed_tokens.weight.data.clone()
+
+    # Reset basis_change to identity (ResQ ptq.py line 336-337)
+    for name, m in model.named_modules():
+        if "basis_change" in name:
+            m.weight.data.copy_(torch.eye(model.config.hidden_size))
 
     # Run PTQ (pass model_args for calibration data loading)
     print("Running PTQ pipeline...")
