@@ -17,6 +17,8 @@ quantize:
   v_asym: true
   k_groupsize: 64
   v_groupsize: 64
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
   rotate_mode: "resq"
   rotation_granularity: "full_shared"
   w_clip: true
@@ -27,9 +29,10 @@ paths:
   output_dir: "/tmp/promix_ptq_output"
 
 calibration:
-  dataset: "wikitext2"
-  nsamples: 128
-  seqlen: 512
+  dataset: "wikitext"
+  nsamples: 512
+  seqlen: 2048
+  seed: 0
 
 eval:
   tasks:
