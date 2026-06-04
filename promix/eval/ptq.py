@@ -84,19 +84,22 @@ def main():
             backend='nccl', init_method='env://',
             world_size=1, rank=0)
 
-    # Load model
+    # Load model (must untie word embeddings before rotation, matching ResQ ptq.py line 308-310)
     print("Loading model...")
+    from transformers import AutoConfig
+    config = AutoConfig.from_pretrained(model_args.input_model)
+    if config.tie_word_embeddings:
+        config.tie_word_embeddings = False
+    dtype = torch.float16
     model = LlamaForCausalLM.from_pretrained(
         model_args.input_model,
-        torch_dtype=torch.float16,
+        torch_dtype=dtype,
+        config=config,
     ).cuda()
 
     # Run PTQ (pass model_args for calibration data loading)
-    # IMPORTANT: ptq_model may return a modified model object
     print("Running PTQ pipeline...")
-    # DEBUG: skip ptq_model to test if evaluator works with unquantized model
-    # model = ptq_model(ptq_args, model, model_args)
-    print("DEBUG: SKIPPED ptq_model — testing evaluator with FP16 model")
+    model = ptq_model(ptq_args, model, model_args)
 
     # Debug: print model/quantizer state after ptq_model
     print("\n=== DEBUG: Model state after ptq_model ===")
