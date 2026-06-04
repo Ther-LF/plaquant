@@ -93,6 +93,28 @@ def main():
     print("Running PTQ pipeline...")
     ptq_model(ptq_args, model, model_args)
 
+    # Debug: print model/quantizer state after ptq_model
+    print("\n=== DEBUG: Model state after ptq_model ===")
+    print(f"embed_tokens device: {model.model.embed_tokens.weight.device}")
+    print(f"lm_head device: {model.lm_head.weight.device}")
+    print(f"norm device: {model.model.norm.weight.device}")
+    for i, layer in enumerate(model.model.layers[:2]):
+        print(f"\nLayer {i}:")
+        qp = layer.self_attn.q_proj
+        print(f"  q_proj type: {type(qp).__name__}")
+        if hasattr(qp, 'quantizer'):
+            q = qp.quantizer
+            print(f"  q_proj.quantizer: bits={q.bits}, high_bits={q.high_bits}, high_bits_length={q.high_bits_length}, low_bits={q.low_bits}, low_bits_length={q.low_bits_length}")
+            print(f"  q_proj.online_full_had={qp.online_full_had}")
+        if hasattr(qp, 'module'):
+            print(f"  q_proj.module.weight: device={qp.module.weight.device}, shape={qp.module.weight.shape}")
+        dp = layer.mlp.down_proj
+        if hasattr(dp, 'quantizer'):
+            q = dp.quantizer
+            print(f"  down_proj.quantizer: bits={q.bits}, high_bits={q.high_bits}, high_bits_length={q.high_bits_length}")
+            print(f"  down_proj.online_full_had={dp.online_full_had}")
+    print("=== END DEBUG ===\n")
+
     # Set seqlen after ptq_model (matching ResQ ptq.py line 393)
     model.seqlen = training_args.model_max_length
     ptq_args.vision_lm = False
