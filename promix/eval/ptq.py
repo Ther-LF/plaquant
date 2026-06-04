@@ -58,6 +58,8 @@ def main():
         '--fp16', 'True', '--bf16', 'False',
         '--w_bits', str(config['quantize']['w_bits']),
         '--a_bits', str(config['quantize']['a_bits']),
+        '--k_bits', str(config['quantize']['k_bits']),
+        '--v_bits', str(config['quantize']['v_bits']),
         '--high_bits', str(config['quantize']['high_bits']),
         '--low_bits', str(config['quantize']['low_bits']),
         '--w_clip', '--a_asym', '--k_asym', '--v_asym',
