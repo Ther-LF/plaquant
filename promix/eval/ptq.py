@@ -90,8 +90,9 @@ def main():
     ).cuda()
 
     # Run PTQ (pass model_args for calibration data loading)
+    # IMPORTANT: ptq_model may return a modified model object
     print("Running PTQ pipeline...")
-    ptq_model(ptq_args, model, model_args)
+    model = ptq_model(ptq_args, model, model_args)
 
     # Debug: print model/quantizer state after ptq_model
     print("\n=== DEBUG: Model state after ptq_model ===")
