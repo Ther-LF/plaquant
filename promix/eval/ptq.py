@@ -94,7 +94,9 @@ def main():
     # Run PTQ (pass model_args for calibration data loading)
     # IMPORTANT: ptq_model may return a modified model object
     print("Running PTQ pipeline...")
-    model = ptq_model(ptq_args, model, model_args)
+    # DEBUG: skip ptq_model to test if evaluator works with unquantized model
+    # model = ptq_model(ptq_args, model, model_args)
+    print("DEBUG: SKIPPED ptq_model — testing evaluator with FP16 model")
 
     # Debug: print model/quantizer state after ptq_model
     print("\n=== DEBUG: Model state after ptq_model ===")
@@ -123,69 +125,16 @@ def main():
     ptq_args.vision_lm = False
     ptq_args.model_name = model_args.input_model.split('/')[-1]
 
-    # Evaluate — manual mini-evaluator for debugging
-    print("Evaluating wikitext perplexity (debug mode)...")
+    # Evaluate
+    print("Evaluating wikitext perplexity...")
     from utils.data_utils import get_wikitext2
+    from utils.eval_utils import evaluator as ppl_evaluator
     from utils import utils
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.input_model)
     model.config.use_cache = False
     testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
-
-    dev = utils.DEV
-    layers = model.model.layers
-    model.model.embed_tokens = model.model.embed_tokens.to(dev)
-    if hasattr(model.model, "rotary_emb"):
-        model.model.rotary_emb = model.model.rotary_emb.to(dev)
-    layers[0] = layers[0].to(dev)
-
-    input_ids = testloader.input_ids
-    nsamples = input_ids.numel() // model.seqlen
-    input_ids = input_ids[:, :nsamples * model.seqlen].view(nsamples, model.seqlen).to(dev)
-
-    # Try to get first layer input via Catcher
-    cache = {"inp": None, "attn_mask": None, "pos_ids": None, "pos_emb": None}
-
-    class Catcher(torch.nn.Module):
-        def __init__(self, module):
-            super().__init__()
-            self.module = module
-        def forward(self, inp, **kwargs):
-            cache["inp"] = inp
-            cache["attn_mask"] = kwargs.get("attention_mask")
-            cache["pos_ids"] = kwargs.get("position_ids")
-            cache["pos_emb"] = kwargs.get("position_embeddings")
-            raise ValueError
-
-    layers[0] = Catcher(layers[0])
-    try:
-        model(input_ids[0:1])
-    except ValueError:
-        pass
-    except Exception as e:
-        print(f"ERROR during model forward: {type(e).__name__}: {e}")
-    layers[0] = layers[0].module
-
-    if cache["inp"] is not None:
-        inp = cache["inp"]
-        print(f"Catcher captured: shape={inp.shape}, device={inp.device}")
-        print(f"  First values: {inp[0, 0, :5]}")
-        print(f"  Has NaN: {inp.isnan().any().item()}")
-        print(f"  Has Inf: {inp.isinf().any().item()}")
-        print(f"  Norm: {inp.float().norm().item():.4f}")
-    else:
-        print("ERROR: Catcher did NOT capture input!")
-
-    # Now run actual evaluator
-    from utils.eval_utils import evaluator as ppl_evaluator
-    # Reset model state
-    layers[0] = layers[0].cpu()
-    model.model.embed_tokens = model.model.embed_tokens.cpu()
-    if hasattr(model.model, "rotary_emb"):
-        model.model.rotary_emb = model.model.rotary_emb.cpu()
-
-    testloader2 = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
-    ppl = ppl_evaluator(model, testloader2, dev, ptq_args)
+    ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
     print(f"\n{'='*50}")
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
