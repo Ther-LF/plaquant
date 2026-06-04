@@ -30,12 +30,12 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    yaml_config = load_config(args.config)
     print(f"ProMix PTQ Evaluation")
-    print(f"  Model: {config['model']['name']}")
-    print(f"  Type: {config['model']['type']}")
-    print(f"  Quantize: a_bits={config['quantize']['a_bits']}, high_bits={config['quantize']['high_bits']}")
-    print(f"  High fraction: {config['quantize']['high_fraction']}")
+    print(f"  Model: {yaml_config['model']['name']}")
+    print(f"  Type: {yaml_config['model']['type']}")
+    print(f"  Quantize: a_bits={yaml_config['quantize']['a_bits']}, high_bits={yaml_config['quantize']['high_bits']}")
+    print(f"  High fraction: {yaml_config['quantize']['high_fraction']}")
     print()
 
     # For Phase 1: delegate to project-resq's ptq_model function
@@ -52,27 +52,27 @@ def main():
     import sys
     saved_argv = sys.argv
     sys.argv = ['ptq.py',
-        '--input_model', config['model']['name'],
-        '--per_device_eval_batch_size', str(config['eval']['batch_size']),
-        '--model_max_length', str(config['eval']['max_length']),
+        '--input_model', yaml_config['model']['name'],
+        '--per_device_eval_batch_size', str(yaml_config['eval']['batch_size']),
+        '--model_max_length', str(yaml_config['eval']['max_length']),
         '--fp16', 'True', '--bf16', 'False',
-        '--w_bits', str(config['quantize']['w_bits']),
-        '--a_bits', str(config['quantize']['a_bits']),
-        '--k_bits', str(config['quantize']['k_bits']),
-        '--v_bits', str(config['quantize']['v_bits']),
-        '--high_bits', str(config['quantize']['high_bits']),
-        '--low_bits', str(config['quantize']['low_bits']),
+        '--w_bits', str(yaml_config['quantize']['w_bits']),
+        '--a_bits', str(yaml_config['quantize']['a_bits']),
+        '--k_bits', str(yaml_config['quantize']['k_bits']),
+        '--v_bits', str(yaml_config['quantize']['v_bits']),
+        '--high_bits', str(yaml_config['quantize']['high_bits']),
+        '--low_bits', str(yaml_config['quantize']['low_bits']),
         '--w_clip', '--a_asym', '--k_asym', '--v_asym',
-        '--k_groupsize', str(config['quantize']['k_groupsize']),
-        '--v_groupsize', str(config['quantize']['v_groupsize']),
-        '--high_fraction', str(config['quantize']['high_fraction']),
-        '--low_fraction', str(config['quantize']['low_fraction']),
-        '--rotate_mode', config['quantize']['rotate_mode'],
-        '--optimized_rotation_path', config['paths']['rotation'],
-        '--optimized_basis_path', config['paths']['basis'],
-        '--rotation_granularity', config['quantize']['rotation_granularity'],
+        '--k_groupsize', str(yaml_config['quantize']['k_groupsize']),
+        '--v_groupsize', str(yaml_config['quantize']['v_groupsize']),
+        '--high_fraction', str(yaml_config['quantize']['high_fraction']),
+        '--low_fraction', str(yaml_config['quantize']['low_fraction']),
+        '--rotate_mode', yaml_config['quantize']['rotate_mode'],
+        '--optimized_rotation_path', yaml_config['paths']['rotation'],
+        '--optimized_basis_path', yaml_config['paths']['basis'],
+        '--rotation_granularity', yaml_config['quantize']['rotation_granularity'],
         '--rotate',
-        '--output_dir', config['paths']['output_dir'],
+        '--output_dir', yaml_config['paths']['output_dir'],
     ]
     from utils.process_args import process_args_ptq
     model_args, training_args, ptq_args = process_args_ptq()
@@ -154,12 +154,12 @@ def main():
     print(f"{'='*50}")
 
     # Save results
-    os.makedirs(config['paths']['output_dir'], exist_ok=True)
+    os.makedirs(yaml_config['paths']['output_dir'], exist_ok=True)
     import json
     results = {"wikitext2_ppl": ppl}
-    with open(os.path.join(config['paths']['output_dir'], 'results.json'), 'w') as f:
+    with open(os.path.join(yaml_config['paths']['output_dir'], 'results.json'), 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"Results saved to {config['paths']['output_dir']}/results.json")
+    print(f"Results saved to {yaml_config['paths']['output_dir']}/results.json")
 
 
 if __name__ == "__main__":
