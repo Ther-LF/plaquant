@@ -153,10 +153,36 @@ def main():
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
 
+    # lm-eval benchmarks
+    tasks_str = ",".join(yaml_config['eval'].get('tasks', []))
+    if tasks_str:
+        print(f"\nRunning lm-eval tasks: {tasks_str}")
+        from lm_eval import evaluator as lm_evaluator
+        from lm_eval.utils import make_table
+        from lm_eval.models.huggingface import HFLM
+        import datasets as hf_datasets
+        hf_datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+
+        model.to(utils.DEV)
+        lm = HFLM(pretrained=model, tokenizer=tokenizer)
+        lm._device = utils.DEV
+
+        t_results = lm_evaluator.simple_evaluate(
+            lm,
+            tasks=tasks_str.split(","),
+            num_fewshot=yaml_config['eval'].get('num_fewshot', 0),
+            batch_size=yaml_config['eval'].get('batch_size', 1),
+        )
+        print(make_table(t_results))
+    else:
+        t_results = None
+
     # Save results
     os.makedirs(yaml_config['paths']['output_dir'], exist_ok=True)
     import json
     results = {"wikitext2_ppl": ppl}
+    if t_results and "results" in t_results:
+        results["lm_eval"] = t_results["results"]
     with open(os.path.join(yaml_config['paths']['output_dir'], 'results.json'), 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to {yaml_config['paths']['output_dir']}/results.json")
