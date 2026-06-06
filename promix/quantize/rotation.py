@@ -195,18 +195,30 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
 
     # Per-layer rotations
     layers = model.model.layers
-    R2_1 = R_dict["R2_1"].cuda().to(torch.float64)
-    R2_2 = R_dict["R2_2"].cuda().to(torch.float64)
-    R2 = torch.block_diag(R2_1, R2_2)
-    R2_0 = R_dict["R2_0"]
-    if R2_0 is not None:
-        R2 = torch.block_diag(R2_0.cuda().to(torch.float64), R2)
+    trained_format = "R2_1" not in R_dict  # trained format uses per-layer keys
+
+    if not trained_format:
+        R2_1 = R_dict["R2_1"].cuda().to(torch.float64)
+        R2_2 = R_dict["R2_2"].cuda().to(torch.float64)
+        R2 = torch.block_diag(R2_1, R2_2)
+        R2_0 = R_dict.get("R2_0")
+        if R2_0 is not None:
+            R2 = torch.block_diag(R2_0.cuda().to(torch.float64), R2)
 
     for idx, layer in enumerate(tqdm(layers, desc="Rotating layers")):
         rotate_attention_inputs(layer, U_attn)
 
         # Per-layer value rotation
         U_value = U_cpk[f"layer.{idx}.self_attn.value"].cuda()
+
+        if trained_format:
+            R2_1 = R_dict[f"model.layers.{idx}.self_attn.R2_1"].cuda().to(torch.float64)
+            R2_2 = R_dict[f"model.layers.{idx}.self_attn.R2_2"].cuda().to(torch.float64)
+            R2 = torch.block_diag(R2_1, R2_2)
+            r2_0_key = f"model.layers.{idx}.self_attn.R2_0"
+            if r2_0_key in R_dict:
+                R2 = torch.block_diag(R_dict[r2_0_key].cuda().to(torch.float64), R2)
+
         U_value = torch.matmul(U_value, R2)
         rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True)
 
