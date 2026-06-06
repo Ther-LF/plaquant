@@ -32,26 +32,16 @@ def load_model(model_name, dtype=torch.float16):
 
 
 def install_column_order_hooks(model):
-    """Install pre-forward hooks on o_proj wrappers to apply column reordering.
+    """Store column_order directly on o_proj wrappers.
 
     After rearrange_columns() sets layer.self_attn.new_column_order,
-    this hook ensures the activation is reordered before entering o_proj.
-    Must be called AFTER add_actquant() wraps the layers.
+    this copies it to the wrapper so it's applied during forward.
+    Must be called AFTER add_actquant() and rearrange_columns().
     """
     from promix.quantize.quant_utils import ActQuantWrapper
 
     for layer in model.model.layers:
         o_proj = layer.self_attn.o_proj
         if isinstance(o_proj, ActQuantWrapper):
-            attn = layer.self_attn
-
-            def make_hook(attn_ref):
-                def hook(module, args):
-                    order = attn_ref.new_column_order
-                    if order is not None:
-                        x = args[0]
-                        return (x[..., order],) + args[1:]
-                    return args
-                return hook
-
-            o_proj.register_forward_pre_hook(make_hook(attn))
+            order = getattr(layer.self_attn, 'new_column_order', None)
+            o_proj._column_order = order

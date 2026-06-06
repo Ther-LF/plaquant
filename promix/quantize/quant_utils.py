@@ -220,8 +220,10 @@ class ActQuantWrapper(nn.Module):
             x = self.quantizer(x).to(x_dtype)
             self.quantizer.free()
 
-        if column_order is not None:
-            x = x[..., column_order]
+        # Apply column reordering (from rearrange_columns)
+        order = column_order if column_order is not None else getattr(self, '_column_order', None)
+        if order is not None:
+            x = x[..., order]
 
         x = self.module(x).to(x_dtype)
 
