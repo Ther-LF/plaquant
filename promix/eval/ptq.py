@@ -1,23 +1,25 @@
-"""ProMix PTQ evaluation — main entry point.
-
-Equivalent to project-resq/fake_quant/ptq.py but using our model plugin architecture.
-For Phase 1, delegates most logic to project-resq's eval_utils/main.py (ptq_model).
+"""ProMix PTQ evaluation — fully independent of project-resq.
 
 Usage:
     python -m promix.eval.ptq --config promix/configs/llama-3.2-1b-resq.yaml
 """
 
-import sys
-import os
 import argparse
+import json
+import os
 
 import torch
+import transformers
 import yaml
 
-# Add project-resq to path
-_resq_path = os.path.join(os.path.dirname(__file__), '../../project-resq/fake_quant')
-if _resq_path not in sys.path:
-    sys.path.insert(0, _resq_path)
+from promix.utils import DEV, cleanup_memory
+from promix.models.loader import load_model, install_column_order_hooks
+from promix.quantize.fuse_norm import fuse_layer_norms
+from promix.quantize.rotation import fuse_basis_to_model, rearrange_columns
+from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
+from promix.quantize.hadamard import get_hadK
+from promix.eval.evaluator import evaluate_ppl
+from promix.eval.data import get_wikitext2
 
 
 def load_config(config_path):
@@ -25,136 +27,148 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def configure_quantizers(model, config):
+    """Configure activation quantizers on all wrapped layers."""
+    qcfg = config['quantize']
+    model_dim = model.config.hidden_size
+    num_heads = model.config.num_attention_heads
+    head_dim = model_dim // num_heads
+    high_fraction = qcfg['high_fraction']
+    low_fraction = qcfg.get('low_fraction', 0.0)
+    high_bits_length = int(high_fraction * model_dim)
+    low_bits_length = int(low_fraction * model_dim)
+
+    qlayers = find_qlayers(model, layers=[ActQuantWrapper])
+    for name in qlayers:
+        layer_bits = qcfg['a_bits']
+        layer_groupsize = -1
+        layer_sym = not qcfg.get('a_asym', True)
+        layer_high_length = high_bits_length
+        layer_low_length = low_bits_length
+
+        if "v_proj" in name and qcfg.get('v_bits', 16) < 16:
+            v_groupsize = head_dim
+            v_high = int(v_groupsize * high_fraction)
+            v_low = int(v_groupsize * low_fraction)
+            qlayers[name].out_quantizer.configure(
+                bits=qcfg['v_bits'],
+                groupsize=v_groupsize,
+                sym=not qcfg.get('v_asym', True),
+                high_bits_length=v_high,
+                high_bits=qcfg['high_bits'],
+                low_bits_length=v_low,
+                low_bits=qcfg['low_bits'],
+            )
+
+        if "o_proj" in name:
+            layer_groupsize = head_dim
+            layer_high_length = int(head_dim * high_fraction)
+            layer_low_length = int(head_dim * low_fraction)
+
+        if "lm_head" in name:
+            layer_bits = 16
+            layer_high_length = 0
+            layer_low_length = 0
+
+        if "down_proj" in name:
+            layer_high_length = 0
+            layer_low_length = 0
+
+        qlayers[name].quantizer.configure(
+            bits=layer_bits,
+            groupsize=layer_groupsize,
+            sym=layer_sym,
+            clip_ratio=1.0,
+            high_bits_length=layer_high_length,
+            high_bits=qcfg['high_bits'],
+            low_bits_length=layer_low_length,
+            low_bits=qcfg['low_bits'],
+        )
+
+
+def setup_down_proj_hadamard(model):
+    """Set online Hadamard rotation for down_proj layers."""
+    qlayers = find_qlayers(model, layers=[ActQuantWrapper])
+    for name in qlayers:
+        if "down_proj" in name:
+            had_K, K = get_hadK(model.config.intermediate_size)
+            qlayers[name].online_full_had = True
+            qlayers[name].had_K = had_K
+            qlayers[name].K = K
+            qlayers[name].fp32_had = True
+
+
 def main():
     parser = argparse.ArgumentParser(description="ProMix PTQ Evaluation")
-    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
+    parser.add_argument("--config", type=str, required=True)
     args = parser.parse_args()
 
-    yaml_config = load_config(args.config)
-    print(f"ProMix PTQ Evaluation")
-    print(f"  Model: {yaml_config['model']['name']}")
-    print(f"  Type: {yaml_config['model']['type']}")
-    print(f"  Quantize: a_bits={yaml_config['quantize']['a_bits']}, high_bits={yaml_config['quantize']['high_bits']}")
-    print(f"  High fraction: {yaml_config['quantize']['high_fraction']}")
+    config = load_config(args.config)
+    print(f"ProMix PTQ Evaluation (independent)")
+    print(f"  Model: {config['model']['name']}")
+    print(f"  Quantize: a_bits={config['quantize']['a_bits']}, high_bits={config['quantize']['high_bits']}")
+    print(f"  High fraction: {config['quantize']['high_fraction']}")
     print()
 
-    # For Phase 1: delegate to project-resq's ptq_model function
-    # This ensures we get identical results to validate our pipeline
-    from utils.process_args import process_args_ptq
-    from eval_utils.main import ptq_model
-    from eval_utils.modeling_llama_2 import LlamaForCausalLM
-    from transformers import AutoTokenizer
-
-    # Change to fake_quant directory (ResQ's imports assume cwd = fake_quant)
-    os.chdir(_resq_path)
-
-    # Use ResQ's process_args_ptq to construct args (ensures 100% match)
-    import sys
-    saved_argv = sys.argv
-    sys.argv = ['ptq.py',
-        '--input_model', yaml_config['model']['name'],
-        '--per_device_eval_batch_size', str(yaml_config['eval']['batch_size']),
-        '--model_max_length', str(yaml_config['eval']['max_length']),
-        '--fp16', 'True', '--bf16', 'False',
-        '--w_bits', str(yaml_config['quantize']['w_bits']),
-        '--a_bits', str(yaml_config['quantize']['a_bits']),
-        '--k_bits', str(yaml_config['quantize']['k_bits']),
-        '--v_bits', str(yaml_config['quantize']['v_bits']),
-        '--high_bits', str(yaml_config['quantize']['high_bits']),
-        '--low_bits', str(yaml_config['quantize']['low_bits']),
-        '--w_clip', '--a_asym', '--k_asym', '--v_asym',
-        '--k_groupsize', str(yaml_config['quantize']['k_groupsize']),
-        '--v_groupsize', str(yaml_config['quantize']['v_groupsize']),
-        '--high_fraction', str(yaml_config['quantize']['high_fraction']),
-        '--low_fraction', str(yaml_config['quantize']['low_fraction']),
-        '--rotate_mode', yaml_config['quantize']['rotate_mode'],
-        '--optimized_rotation_path', yaml_config['paths']['rotation'],
-        '--optimized_basis_path', yaml_config['paths']['basis'],
-        '--rotation_granularity', yaml_config['quantize']['rotation_granularity'],
-        '--rotate',
-        '--output_dir', yaml_config['paths']['output_dir'],
-    ]
-    from utils.process_args import process_args_ptq
-    model_args, training_args, ptq_args = process_args_ptq()
-    sys.argv = saved_argv
-
-    # Initialize distributed if not already done (torchrun handles this normally)
+    # Initialize distributed (needed for rotation barrier)
     if not torch.distributed.is_initialized():
         torch.distributed.init_process_group(
-            backend='nccl', init_method='env://',
-            world_size=1, rank=0)
+            backend='nccl', init_method='env://', world_size=1, rank=0)
 
-    # Load model (must untie word embeddings before rotation, matching ResQ ptq.py line 308-310)
+    transformers.set_seed(config['calibration'].get('seed', 0))
+
+    # 1. Load model
     print("Loading model...")
-    from transformers import AutoConfig
-    config = AutoConfig.from_pretrained(model_args.input_model)
-    process_word_embeddings = False
-    if config.tie_word_embeddings:
-        config.tie_word_embeddings = False
-        process_word_embeddings = True
-    dtype = torch.float16
-    model = LlamaForCausalLM.from_pretrained(
-        model_args.input_model,
-        torch_dtype=dtype,
-        config=config,
-    ).cuda()
+    model = load_model(config['model']['name'], dtype=torch.float16)
 
-    # Clone embed_tokens to lm_head (ResQ ptq.py line 334)
-    if process_word_embeddings:
-        model.lm_head.weight.data = model.model.embed_tokens.weight.data.clone()
+    # 2. Fuse layer norms
+    print("Fusing layer norms...")
+    fuse_layer_norms(model)
 
-    # Reset basis_change to identity (ResQ ptq.py line 336-337)
-    for name, m in model.named_modules():
-        if "basis_change" in name:
-            m.weight.data.copy_(torch.eye(model.config.hidden_size))
+    # 3. Fuse basis + rotation into weights
+    print("Fusing basis and rotation...")
+    fuse_basis_to_model(
+        model,
+        basis_path=config['paths']['basis'],
+        rotation_path=config['paths']['rotation'],
+        high_fraction=config['quantize']['high_fraction'],
+        low_fraction=config['quantize'].get('low_fraction', 0.0),
+    )
 
-    # Run PTQ (pass model_args for calibration data loading)
-    print("Running PTQ pipeline...")
-    model = ptq_model(ptq_args, model, model_args)
+    # 4. Rearrange columns
+    rearrange_columns(
+        model,
+        high_fraction=config['quantize']['high_fraction'],
+        low_fraction=config['quantize'].get('low_fraction', 0.0),
+    )
+    cleanup_memory()
 
-    # Debug: print model/quantizer state after ptq_model
-    print("\n=== DEBUG: Model state after ptq_model ===")
-    print(f"embed_tokens device: {model.model.embed_tokens.weight.device}")
-    print(f"lm_head device: {model.lm_head.weight.device}")
-    print(f"norm device: {model.model.norm.weight.device}")
-    for i, layer in enumerate(model.model.layers[:2]):
-        print(f"\nLayer {i}:")
-        qp = layer.self_attn.q_proj
-        print(f"  q_proj type: {type(qp).__name__}")
-        if hasattr(qp, 'quantizer'):
-            q = qp.quantizer
-            print(f"  q_proj.quantizer: bits={q.bits}, high_bits={q.high_bits}, high_bits_length={q.high_bits_length}, low_bits={q.low_bits}, low_bits_length={q.low_bits_length}")
-            print(f"  q_proj.online_full_had={qp.online_full_had}")
-        if hasattr(qp, 'module'):
-            print(f"  q_proj.module.weight: device={qp.module.weight.device}, shape={qp.module.weight.shape}")
-        dp = layer.mlp.down_proj
-        if hasattr(dp, 'quantizer'):
-            q = dp.quantizer
-            print(f"  down_proj.quantizer: bits={q.bits}, high_bits={q.high_bits}, high_bits_length={q.high_bits_length}")
-            print(f"  down_proj.online_full_had={dp.online_full_had}")
-    print("=== END DEBUG ===\n")
+    # 5. Add quantization wrappers
+    add_actquant(model)
+    setup_down_proj_hadamard(model)
+    install_column_order_hooks(model)
 
-    # Set seqlen after ptq_model (matching ResQ ptq.py line 393)
-    model.seqlen = training_args.model_max_length
-    ptq_args.vision_lm = False
-    ptq_args.model_name = model_args.input_model.split('/')[-1]
+    # 6. Configure quantizers
+    configure_quantizers(model, config)
 
-    # Evaluate
-    print("Evaluating wikitext perplexity...")
-    from utils.data_utils import get_wikitext2
-    from utils.eval_utils import evaluator as ppl_evaluator
-    from utils import utils
-
-    tokenizer = AutoTokenizer.from_pretrained(model_args.input_model)
-    model.config.use_cache = False
-    testloader = get_wikitext2(seed=ptq_args.seed, seqlen=model.seqlen, tokenizer=tokenizer, eval_mode=True, vision=False)
-    ppl = ppl_evaluator(model, testloader, utils.DEV, ptq_args)
+    # 7. Evaluate PPL
+    print("\nEvaluating wikitext perplexity...")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config['model']['name'])
+    model.seqlen = config['eval']['max_length']
+    testloader = get_wikitext2(
+        seed=config['calibration'].get('seed', 0),
+        seqlen=model.seqlen,
+        tokenizer=tokenizer,
+        eval_mode=True,
+    )
+    ppl = evaluate_ppl(model, testloader, DEV, batch_size=config['eval']['batch_size'])
     print(f"\n{'='*50}")
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
 
-    # lm-eval benchmarks
-    tasks_str = ",".join(yaml_config['eval'].get('tasks', []))
+    # 8. lm-eval benchmarks
+    tasks_str = ",".join(config['eval'].get('tasks', []))
+    t_results = None
     if tasks_str:
         print(f"\nRunning lm-eval tasks: {tasks_str}")
         from lm_eval import evaluator as lm_evaluator
@@ -163,29 +177,26 @@ def main():
         import datasets as hf_datasets
         hf_datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
-        model.to(utils.DEV)
+        model.to(DEV)
         lm = HFLM(pretrained=model, tokenizer=tokenizer)
-        lm._device = utils.DEV
-
+        lm._device = DEV
         t_results = lm_evaluator.simple_evaluate(
             lm,
             tasks=tasks_str.split(","),
-            num_fewshot=yaml_config['eval'].get('num_fewshot', 0),
-            batch_size=yaml_config['eval'].get('batch_size', 1),
+            num_fewshot=config['eval'].get('num_fewshot', 0),
+            batch_size=config['eval'].get('batch_size', 1),
         )
         print(make_table(t_results))
-    else:
-        t_results = None
 
-    # Save results
-    os.makedirs(yaml_config['paths']['output_dir'], exist_ok=True)
-    import json
+    # 9. Save results
+    output_dir = config['paths']['output_dir']
+    os.makedirs(output_dir, exist_ok=True)
     results = {"wikitext2_ppl": ppl}
     if t_results and "results" in t_results:
         results["lm_eval"] = t_results["results"]
-    with open(os.path.join(yaml_config['paths']['output_dir'], 'results.json'), 'w') as f:
+    with open(os.path.join(output_dir, 'results.json'), 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"Results saved to {yaml_config['paths']['output_dir']}/results.json")
+    print(f"Results saved to {output_dir}/results.json")
 
 
 if __name__ == "__main__":

@@ -1,27 +1,215 @@
-"""Rotation utilities — apply PCA basis and optimized rotation to model.
+"""Rotation utilities — fuse PCA basis + rotation into model weights.
 
-Wraps project-resq's rotation_utils which handles:
-- Loading PCA basis (U matrix)
-- Loading optimized rotation (R matrix)
-- Fusing basis into model weights
-- Rearranging columns by variance ordering
+Handles the full_shared rotation granularity:
+- Single U_attn matrix shared across all layers for attention/MLP inputs
+- Per-layer U_value for value projection
+- Rearranges o_proj columns for mixed-precision grouping
 """
 
-import sys
-import os
+import torch
+from tqdm import tqdm
 
-_resq_path = os.path.join(os.path.dirname(__file__), '../../project-resq/fake_quant')
-if _resq_path not in sys.path:
-    sys.path.insert(0, _resq_path)
+from promix.utils import cleanup_memory
+from promix.quantize.hadamard import matmul_hadU_cuda, get_hadK
 
-from eval_utils.rotation_utils import (
-    fuse_basis_to_model,
-    rotate_model,
-    rearrange_columns,
-)
 
-__all__ = [
-    'fuse_basis_to_model',
-    'rotate_model',
-    'rearrange_columns',
-]
+def rotate_embeddings(model, R1):
+    for W in [model.model.embed_tokens]:
+        dtype = W.weight.data.dtype
+        W_ = W.weight.data.to(device="cuda", dtype=torch.float64)
+        W.weight.data = torch.matmul(W_, R1).to(device="cpu", dtype=dtype)
+
+
+def rotate_head(model, R1):
+    W = model.lm_head
+    dtype = W.weight.data.dtype
+    W_ = W.weight.data.to(device="cuda", dtype=torch.float64)
+    W.weight.data = torch.matmul(W_, R1).to(device="cpu", dtype=dtype)
+
+
+def rotate_attention_inputs(layer, R1):
+    for W in [layer.self_attn.q_proj, layer.self_attn.k_proj, layer.self_attn.v_proj]:
+        dtype = W.weight.dtype
+        W_ = W.weight.to(device="cuda", dtype=torch.float64)
+        W.weight.data = torch.matmul(W_, R1).to(device="cpu", dtype=dtype)
+
+
+def rotate_attention_output(layer, R1):
+    W = layer.self_attn.o_proj
+    dtype = W.weight.data.dtype
+    W_ = W.weight.data.to(device="cuda", dtype=torch.float64)
+    W.weight.data = torch.matmul(R1.T, W_).to(device="cpu", dtype=dtype)
+    if W.bias is not None:
+        b = W.bias.data.to(device="cuda", dtype=torch.float64)
+        W.bias.data = torch.matmul(R1.T, b).to(device="cpu", dtype=dtype)
+
+
+def rotate_mlp_input(layer, R1):
+    for W in [layer.mlp.up_proj, layer.mlp.gate_proj]:
+        dtype = W.weight.dtype
+        W_ = W.weight.data.to(device="cuda", dtype=torch.float64)
+        W.weight.data = torch.matmul(W_, R1).to(device="cpu", dtype=dtype)
+
+
+def rotate_mlp_output(layer, R1):
+    W = layer.mlp.down_proj
+    dtype = W.weight.data.dtype
+    W_ = W.weight.data.to(device="cuda", dtype=torch.float64)
+    W.weight.data = torch.matmul(R1.T, W_).to(device="cpu", dtype=dtype)
+    if W.bias is not None:
+        b = W.bias.data.to(device="cuda", dtype=torch.float64)
+        W.bias.data = torch.matmul(R1.T, b).to(device="cpu", dtype=dtype)
+
+
+def rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True):
+    """Rotate v_proj output and o_proj input by per-head U_value."""
+    v_proj = layer.self_attn.v_proj
+    o_proj = layer.self_attn.o_proj
+
+    # v_proj: output rotation (right multiply on transposed weight)
+    _apply_had_to_linear(v_proj, head_dim, output=True, R2=U_value, per_head=per_head)
+    # o_proj: input rotation (right multiply on weight with inverse)
+    _apply_had_to_linear(o_proj, head_dim, output=False, R2=U_value, per_head=per_head)
+
+
+def _apply_had_to_linear(module, had_dim, output, R2, per_head):
+    """Apply rotation R2 to a linear layer along head_dim blocks."""
+    W_ = module.weight.data.float().cuda()
+    dtype = module.weight.data.dtype
+    dev = module.weight.data.device
+    hadK = R2.to(torch.float64)
+
+    if output:
+        W_ = W_.t()
+        transposed_shape = W_.shape
+        temp = W_.reshape(-1, transposed_shape[-1] // had_dim, had_dim)
+        if per_head:
+            num_heads = transposed_shape[-1] // had_dim
+            for i in range(num_heads):
+                temp[:, i, :] = temp[:, i, :].to(torch.float64) @ hadK[i]
+        else:
+            temp = temp.to(torch.float64) @ hadK
+        W_ = temp.reshape(transposed_shape).t()
+    else:
+        init_shape = W_.shape
+        temp = W_.reshape(-1, init_shape[-1] // had_dim, had_dim)
+        if per_head:
+            num_kv_heads = hadK.shape[0]
+            num_kv_groups = init_shape[0] // (had_dim * num_kv_heads)
+            for i in range(num_kv_heads):
+                for j in range(num_kv_groups):
+                    idx = j + num_kv_groups * i
+                    try:
+                        inverse = torch.inverse(hadK[i]).t()
+                    except torch._C._LinAlgError:
+                        inverse = hadK[i]
+                    temp[:, idx, :] = temp[:, idx, :].to(torch.float64) @ inverse
+        else:
+            temp = temp.to(torch.float64) @ torch.inverse(hadK).t()
+        W_ = temp.reshape(init_shape)
+
+    module.weight.data = W_.to(device=dev, dtype=dtype)
+
+
+def rearrange_columns(model, high_fraction, low_fraction=0.0):
+    """Rearrange o_proj columns so [low|main|high] are physically contiguous."""
+    head_dim = model.config.hidden_size // model.config.num_attention_heads
+    high_bits_length = int(high_fraction * model.config.hidden_size)
+    low_bits_length = int(low_fraction * model.config.hidden_size)
+
+    for layer in tqdm(model.model.layers, desc="Rearranging o_proj"):
+        _rearrange_o_proj(layer, high_bits_length, low_bits_length, head_dim)
+
+
+def _rearrange_o_proj(layer, high_bits_length, low_bits_length, head_dim):
+    """Rearrange o_proj weight columns: [low|main|high] contiguous layout."""
+    o_proj = layer.self_attn.o_proj
+    in_dim = o_proj.weight.shape[-1]
+    num_replicated_heads = in_dim // head_dim
+    high_per_head = high_bits_length // num_replicated_heads
+    low_per_head = low_bits_length // num_replicated_heads
+
+    chunk_starts = torch.arange(0, in_dim, head_dim)
+
+    # High-precision columns (end of each head) → move to end
+    high_cols = (chunk_starts.unsqueeze(1) + torch.arange(head_dim - high_per_head, head_dim)).flatten()
+
+    # Low-precision columns (start of each head) → move to beginning
+    low_cols = (chunk_starts.unsqueeze(1) + torch.arange(0, low_per_head)).flatten() if low_per_head > 0 else torch.tensor([], dtype=torch.long)
+
+    all_columns = torch.arange(in_dim)
+    mask = torch.ones(in_dim, dtype=torch.bool)
+    mask[high_cols] = False
+    if len(low_cols) > 0:
+        mask[low_cols] = False
+    remaining = all_columns[mask]
+
+    if len(low_cols) > 0:
+        new_column_order = torch.cat([low_cols, remaining, high_cols])
+    else:
+        new_column_order = torch.cat([remaining, high_cols])
+
+    # Rearrange weight columns
+    o_proj.weight.data = o_proj.weight.data[:, new_column_order]
+    # Store order for runtime rearrangement of attention output
+    layer.self_attn.new_column_order = new_column_order
+
+
+def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fraction=0.0):
+    """Fuse PCA basis + rotation into model weights (full_shared mode).
+
+    After this call:
+    - embed_tokens output is in rotated coordinate system
+    - All linear weights absorb the rotation
+    - Residual stream stays in rotated coordinates throughout
+    """
+    config = model.config
+    num_heads = config.num_attention_heads
+    model_dim = config.hidden_size
+    head_dim = model_dim // num_heads
+    high_bits_length = int(high_fraction * model_dim)
+
+    # Load basis and rotation
+    U_cpk = torch.load(basis_path, weights_only=False)
+    U_attn = U_cpk["attn_mlp"].cuda()
+
+    R_dict = torch.load(rotation_path, weights_only=False)
+    R1_1 = R_dict["R1_1"].cuda().to(torch.float64)
+    R1_2 = R_dict["R1_2"].cuda().to(torch.float64)
+    assert R1_2.shape[0] == high_bits_length
+
+    R1 = torch.block_diag(R1_1, R1_2)
+    R1_0 = R_dict["R1_0"]
+    if R1_0 is not None:
+        R1 = torch.block_diag(R1_0.cuda().to(torch.float64), R1)
+
+    # Combine: T = U × R
+    U_attn = torch.matmul(U_attn, R1)
+
+    torch.distributed.barrier()
+
+    # Rotate all model weights
+    rotate_embeddings(model, U_attn)
+    rotate_head(model, U_attn)
+    cleanup_memory()
+
+    # Per-layer rotations
+    layers = model.model.layers
+    R2_1 = R_dict["R2_1"].cuda().to(torch.float64)
+    R2_2 = R_dict["R2_2"].cuda().to(torch.float64)
+    R2 = torch.block_diag(R2_1, R2_2)
+    R2_0 = R_dict["R2_0"]
+    if R2_0 is not None:
+        R2 = torch.block_diag(R2_0.cuda().to(torch.float64), R2)
+
+    for idx, layer in enumerate(tqdm(layers, desc="Rotating layers")):
+        rotate_attention_inputs(layer, U_attn)
+
+        # Per-layer value rotation
+        U_value = U_cpk[f"layer.{idx}.self_attn.value"].cuda()
+        U_value = torch.matmul(U_value, R2)
+        rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True)
+
+        rotate_attention_output(layer, U_attn)
+        rotate_mlp_input(layer, U_attn)
+        rotate_mlp_output(layer, U_attn)
