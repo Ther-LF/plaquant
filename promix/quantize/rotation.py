@@ -59,6 +59,13 @@ def rotate_mlp_output(layer, R1):
     if W.bias is not None:
         b = W.bias.data.to(device="cuda", dtype=torch.float64)
         W.bias.data = torch.matmul(R1.T, b).to(device="cpu", dtype=dtype)
+    # Apply Hadamard to input side of down_proj weight
+    # This pairs with the online_full_had applied to activation at runtime
+    had_K, K = get_hadK(W.weight.data.shape[-1])
+    dev = W.weight.data.device
+    W_ = W.weight.data.float().cuda()
+    W_ = matmul_hadU_cuda(W_, had_K, K)
+    W.weight.data = W_.to(device=dev, dtype=dtype)
 
 
 def rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True):
