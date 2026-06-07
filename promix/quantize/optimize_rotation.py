@@ -4,9 +4,6 @@ Optimizes orthogonal rotation matrices R1 (hidden dim) and R2 (head dim)
 on the Stiefel manifold using Cayley-transform SGD. The rotation is trained
 to minimize LM loss after basis reordering, making quantization more effective.
 
-This uses project-resq's modified Llama model (with trainable RotateModules)
-and SGDG optimizer for Stiefel manifold optimization.
-
 Usage:
     python -m promix.quantize.optimize_rotation --config promix/configs/llama-3.2-1b-resq.yaml
 """
@@ -15,6 +12,7 @@ import os
 import sys
 import datetime
 import random
+from typing import Any, Dict
 
 import datasets
 import numpy as np
@@ -25,21 +23,18 @@ from transformers import (
     AutoConfig,
     AutoTokenizer,
     Trainer,
+    TrainingArguments,
     default_data_collator,
 )
 
-# Add project-resq to path for model/optimizer imports
-_resq_path = os.path.join(os.path.dirname(__file__), '../../project-resq/fake_quant')
-if _resq_path not in sys.path:
-    sys.path.insert(0, _resq_path)
-
-from train_utils.modeling_llama_train import LlamaForCausalLM
-from train_utils.optimizer import SGDG
-from train_utils.main import prepare_model
-from train_utils.fsdp_trainer import FSDPTrainer
-from utils.data_utils import CustomJsonDataset, get_wikitext2
-from utils.hadamard_utils import random_orthogonal_matrix
-from utils import utils, data_utils, eval_utils
+from promix.train.modeling_llama_train import LlamaForCausalLM
+from promix.train.optimizer import SGDG
+from promix.quantize.hadamard import random_orthogonal_matrix, get_hadK, matmul_hadU_cuda
+from promix.quantize.fuse_norm import fuse_layer_norms
+from promix.quantize.rotation import fuse_basis_to_model
+from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
+from promix.utils import DEV, cleanup_memory
+from promix.eval.data import get_wikitext2
 
 
 class RotateModule(torch.nn.Module):
@@ -62,6 +57,26 @@ def seed_everything(seed):
     random.seed(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+
+
+@torch.no_grad()
+def _evaluate_ppl_cuda(model, testenc, seqlen, batch_size=8):
+    """Simple on-GPU PPL evaluation (model stays on CUDA)."""
+    from tqdm import tqdm
+    model.eval()
+    input_ids = testenc.input_ids
+    nsamples = input_ids.numel() // seqlen
+    input_ids = input_ids[:, :nsamples * seqlen].view(nsamples, seqlen).cuda()
+    batches = [input_ids[i:i + batch_size] for i in range(0, nsamples, batch_size)]
+    nlls = []
+    loss_fct = torch.nn.CrossEntropyLoss()
+    for batch in tqdm(batches, desc="(Eval) Batches"):
+        lm_logits = model(batch).logits
+        shift_logits = lm_logits[:, :-1, :]
+        shift_labels = batch[:, 1:]
+        loss = loss_fct(shift_logits.permute(0, 2, 1), shift_labels)
+        nlls.append(loss.float())
+    return torch.exp(torch.stack(nlls).mean()).item()
 
 
 def optimize_rotation(
@@ -140,44 +155,49 @@ def optimize_rotation(
     if process_word_embeddings:
         model.lm_head.weight.data = model.model.embed_tokens.weight.data.clone()
 
-    # Prepare model (fuse norms, add quant wrappers, fuse basis)
-    # Build args namespace for prepare_model
-    from argparse import Namespace
-    ptq_args = Namespace(
-        seed=seed,
-        rotate_mode="resq",
-        high_fraction=high_fraction,
-        low_fraction=low_fraction,
-        sparse_fraction=sparse_fraction,
-        rotation_granularity=rotation_granularity,
-        optimized_basis_path=basis_path,
-        optimized_rotation_path=output_dir,
-        train_rotations=True,
-        w_bits=16,
-        a_bits=16,
-        k_bits=k_bits,
-        v_bits=v_bits,
-        a_groupsize=128,
-        k_groupsize=k_groupsize,
-        v_groupsize=v_groupsize,
-        a_asym=True,
-        k_asym=True,
-        v_asym=True,
-        a_clip_ratio=1.0,
-        k_clip_ratio=1.0,
-        v_clip_ratio=1.0,
-        w_clip=True,
-        high_bits=high_bits,
-        low_bits=low_bits,
-        int8_down_proj=False,
-        k_pre_rope=False,
-        fp32_had=True,
-        down_proj_blocksize=256,
-        bsz=eval_batch_size,
-        capture_layer_io=False,
-        layer_idx=0,
+    # Prepare model for training: fuse norms, fuse basis (without R), add quant wrappers
+    transformers.set_seed(seed)
+    model.eval()
+    fuse_layer_norms(model)
+
+    # Fuse basis WITHOUT rotation (train_rotations=True mode)
+    # Only apply U (PCA basis), not R — R will be applied dynamically in forward
+    from promix.quantize.rotation import (
+        rotate_embeddings, rotate_head, rotate_attention_inputs,
+        rotate_attention_output, rotate_mlp_input, rotate_mlp_output,
+        rotate_ov_proj,
     )
-    model, R_dict = prepare_model(ptq_args, model)
+    U_cpk = torch.load(basis_path, weights_only=False)
+    U_attn = U_cpk["attn_mlp"].cuda()
+
+    torch.distributed.barrier()
+    rotate_embeddings(model, U_attn)
+    rotate_head(model, U_attn)
+    cleanup_memory()
+
+    num_heads_model = model.config.num_attention_heads
+    head_dim_model = model.config.hidden_size // num_heads_model
+
+    for idx, layer in enumerate(model.model.layers):
+        rotate_attention_inputs(layer, U_attn)
+        U_value = U_cpk[f"layer.{idx}.self_attn.value"].cuda()
+        rotate_ov_proj(layer, num_heads_model, head_dim_model, U_value, per_head=True)
+        rotate_attention_output(layer, U_attn)
+        rotate_mlp_input(layer, U_attn)
+        rotate_mlp_output(layer, U_attn)
+
+    cleanup_memory()
+    add_actquant(model)
+    qlayers = find_qlayers(model, layers=[ActQuantWrapper])
+    for name in qlayers:
+        if "down_proj" in name:
+            had_K, K = get_hadK(model.config.intermediate_size)
+            qlayers[name].online_full_had = True
+            qlayers[name].had_K = had_K
+            qlayers[name].K = K
+            qlayers[name].fp32_had = True
+
+    R_dict = {}
 
     # Model dimensions
     model_dim = model.config.hidden_size
@@ -233,10 +253,11 @@ def optimize_rotation(
     # Pre-training PPL evaluation
     testloader = get_wikitext2(seed=seed, seqlen=2048, tokenizer=tokenizer, eval_mode=True)
     with torch.no_grad():
-        ppl_before = eval_utils.evaluator_cuda(model, testloader, utils.DEV, ptq_args)
+        ppl_before = _evaluate_ppl_cuda(model, testloader, seqlen, eval_batch_size)
     print(f"PPL before optimization: {ppl_before:.2f}")
 
     # Training dataset
+    from promix.eval.data import CustomJsonDataset
     calibration_datasets = datasets.load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1")
     train_data = CustomJsonDataset(
         calibration_datasets["train"], tokenizer, block_size=min(seqlen, 2048)
@@ -348,7 +369,7 @@ def optimize_rotation(
     # Post-training PPL evaluation
     dist.barrier()
     with torch.no_grad():
-        ppl_after = eval_utils.evaluator_cuda(model, testloader, utils.DEV, ptq_args)
+        ppl_after = _evaluate_ppl_cuda(model, testloader, seqlen, eval_batch_size)
     print(f"PPL after optimization: {ppl_after:.2f}")
     print(f"PPL improvement: {ppl_before - ppl_after:.4f}")
 
