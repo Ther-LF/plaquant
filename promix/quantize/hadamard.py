@@ -1,12 +1,17 @@
 """Hadamard transform utilities for ProMix.
 
 Uses fast_hadamard_transform library for power-of-2 dimensions.
-For non-power-of-2 intermediate sizes, falls back to pre-computed matrices.
+For non-power-of-2 intermediate sizes, loads pre-computed Hadamard matrices.
 """
+
+import json
+import os
 
 import torch
 
 from promix.utils import HadamardTransform
+
+_DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def is_pow2(n):
@@ -18,7 +23,7 @@ def get_hadK(n, transpose=False):
 
     For power-of-2 dimensions (most modern LLMs), returns (None, 1)
     meaning fast_hadamard_transform handles everything.
-    For non-power-of-2, returns a pre-computed orthogonal matrix.
+    For non-power-of-2, returns a pre-computed Hadamard matrix.
     """
     if is_pow2(n):
         return None, 1
@@ -26,11 +31,6 @@ def get_hadK(n, transpose=False):
     for K in [172, 156, 140, 108, 60, 52, 44, 40, 36, 28, 20, 12]:
         if n % K == 0 and is_pow2(n // K):
             hadK = _get_hadamard_matrix(K)
-            return (hadK.T if transpose else hadK), K
-
-    for K in [231, 37, 38]:
-        if n % K == 0 and is_pow2(n // K):
-            hadK = _get_random_orthogonal_cached(K)
             return (hadK.T if transpose else hadK), K
 
     raise ValueError(f"Cannot find Hadamard decomposition for n={n}")
@@ -60,17 +60,22 @@ _hadamard_cache = {}
 
 
 def _get_hadamard_matrix(K):
+    """Get pre-computed Hadamard matrix of order K."""
     if K in _hadamard_cache:
         return _hadamard_cache[K]
-    torch.manual_seed(K)
-    had = random_orthogonal_matrix(K, "cpu").float()
-    _hadamard_cache[K] = had
-    return had
 
+    data_path = os.path.join(_DATA_DIR, "hadamard_data.json")
+    key = f"had{K}"
 
-def _get_random_orthogonal_cached(K):
-    key = f"orth_{K}"
-    if key not in _hadamard_cache:
-        torch.manual_seed(42 + K)
-        _hadamard_cache[key] = random_orthogonal_matrix(K, "cpu").float()
-    return _hadamard_cache[key]
+    if os.path.exists(data_path):
+        with open(data_path, 'r') as f:
+            data = json.load(f)
+        if key in data:
+            had = torch.tensor(data[key], dtype=torch.float32)
+            _hadamard_cache[K] = had
+            return had
+
+    raise ValueError(
+        f"No pre-computed Hadamard matrix for K={K}. "
+        f"Please add '{key}' to {data_path}."
+    )
