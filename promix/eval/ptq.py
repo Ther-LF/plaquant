@@ -19,6 +19,7 @@ from promix.quantize.rotation import fuse_basis_to_model, rearrange_columns
 from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
 from promix.quantize.hadamard import get_hadK
 from promix.quantize.kv_quant import setup_k_quant
+from promix.quantize.gptq import gptq_fwrd
 from promix.eval.evaluator import evaluate_ppl
 from promix.eval.data import get_wikitext2
 
@@ -148,6 +149,20 @@ def main():
     add_actquant(model)
     setup_down_proj_hadamard(model)
     install_column_order_hooks(model)
+
+    # 5b. GPTQ weight quantization (if w_bits < 16)
+    if config['quantize']['w_bits'] < 16:
+        print("Running GPTQ weight quantization...")
+        from promix.eval.data import get_wikitext2 as get_wikitext2_calib
+        tokenizer_calib = transformers.AutoTokenizer.from_pretrained(config['model']['name'])
+        trainloader = get_wikitext2_calib(
+            nsamples=config['calibration'].get('nsamples', 128),
+            seed=config['calibration'].get('seed', 0),
+            seqlen=2048,
+            tokenizer=tokenizer_calib,
+            eval_mode=False,
+        )
+        gptq_fwrd(model, trainloader, DEV, config)
 
     # 6. Configure quantizers
     configure_quantizers(model, config)
