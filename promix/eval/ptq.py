@@ -18,6 +18,7 @@ from promix.quantize.fuse_norm import fuse_layer_norms
 from promix.quantize.rotation import fuse_basis_to_model, rearrange_columns
 from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
 from promix.quantize.hadamard import get_hadK
+from promix.quantize.kv_quant import setup_k_quant
 from promix.eval.evaluator import evaluate_ppl
 from promix.eval.data import get_wikitext2
 
@@ -150,6 +151,11 @@ def main():
 
     # 6. Configure quantizers
     configure_quantizers(model, config)
+
+    # 7. Setup KV cache quantization (if k_bits < 16)
+    setup_k_quant(model, config,
+                  basis_path=config['paths']['basis'],
+                  rotation_path=config['paths']['rotation'])
 
     # 7. Evaluate PPL
     print("\nEvaluating wikitext perplexity...")
