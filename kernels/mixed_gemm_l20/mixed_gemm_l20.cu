@@ -443,8 +443,42 @@ torch::Tensor baseline_cutlass_mixed_gemm(
 }
 
 // ============================================================================
-// Standalone INT4 GEMM (for real inference dequant path)
+// Standalone INT4 GEMM with FP32 output (avoids FP16 overflow)
 // ============================================================================
+
+using ElementC_F32 = float;
+
+using GemmLow_F32 = cutlass::gemm::device::Gemm<
+    mixed_gemm_l20::ElementA_Low, mixed_gemm_l20::LayoutA,
+    mixed_gemm_l20::ElementB_Low, mixed_gemm_l20::LayoutB,
+    ElementC_F32, mixed_gemm_l20::LayoutC,
+    mixed_gemm_l20::ElementAccumulator,
+    mixed_gemm_l20::OpClass, mixed_gemm_l20::ArchTag,
+    mixed_gemm_l20::ThreadblockShape_Low, mixed_gemm_l20::WarpShape_Low,
+    mixed_gemm_l20::InstructionShape_Low,
+    cutlass::epilogue::thread::LinearCombination<
+        ElementC_F32, 128 / cutlass::sizeof_bits<ElementC_F32>::value,
+        mixed_gemm_l20::ElementAccumulator, mixed_gemm_l20::ElementCompute>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    mixed_gemm_l20::kStages_Low,
+    mixed_gemm_l20::kAlignmentA_Low,
+    mixed_gemm_l20::kAlignmentB_Low>;
+
+using GemmHigh_F32 = cutlass::gemm::device::Gemm<
+    mixed_gemm_l20::ElementA_High, mixed_gemm_l20::LayoutA,
+    mixed_gemm_l20::ElementB_High, mixed_gemm_l20::LayoutB,
+    ElementC_F32, mixed_gemm_l20::LayoutC,
+    mixed_gemm_l20::ElementAccumulator,
+    mixed_gemm_l20::OpClass, mixed_gemm_l20::ArchTag,
+    mixed_gemm_l20::ThreadblockShape_High, mixed_gemm_l20::WarpShape_High,
+    mixed_gemm_l20::InstructionShape_High,
+    cutlass::epilogue::thread::LinearCombination<
+        ElementC_F32, 128 / cutlass::sizeof_bits<ElementC_F32>::value,
+        mixed_gemm_l20::ElementAccumulator, mixed_gemm_l20::ElementCompute>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    mixed_gemm_l20::kStages_High,
+    mixed_gemm_l20::kAlignmentA_High,
+    mixed_gemm_l20::kAlignmentB_High>;
 
 torch::Tensor cutlass_int4_gemm(
     torch::Tensor A,   // (M, K/2) packed INT4 as INT8
@@ -454,36 +488,37 @@ torch::Tensor cutlass_int4_gemm(
 
     int M = A.size(0);
     int N = B.size(0);
-    int K = A.size(1) * 2;  // actual K (2 elements per byte)
+    int K = A.size(1) * 2;
 
     TORCH_CHECK(A.dtype() == torch::kInt8);
     TORCH_CHECK(B.dtype() == torch::kInt8);
     TORCH_CHECK(A.is_contiguous());
     TORCH_CHECK(B.is_contiguous());
 
-    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A.device()));
+    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
 
-    using TensorRefA = typename MmaLow::IteratorA::TensorRef;
-    using TensorRefB = typename MmaLow::IteratorB::TensorRef;
-    using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
+    using TensorRefA = typename GemmLow_F32::ElementA const *;
+    using TensorRefB = typename GemmLow_F32::ElementB const *;
 
-    TensorRefA ref_A(reinterpret_cast<ElementA_Low*>(A.data_ptr()), LayoutA::packed({M, K}));
-    TensorRefB ref_B(reinterpret_cast<ElementB_Low*>(B.data_ptr()), LayoutB(K));
-    TensorRefD ref_D(reinterpret_cast<ElementC*>(D.data_ptr()), LayoutC::packed({M, N}));
-
-    typename GemmLow::Arguments args(
-        {M, N, K}, ref_A, ref_B, ref_D, ref_D,
+    typename GemmLow_F32::Arguments args(
+        {M, N, K},
+        {reinterpret_cast<ElementA_Low const*>(A.data_ptr()), K},
+        {reinterpret_cast<ElementB_Low const*>(B.data_ptr()), K},
+        {reinterpret_cast<ElementC_F32*>(D.data_ptr()), N},
+        {reinterpret_cast<ElementC_F32*>(D.data_ptr()), N},
         {ElementCompute(1.0f), ElementCompute(0.0f)});
 
-    GemmLow gemm;
-    gemm.initialize(args);
-    gemm();
+    GemmLow_F32 gemm;
+    auto status = gemm.initialize(args);
+    TORCH_CHECK(status == cutlass::Status::kSuccess, "INT4 GEMM init failed");
+    status = gemm();
+    TORCH_CHECK(status == cutlass::Status::kSuccess, "INT4 GEMM run failed");
 
     return D;
 }
 
 // ============================================================================
-// Standalone INT8 GEMM (for real inference dequant path)
+// Standalone INT8 GEMM with FP32 output
 // ============================================================================
 
 torch::Tensor cutlass_int8_gemm(
@@ -501,23 +536,21 @@ torch::Tensor cutlass_int8_gemm(
     TORCH_CHECK(A.is_contiguous());
     TORCH_CHECK(B.is_contiguous());
 
-    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A.device()));
+    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(A.device()));
 
-    using TensorRefA = typename MmaHigh::IteratorA::TensorRef;
-    using TensorRefB = typename MmaHigh::IteratorB::TensorRef;
-    using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
-
-    TensorRefA ref_A(reinterpret_cast<ElementA_High*>(A.data_ptr()), LayoutA::packed({M, K}));
-    TensorRefB ref_B(reinterpret_cast<ElementB_High*>(B.data_ptr()), LayoutB(K));
-    TensorRefD ref_D(reinterpret_cast<ElementC*>(D.data_ptr()), LayoutC::packed({M, N}));
-
-    typename GemmHigh::Arguments args(
-        {M, N, K}, ref_A, ref_B, ref_D, ref_D,
+    typename GemmHigh_F32::Arguments args(
+        {M, N, K},
+        {reinterpret_cast<ElementA_High const*>(A.data_ptr()), K},
+        {reinterpret_cast<ElementB_High const*>(B.data_ptr()), K},
+        {reinterpret_cast<ElementC_F32*>(D.data_ptr()), N},
+        {reinterpret_cast<ElementC_F32*>(D.data_ptr()), N},
         {ElementCompute(1.0f), ElementCompute(0.0f)});
 
-    GemmHigh gemm;
-    gemm.initialize(args);
-    gemm();
+    GemmHigh_F32 gemm;
+    auto status = gemm.initialize(args);
+    TORCH_CHECK(status == cutlass::Status::kSuccess, "INT8 GEMM init failed");
+    status = gemm();
+    TORCH_CHECK(status == cutlass::Status::kSuccess, "INT8 GEMM run failed");
 
     return D;
 }

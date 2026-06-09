@@ -128,19 +128,17 @@ def real_forward(wrapper, x):
         if K_high > 0:
             raw_high = (q_high_signed.float() @ wrapper.W_high_int8.float().T).half()
 
-    # 5. Dequant
-    # Formula: output = s_x * s_w * (raw + bias)
-    # bias = (shift - zero) * colsum(W)
+    # 5. Dequant (all in FP32, kernel outputs FP32)
     shift_main = 8.0
-    s_w_main = wrapper.s_w_main.flatten().unsqueeze(0)  # (1, N)
-    bias_main = (shift_main - z_x_main) * wrapper.colsum_main  # (M, 1) * (1, N) → (M, N)
-    output = s_x_main * s_w_main * (raw_main.float() + bias_main)
+    s_w_main = wrapper.s_w_main.flatten().unsqueeze(0).float()  # (1, N)
+    bias_main = (shift_main - z_x_main.float()) * wrapper.colsum_main.float()  # (M, N)
+    output = s_x_main.float() * s_w_main * (raw_main.float() + bias_main)
 
     if K_high > 0:
         shift_high = 128.0
-        s_w_high = wrapper.s_w_high.flatten().unsqueeze(0)
-        bias_high = (shift_high - z_x_high) * wrapper.colsum_high
-        output = output + s_x_high * s_w_high * (raw_high.float() + bias_high)
+        s_w_high = wrapper.s_w_high.flatten().unsqueeze(0).float()
+        bias_high = (shift_high - z_x_high.float()) * wrapper.colsum_high.float()
+        output = output + s_x_high.float() * s_w_high * (raw_high.float() + bias_high)
 
     return output.half().reshape(*init_shape[:-1], N)
 
