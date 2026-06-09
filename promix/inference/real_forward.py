@@ -14,6 +14,19 @@ from promix.inference.quant_ops import (
 )
 
 
+def _unpack_int4_to_float(packed):
+    """Unpack INT4 packed tensor to float for PyTorch fallback.
+
+    Input: (N, K//2) int8 packed
+    Output: (N, K) float
+    """
+    low = (packed & 0x0F).to(torch.int8)
+    low = torch.where(low > 7, low - 16, low)  # sign extend 4-bit
+    high = ((packed >> 4) & 0x0F).to(torch.int8)
+    high = torch.where(high > 7, high - 16, high)
+    return torch.stack([low, high], dim=-1).reshape(packed.shape[0], -1).float()
+
+
 # Global reference to compiled kernel module (set by init_kernel())
 _kernel_module = None
 
@@ -94,27 +107,24 @@ def real_forward(wrapper, x):
     if K_high > 0:
         q_high_signed = shift_to_signed(q_high, 8)  # [-128, 127]
 
-    # 4. INT GEMM
-    # Use the fused kernel (it sums main+high internally)
-    # But we need separate dequant... so use Solution A: two calls
+    # 4. INT GEMM (Solution A: separate INT4 and INT8 calls via CUTLASS SM80)
     if _kernel_module is not None:
-        raw_main = _kernel_module.fused_mixed_gemm(
-            q_main_packed,           # (M, K_main//2) int8 packed INT4
-            wrapper.W_main_packed,   # (N, K_main//2) int8 packed INT4
-            torch.zeros(M, 0, dtype=torch.int8, device=x.device),  # empty high A
-            torch.zeros(N, 0, dtype=torch.int8, device=x.device),  # empty high B
-        )  # Only runs INT4 path, K_high=0
+        raw_main = _kernel_module.cutlass_int4_gemm(
+            q_main_packed.contiguous(),        # (M, K_main//2) int8 packed
+            wrapper.W_main_packed.contiguous(), # (N, K_main//2) int8 packed
+        )  # (M, N) FP16
 
         if K_high > 0:
-            raw_high = _kernel_module.fused_mixed_gemm(
-                torch.zeros(M, 0, dtype=torch.int8, device=x.device),
-                torch.zeros(N, 0, dtype=torch.int8, device=x.device),
-                q_high_signed,           # (M, K_high) int8
-                wrapper.W_high_int8,     # (N, K_high) int8
-            )  # Only runs INT8 path, K_low=0
+            raw_high = _kernel_module.cutlass_int8_gemm(
+                q_high_signed.contiguous(),       # (M, K_high) int8
+                wrapper.W_high_int8.contiguous(), # (N, K_high) int8
+            )  # (M, N) FP16
     else:
         # Fallback: PyTorch emulation (for testing without kernel)
-        raw_main = (q_main_signed.float() @ wrapper.W_main_packed_float.T).half()
+        # Unpack INT4 for matmul
+        q_main_float = q_main_signed.float()
+        W_main_unpacked = _unpack_int4_to_float(wrapper.W_main_packed)
+        raw_main = (q_main_float @ W_main_unpacked.T).half()
         if K_high > 0:
             raw_high = (q_high_signed.float() @ wrapper.W_high_int8.float().T).half()
 

@@ -443,6 +443,86 @@ torch::Tensor baseline_cutlass_mixed_gemm(
 }
 
 // ============================================================================
+// Standalone INT4 GEMM (for real inference dequant path)
+// ============================================================================
+
+torch::Tensor cutlass_int4_gemm(
+    torch::Tensor A,   // (M, K/2) packed INT4 as INT8
+    torch::Tensor B    // (N, K/2) packed INT4 as INT8
+) {
+    using namespace mixed_gemm_l20;
+
+    int M = A.size(0);
+    int N = B.size(0);
+    int K = A.size(1) * 2;  // actual K (2 elements per byte)
+
+    TORCH_CHECK(A.dtype() == torch::kInt8);
+    TORCH_CHECK(B.dtype() == torch::kInt8);
+    TORCH_CHECK(A.is_contiguous());
+    TORCH_CHECK(B.is_contiguous());
+
+    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A.device()));
+
+    using TensorRefA = typename MmaLow::IteratorA::TensorRef;
+    using TensorRefB = typename MmaLow::IteratorB::TensorRef;
+    using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
+
+    TensorRefA ref_A(reinterpret_cast<ElementA_Low*>(A.data_ptr()), LayoutA::packed({M, K}));
+    TensorRefB ref_B(reinterpret_cast<ElementB_Low*>(B.data_ptr()), LayoutB(K));
+    TensorRefD ref_D(reinterpret_cast<ElementC*>(D.data_ptr()), LayoutC::packed({M, N}));
+
+    typename GemmLow::Arguments args(
+        {M, N, K}, ref_A, ref_B, ref_D, ref_D,
+        {ElementCompute(1.0f), ElementCompute(0.0f)});
+
+    GemmLow gemm;
+    gemm.initialize(args);
+    gemm();
+
+    return D;
+}
+
+// ============================================================================
+// Standalone INT8 GEMM (for real inference dequant path)
+// ============================================================================
+
+torch::Tensor cutlass_int8_gemm(
+    torch::Tensor A,   // (M, K) INT8
+    torch::Tensor B    // (N, K) INT8
+) {
+    using namespace mixed_gemm_l20;
+
+    int M = A.size(0);
+    int N = B.size(0);
+    int K = A.size(1);
+
+    TORCH_CHECK(A.dtype() == torch::kInt8);
+    TORCH_CHECK(B.dtype() == torch::kInt8);
+    TORCH_CHECK(A.is_contiguous());
+    TORCH_CHECK(B.is_contiguous());
+
+    auto D = torch::empty({M, N}, torch::dtype(torch::kFloat16).device(A.device()));
+
+    using TensorRefA = typename MmaHigh::IteratorA::TensorRef;
+    using TensorRefB = typename MmaHigh::IteratorB::TensorRef;
+    using TensorRefD = typename EpilogueHigh::OutputTileIterator::TensorRef;
+
+    TensorRefA ref_A(reinterpret_cast<ElementA_High*>(A.data_ptr()), LayoutA::packed({M, K}));
+    TensorRefB ref_B(reinterpret_cast<ElementB_High*>(B.data_ptr()), LayoutB(K));
+    TensorRefD ref_D(reinterpret_cast<ElementC*>(D.data_ptr()), LayoutC::packed({M, N}));
+
+    typename GemmHigh::Arguments args(
+        {M, N, K}, ref_A, ref_B, ref_D, ref_D,
+        {ElementCompute(1.0f), ElementCompute(0.0f)});
+
+    GemmHigh gemm;
+    gemm.initialize(args);
+    gemm();
+
+    return D;
+}
+
+// ============================================================================
 // Python binding
 // ============================================================================
 
@@ -451,4 +531,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused mixed-precision GEMM: INT4(low) + INT8(high) single launch");
     m.def("baseline_cutlass_mixed_gemm", &baseline_cutlass_mixed_gemm,
           "Baseline: 2x CUTLASS GEMM (INT4 + INT8) + add");
+    m.def("cutlass_int4_gemm", &cutlass_int4_gemm,
+          "Standalone INT4 GEMM (SM80 tensor core)");
+    m.def("cutlass_int8_gemm", &cutlass_int8_gemm,
+          "Standalone INT8 GEMM (SM80 tensor core)");
 }
