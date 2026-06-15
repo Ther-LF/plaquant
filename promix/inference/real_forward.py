@@ -144,18 +144,21 @@ def real_forward(wrapper, x):
 
 
 def install_real_forward(model):
-    """Replace all ActQuantWrapper forward methods with real_forward.
+    """Replace ActQuantWrapper forward methods with real_forward.
 
+    Skips layers with per-group quantization (o_proj) — they keep fake quant.
     Call after pack_model_weights().
     """
     from promix.quantize.quant_utils import ActQuantWrapper
 
     count = 0
+    skipped = 0
     for name, module in model.named_modules():
         if isinstance(module, ActQuantWrapper) and getattr(module, '_real_inference_ready', False):
-            # Store original forward for fallback
             module._fake_forward = module.forward
             module.forward = lambda x, _m=module, **kwargs: real_forward(_m, x)
             count += 1
+        elif isinstance(module, ActQuantWrapper) and module.quantizer.bits < 16:
+            skipped += 1
 
-    print(f"Installed real forward on {count} layers")
+    print(f"Installed real forward on {count} layers (skipped {skipped} per-group layers)")

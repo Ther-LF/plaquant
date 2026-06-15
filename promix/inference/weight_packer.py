@@ -31,6 +31,10 @@ def pack_model_weights(model, w_bits=4):
         if wrapper.quantizer.bits >= 16:
             continue
 
+        # Skip per-group layers (o_proj) — they keep fake quant
+        if wrapper.quantizer.groupsize > 0:
+            continue
+
         W = wrapper.module.weight.data  # (N, K)
         K = W.shape[1]
         high_len = wrapper.quantizer.high_bits_length
