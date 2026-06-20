@@ -250,6 +250,10 @@ def optimize_rotation(
     model.config.use_cache = False
     model.seqlen = seqlen
 
+    # Move model to CUDA before any forward pass (rotation modules R1/R2 were
+    # already created on cuda; this brings embed_tokens/lm_head/layers along).
+    model = model.cuda()
+
     # Pre-training PPL evaluation
     testloader = get_wikitext2(seed=seed, seqlen=2048, tokenizer=tokenizer, eval_mode=True)
     with torch.no_grad():
