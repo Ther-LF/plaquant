@@ -205,9 +205,28 @@ class ActQuantWrapper(nn.Module):
         self.K = 1
         self.online_full_had = False
         self.fp32_had = False
+        # Cache which extra kwargs the inner module's forward accepts so we
+        # can route training-time R1/R2 args through wrappers around
+        # QuantizeLinear without erroring on plain nn.Linear (e.g. lm_head).
+        try:
+            import inspect as _inspect
+            self._inner_kwargs = set(_inspect.signature(module.forward).parameters.keys())
+        except (ValueError, TypeError):
+            self._inner_kwargs = set()
 
     def forward(self, x, column_order=None, **kwargs):
         x_dtype = x.dtype
+
+        # Disambiguate the second positional arg: PTQ paths pass an int index
+        # tensor (column_order); training paths in modeling_llama_train pass
+        # a float rotation matrix R1 that needs to flow through to the inner
+        # QuantizeLinear. Same param name kept for backward compat.
+        col_order = None
+        if column_order is not None:
+            if column_order.dtype in (torch.long, torch.int, torch.int32, torch.int64, torch.uint8, torch.bool):
+                col_order = column_order
+            else:
+                kwargs.setdefault("R1", column_order)
 
         if self.online_full_had:
             if self.fp32_had:
@@ -220,12 +239,14 @@ class ActQuantWrapper(nn.Module):
             x = self.quantizer(x).to(x_dtype)
             self.quantizer.free()
 
-        # Apply column reordering (from rearrange_columns)
-        order = column_order if column_order is not None else getattr(self, '_column_order', None)
+        order = col_order if col_order is not None else getattr(self, '_column_order', None)
         if order is not None:
             x = x[..., order]
 
-        x = self.module(x).to(x_dtype)
+        # Filter kwargs to those the inner module accepts (lm_head etc. is
+        # plain nn.Linear that doesn't take R1/R2).
+        inner = {k: v for k, v in kwargs.items() if k in self._inner_kwargs}
+        x = self.module(x, **inner).to(x_dtype)
 
         if self.out_quantizer.bits < 16:
             self.out_quantizer.find_params(x)
