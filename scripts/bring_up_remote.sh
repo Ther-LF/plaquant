@@ -17,6 +17,15 @@ PROJECT_ROOT="$(pwd)"
 source "$PROJECT_ROOT/.venv/bin/activate"
 mkdir -p logs rotation
 
+# transformers 5.x has a breaking RoPE shape change vs the basis.py forward
+# path. Pin to 4.46.x. uv pip install is a no-op when version already matches.
+if python -c 'import transformers; v=transformers.__version__; assert v.startswith("4.")' 2>/dev/null; then
+    :  # already on 4.x
+else
+    echo "downgrading transformers to 4.46.3 (5.x breaks RoPE shape)"
+    uv pip install 'transformers==4.46.3' 2>&1 | tail -3
+fi
+
 # Pull HF token from ~/.bashrc if not already set
 if [ -z "$HF_TOKEN" ] && grep -q '^export HF_TOKEN=' "$HOME/.bashrc" 2>/dev/null; then
     eval "$(grep '^export HF_TOKEN=' "$HOME/.bashrc")"
