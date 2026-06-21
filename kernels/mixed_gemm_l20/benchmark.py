@@ -42,7 +42,14 @@ def benchmark_fn(fn, *args, warmup=10, iters=100):
 
 
 def run_single_config(M, N, K_high, K_low, device='cuda'):
-    """Run benchmark for a single problem size."""
+    """Run benchmark for a single problem size.
+
+    Three things are compared, all computing logically equivalent (M, N) outputs
+    with K_total = K_high + K_low contraction:
+      - Fused INT4+INT8 (our kernel)
+      - 2-launch INT (CUTLASS INT4 + INT8 baseline, also SM80 mma.sync)
+      - FP16 cuBLAS at full K_total (the real-world replacement target)
+    """
     # Generate inputs
     A_high = torch.randint(-4, 4, (M, K_high), dtype=torch.int8, device=device)
     B_high = torch.randint(-4, 4, (N, K_high), dtype=torch.int8, device=device)
@@ -51,7 +58,12 @@ def run_single_config(M, N, K_high, K_low, device='cuda'):
     A_low_packed = pack_int4(A_low_unpacked)
     B_low_packed = pack_int4(B_low_unpacked)
 
-    # Correctness check
+    # FP16 baseline operands at the full equivalent shape
+    K_total = K_high + K_low
+    A_fp16 = torch.randn(M, K_total, dtype=torch.float16, device=device)
+    B_fp16 = torch.randn(N, K_total, dtype=torch.float16, device=device)
+
+    # Correctness check (vs INT reference)
     out_fused = mixed_gemm_l20.fused_mixed_gemm(A_low_packed, B_low_packed, A_high, B_high)
     ref = (A_low_unpacked.float() @ B_low_unpacked.float().t() +
            A_high.float() @ B_high.float().t()).half()
@@ -61,7 +73,6 @@ def run_single_config(M, N, K_high, K_low, device='cuda'):
         out_fused.flatten().float(), ref.flatten().float(), dim=0).item()
     max_abs = diff.abs().max().item()
     mean_abs = diff.abs().mean().item()
-    # MAPE: avoid div by zero with eps
     mape = (diff.abs() / (ref.float().abs() + 1e-8)).mean().item() * 100
 
     # Performance
@@ -69,10 +80,12 @@ def run_single_config(M, N, K_high, K_low, device='cuda'):
                              A_low_packed, B_low_packed, A_high, B_high)
     lat_baseline = benchmark_fn(mixed_gemm_l20.baseline_cutlass_mixed_gemm,
                                 A_low_packed, B_low_packed, A_high, B_high)
+    lat_fp16 = benchmark_fn(lambda a, b: torch.matmul(a, b.t()), A_fp16, B_fp16)
 
-    total_ops = 2 * M * N * (K_low + K_high)
+    total_ops = 2 * M * N * K_total
     tops_fused = total_ops / (lat_fused * 1e-6) / 1e12
     tops_baseline = total_ops / (lat_baseline * 1e-6) / 1e12
+    tops_fp16 = total_ops / (lat_fp16 * 1e-6) / 1e12
 
     return {
         'M': M, 'N': N, 'K_high': K_high, 'K_low': K_low,
@@ -82,9 +95,12 @@ def run_single_config(M, N, K_high, K_low, device='cuda'):
         'mape': mape,
         'lat_fused': lat_fused,
         'lat_baseline': lat_baseline,
+        'lat_fp16': lat_fp16,
         'tops_fused': tops_fused,
         'tops_baseline': tops_baseline,
-        'speedup': lat_baseline / lat_fused,
+        'tops_fp16': tops_fp16,
+        'speedup_vs_baseline': lat_baseline / lat_fused,
+        'speedup_vs_fp16': lat_fp16 / lat_fused,
     }
 
 
@@ -121,21 +137,27 @@ def main():
         (256,  2048, 1024, 7168),   # down_proj large M
     ]
 
-    print(f"{'M':>4} {'N':>5} {'K_h':>4} {'K_l':>5} | {'Fused(μs)':>9} {'Base(μs)':>9} | {'Speedup':>7} | {'cos':>6} {'max_abs':>7} {'mean_abs':>8} {'MAPE%':>6}")
-    print("-" * 105)
+    print(f"{'M':>4} {'N':>5} {'K_h':>4} {'K_l':>5} | "
+          f"{'Fused':>8} {'IntBase':>8} {'FP16':>8} | "
+          f"{'vsInt':>5} {'vsFP16':>6} | "
+          f"{'TFLOPS_F':>8} {'TFLOPS16':>8} | "
+          f"{'cos':>6} {'MAPE%':>6}")
+    print("-" * 120)
 
     for M, N, K_high, K_low in test_cases:
         try:
             result = run_single_config(M, N, K_high, K_low, device)
             print(f"{result['M']:>4} {result['N']:>5} {result['K_high']:>4} {result['K_low']:>5} | "
-                  f"{result['lat_fused']:>9.1f} {result['lat_baseline']:>9.1f} | "
-                  f"{result['speedup']:>7.2f}x | "
-                  f"{result['cos_sim']:>6.4f} {result['max_abs']:>7.2f} {result['mean_abs']:>8.4f} {result['mape']:>6.2f}")
+                  f"{result['lat_fused']:>8.1f} {result['lat_baseline']:>8.1f} {result['lat_fp16']:>8.1f} | "
+                  f"{result['speedup_vs_baseline']:>5.2f} {result['speedup_vs_fp16']:>6.2f} | "
+                  f"{result['tops_fused']:>8.1f} {result['tops_fp16']:>8.1f} | "
+                  f"{result['cos_sim']:>6.4f} {result['mape']:>6.2f}")
         except Exception as e:
             print(f"{M:>4} {N:>5} {K_high:>4} {K_low:>5} | FAILED: {e}")
 
     print()
-    print("Note: Both fused and baseline use SM80 mma.sync tensor core (same instruction set)")
+    print("Latency in μs. vsInt = lat_baseline_int / lat_fused. vsFP16 = lat_fp16 / lat_fused.")
+    print("Note: fused / baseline both use SM80 mma.sync. FP16 path uses cuBLAS (whatever it picks on this arch).")
 
 
 if __name__ == '__main__':
