@@ -165,7 +165,7 @@ def optimize_rotation(
     from promix.quantize.rotation import (
         rotate_embeddings, rotate_head, rotate_attention_inputs,
         rotate_attention_output, rotate_mlp_input, rotate_mlp_output,
-        rotate_ov_proj,
+        rotate_ov_proj, _apply_had_to_linear,
     )
     U_cpk = torch.load(basis_path, weights_only=False)
     U_attn = U_cpk["attn_mlp"].cuda()
@@ -178,10 +178,34 @@ def optimize_rotation(
     num_heads_model = model.config.num_attention_heads
     head_dim_model = model.config.hidden_size // num_heads_model
 
+    # PLAQuant-SM100 PRIMARY: detect global o_proj PCA basis emitted by
+    # `o_proj_pca: full_global` mode in basis.py. When present, replace the
+    # per-head `value` PCA on o_proj input with a single hidden_dim transform.
+    use_oproj_global = any(
+        f"layer.{i}.self_attn.o_proj_global" in U_cpk for i in range(len(model.model.layers))
+    )
+    if use_oproj_global:
+        print(
+            "[optimize_rotation] o_proj_global detected; applying full hidden_dim PCA "
+            "to o_proj input (per-head v_proj output rotation kept)."
+        )
+
     for idx, layer in enumerate(model.model.layers):
         rotate_attention_inputs(layer, U_attn)
         U_value = U_cpk[f"layer.{idx}.self_attn.value"].cuda()
-        rotate_ov_proj(layer, num_heads_model, head_dim_model, U_value, per_head=True)
+        if use_oproj_global:
+            _apply_had_to_linear(
+                layer.self_attn.v_proj, head_dim_model, output=True,
+                R2=U_value, per_head=True,
+            )
+            U_oproj_g = U_cpk[f"layer.{idx}.self_attn.o_proj_global"].cuda().to(torch.float64)
+            hidden_dim_model = U_oproj_g.shape[0]
+            _apply_had_to_linear(
+                layer.self_attn.o_proj, hidden_dim_model, output=False,
+                R2=U_oproj_g, per_head=False,
+            )
+        else:
+            rotate_ov_proj(layer, num_heads_model, head_dim_model, U_value, per_head=True)
         rotate_attention_output(layer, U_attn)
         rotate_mlp_input(layer, U_attn)
         rotate_mlp_output(layer, U_attn)

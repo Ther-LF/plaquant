@@ -1,0 +1,65 @@
+# ProMix Quantization Config: Llama-3.2-1B — PLAQuant-SM100 PRIMARY (MXFP8 high path + NVFP4 low path)
+#
+# This config selects the FP block-scaled fake quantizer (per spec
+# docs/specs/spec-mxfp8-nvfp4.md) and enables the global hidden_dim PCA on
+# o_proj input (per plan AC-2.1 / task7). Use for fake-FP PPL evaluation
+# in M1 (Round 3+ remote runs); the same config will apply to real-FP
+# integration in M3.
+#
+# Output paths are deliberately distinct from the INT W4A4 config so the
+# two pipelines can coexist without overwriting each other's basis / R / PTQ
+# artifacts.
+
+model:
+  name: "unsloth/Llama-3.2-1B"
+  type: "llama"
+
+quantize:
+  # Activation / weight bit-format: string identifiers route ActQuantizer to
+  # the spec-derived fake_quantize_mxfp8 / fake_quantize_nvfp4 helpers.
+  # Existing INT-numeric paths still work; configs that mix INT and FP are
+  # not supported in this round.
+  w_bits: 4              # weight bit-width retained for reporting (per-channel weight scale lives in epilogue)
+  a_bits: "nvfp4"        # main activation path = NVFP4 (low channels)
+  high_bits: "mxfp8"     # high-variance channel activation path = MXFP8
+  low_bits: 2            # low-variance INT fallback bits — unused under FP routing but retained for backward compat
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: 16             # KV cache stays FP16 in this W4A4 baseline; W4A4KV4 lives in a separate config
+  v_bits: 16
+  k_asym: true
+  v_asym: true
+  k_groupsize: 64
+  v_groupsize: 64
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  # PLAQuant-SM100 PRIMARY: replace per-head 64x64 o_proj PCA with full
+  # hidden_dim PCA. basis.py emits an extra `o_proj_global` key per layer;
+  # rotation.py / optimize_rotation.py automatically consume it when present.
+  o_proj_pca: "full_global"
+
+paths:
+  # Distinct from the INT W4A4 paths so artifacts don't collide.
+  basis: "./rotation/U-wikitext-512-mxfp8nvfp4-Llama-3.2-1B.bin"
+  rotation: "./rotation/R-mxfp8nvfp4-high-0.125-low-0.0-sparse-0.0-Llama-3.2-1B.bin"
+  output_dir: "/tmp/promix_ptq_1b_mxfp8_nvfp4"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 128
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 16
+  num_fewshot: 0
+  max_length: 2048

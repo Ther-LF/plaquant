@@ -16,6 +16,7 @@ from promix.quantize.quant_utils import (
     FP4_E2M1_MAX,
     FP4_E2M1_POS,
     FP8_E4M3_MAX,
+    _round_to_nearest_value,
     fake_quantize_mxfp8,
     fake_quantize_nvfp4,
 )
@@ -184,3 +185,168 @@ def test_nvfp4_representable_set_membership():
             assert all(r in allowed_ratios or r * 0.5 in allowed_ratios for r in ratios), (
                 f"NVFP4 output ratios {ratios} not all in E2M1 set {allowed_ratios}"
             )
+
+
+# ---------------------------------------------------------------------------
+# RNE ties-to-even midpoint tests (Round 2: Codex round-1 review found that
+# the previous argmin-based implementation does NOT implement ties-to-even;
+# it picks the lower-index representable on ties. These tests deterministically
+# show the fix matches IEEE 754 ties-to-even semantics for the FP4 E2M1 and
+# FP8 E4M3 representable sets.)
+# ---------------------------------------------------------------------------
+
+def test_round_nearest_fp4_midpoint_1p25_picks_1p0():
+    """FP4 E2M1: midpoint 1.25 between 1.0 and 1.5; ties-to-even picks 1.0
+    (mantissa LSB == 0 in code 2; code 3 for 1.5 has mantissa LSB == 1)."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    x = torch.tensor([1.25], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == 1.0, (
+        f"FP4 1.25 midpoint should round to 1.0 (even-coded mantissa), got {out.item()}"
+    )
+
+
+def test_round_nearest_fp4_midpoint_neg_1p25_picks_neg_1p0():
+    """Negative midpoint -1.25 picks -1.0 by symmetry."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    x = torch.tensor([-1.25], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == -1.0, (
+        f"FP4 -1.25 should round to -1.0, got {out.item()}"
+    )
+
+
+def test_round_nearest_fp4_midpoint_1p75_picks_2p0():
+    """FP4 E2M1: midpoint 1.75 between 1.5 (code 3, odd) and 2.0 (code 4, even);
+    ties-to-even picks 2.0."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    x = torch.tensor([1.75], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == 2.0, (
+        f"FP4 1.75 midpoint should round to 2.0 (even-coded), got {out.item()}"
+    )
+
+
+def test_round_nearest_fp4_midpoint_2p5_picks_2p0():
+    """FP4: midpoint 2.5 between 2.0 (code 4, even) and 3.0 (code 5, odd); picks 2.0."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    x = torch.tensor([2.5], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == 2.0, f"FP4 2.5 should round to 2.0, got {out.item()}"
+
+
+def test_round_nearest_fp4_midpoint_5p0_picks_4p0():
+    """FP4: midpoint 5.0 between 4.0 (code 6, even) and 6.0 (code 7, odd); picks 4.0.
+    This is the FP4 max-bracket midpoint — exercises the V-1 boundary."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    x = torch.tensor([5.0], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == 4.0, f"FP4 5.0 should round to 4.0, got {out.item()}"
+
+
+def test_round_nearest_fp4_exact_value_unchanged():
+    """Exact representable values should round to themselves."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    for v in FP4_E2M1_POS:
+        x = torch.tensor([float(v)], dtype=torch.float32)
+        out = _round_to_nearest_value(x, values)
+        assert out.item() == v, f"Exact {v} got rounded to {out.item()}"
+
+
+def test_round_nearest_fp4_non_midpoint_picks_closer():
+    """Verify non-midpoint inputs go to the closer representable (not affected by
+    the ties-to-even change)."""
+    values = torch.tensor(FP4_E2M1_POS, dtype=torch.float32)
+    # 1.1 is closer to 1.0 than 1.5
+    out = _round_to_nearest_value(torch.tensor([1.1], dtype=torch.float32), values)
+    assert out.item() == 1.0
+    # 1.4 is closer to 1.5 than 1.0
+    out = _round_to_nearest_value(torch.tensor([1.4], dtype=torch.float32), values)
+    assert out.item() == 1.5
+
+
+def test_round_nearest_fp8_e4m3_smallest_normal_midpoint():
+    """FP8 E4M3: midpoint between adjacent normals at smallest normal exponent.
+    Smallest normal magnitudes: 2^-6 = 0.015625 (mantissa 0), 1.125*2^-6 = 0.017578125
+    (mantissa 1). Midpoint = 0.5 * (0.015625 + 0.017578125) = 0.0166015625.
+    Codes 8 (even, mantissa 0) and 9 (odd, mantissa 1) → ties-to-even picks 0.015625.
+    """
+    from promix.quantize.quant_utils import _FP8_E4M3_POS as FP8_POS
+
+    values = torch.tensor(FP8_POS, dtype=torch.float32)
+    a = 2.0 ** -6  # smallest normal, even mantissa
+    b = (1.0 + 1.0 / 8.0) * (2.0 ** -6)  # next, odd mantissa
+    midpoint = 0.5 * (a + b)
+    x = torch.tensor([midpoint], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == a, (
+        f"FP8 E4M3 normal midpoint should round to {a} (even-coded mantissa), got {out.item()}"
+    )
+
+
+def test_round_nearest_fp8_e4m3_negative_midpoint():
+    """Negative-side midpoint round behaves symmetrically."""
+    from promix.quantize.quant_utils import _FP8_E4M3_POS as FP8_POS
+
+    values = torch.tensor(FP8_POS, dtype=torch.float32)
+    a = 2.0 ** -6
+    b = (1.0 + 1.0 / 8.0) * (2.0 ** -6)
+    midpoint = 0.5 * (a + b)
+    x = torch.tensor([-midpoint], dtype=torch.float32)
+    out = _round_to_nearest_value(x, values)
+    assert out.item() == -a, (
+        f"FP8 E4M3 negative midpoint should round to {-a}, got {out.item()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ActQuantizer routing tests (Round 2: Codex round-1 review found that the
+# `bits=mxfp8` / `bits=nvfp4` config-driven routing required by plan task9
+# was not wired into ActQuantizer. These tests verify the new string-bits
+# dispatch matches the standalone fake_quantize_* functions exactly.)
+# ---------------------------------------------------------------------------
+
+def test_act_quantizer_routes_mxfp8():
+    """ActQuantizer with bits='mxfp8' should produce the same output as
+    fake_quantize_mxfp8 called directly."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(bits="mxfp8", sym=True, perchannel=False)
+    torch.manual_seed(7)
+    x = torch.randn(64, 256, dtype=torch.float32)
+    direct = fake_quantize_mxfp8(x)
+    routed = q(x)
+    assert torch.equal(direct, routed), (
+        "ActQuantizer(bits='mxfp8') output does NOT match fake_quantize_mxfp8 — routing broken"
+    )
+
+
+def test_act_quantizer_routes_nvfp4():
+    """ActQuantizer with bits='nvfp4' should produce the same output as
+    fake_quantize_nvfp4 called directly."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(bits="nvfp4", sym=True, perchannel=False)
+    torch.manual_seed(7)
+    x = torch.randn(64, 256, dtype=torch.float32)
+    direct = fake_quantize_nvfp4(x)
+    routed = q(x)
+    assert torch.equal(direct, routed), (
+        "ActQuantizer(bits='nvfp4') output does NOT match fake_quantize_nvfp4 — routing broken"
+    )
+
+
+def test_act_quantizer_legacy_int_bits_still_works():
+    """Numeric bits=4/8 must still work (backward compat for existing INT path)."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(bits=8, sym=True, perchannel=False)
+    x = torch.randn(64, 256, dtype=torch.float32)
+    out = q(x)
+    assert out.shape == x.shape
+    assert out.dtype == x.dtype
+    # Quantized output should differ from input (real quantization happened)
+    assert not torch.equal(out, x)

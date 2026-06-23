@@ -212,6 +212,19 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
         if R2_0 is not None:
             R2 = torch.block_diag(R2_0.cuda().to(torch.float64), R2)
 
+    # Detect whether basis bundle was built with `o_proj_pca: full_global`
+    # mode (PLAQuant-SM100 PRIMARY). Presence of this key on at least one layer
+    # opts the rotation pipeline into the global-hidden-dim path for o_proj.
+    use_oproj_global = any(
+        f"layer.{i}.self_attn.o_proj_global" in U_cpk for i in range(len(layers))
+    )
+    if use_oproj_global:
+        print(
+            "[rotation] o_proj_global key detected in basis; applying full hidden_dim "
+            "PCA to o_proj input (replaces per-head value rotation for o_proj only). "
+            "v_proj output rotation remains per-head."
+        )
+
     for idx, layer in enumerate(tqdm(layers, desc="Rotating layers")):
         rotate_attention_inputs(layer, U_attn)
 
@@ -227,7 +240,28 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
                 R2 = torch.block_diag(R_dict[r2_0_key].cuda().to(torch.float64), R2)
 
         U_value = torch.matmul(U_value, R2)
-        rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True)
+        if use_oproj_global:
+            # v_proj output: keep per-head R2 (R2 is intrinsic to attention).
+            _apply_had_to_linear(
+                layer.self_attn.v_proj, head_dim, output=True,
+                R2=U_value, per_head=True,
+            )
+            # o_proj input: apply the GLOBAL hidden_dim PCA (`o_proj_global`)
+            # instead of per-head U_value. R2 composition is not threaded
+            # through the o_proj input here; the global basis was fitted on
+            # the un-rotated o_proj input and is treated as the canonical
+            # o_proj-input rotation.
+            U_oproj_g = U_cpk[f"layer.{idx}.self_attn.o_proj_global"].cuda().to(torch.float64)
+            hidden_dim = U_oproj_g.shape[0]
+            assert U_oproj_g.shape == (hidden_dim, hidden_dim), (
+                f"o_proj_global must be hidden_dim x hidden_dim; got {U_oproj_g.shape}"
+            )
+            _apply_had_to_linear(
+                layer.self_attn.o_proj, hidden_dim, output=False,
+                R2=U_oproj_g, per_head=False,
+            )
+        else:
+            rotate_ov_proj(layer, num_heads, head_dim, U_value, per_head=True)
 
         rotate_attention_output(layer, U_attn)
         rotate_mlp_input(layer, U_attn)

@@ -75,21 +75,50 @@ class ActQuantizer(nn.Module):
 
     def configure(self, bits, groupsize=-1, sym=False, clip_ratio=1.0,
                   high_bits_length=0, high_bits=16, low_bits_length=0, low_bits=16, **kwargs):
-        _, self.maxq = get_minq_maxq(bits, sym)
-        self.bits = bits
+        # FP block-scaled formats (per spec docs/specs/spec-mxfp8-nvfp4.md, plan
+        # task9): when `bits` is the string "mxfp8" or "nvfp4", the forward
+        # path dispatches to the spec-derived fake_quantize_* helpers and
+        # skips the INT scale/zero/maxq machinery entirely (block scales are
+        # computed internally per call).
+        if isinstance(bits, str):
+            self.bits = bits
+        else:
+            _, self.maxq = get_minq_maxq(bits, sym)
+            self.bits = bits
         self.groupsize = groupsize
         self.sym = sym
         self.clip_ratio = clip_ratio
         self.high_bits_length = high_bits_length
         self.high_bits = high_bits
-        _, self.maxq_h = get_minq_maxq(high_bits, sym)
+        if isinstance(high_bits, str):
+            pass  # no maxq_h needed for FP path
+        else:
+            _, self.maxq_h = get_minq_maxq(high_bits, sym)
         self.low_bits_length = low_bits_length
         self.low_bits = low_bits
-        _, self.maxq_l = get_minq_maxq(low_bits, sym)
+        if isinstance(low_bits, str):
+            pass  # no maxq_l needed for FP path
+        else:
+            _, self.maxq_l = get_minq_maxq(low_bits, sym)
 
     def forward(self, x):
         if self.bits == 16:
             return x
+
+        # FP block-scaled fake quantization (plan task9 routing). String bits
+        # value selects the spec-derived helper; ignores INT scale/zero/maxq
+        # state. The forward consumes the LAST dim of x as the K (contraction)
+        # axis (consistent with both the spec and ActQuantizer's existing
+        # per-token behavior).
+        if isinstance(self.bits, str):
+            x_dtype = x.dtype
+            if self.bits == "mxfp8":
+                return fake_quantize_mxfp8(x).to(x_dtype)
+            elif self.bits == "nvfp4":
+                return fake_quantize_nvfp4(x).to(x_dtype)
+            else:
+                raise ValueError(f"Unsupported FP format for ActQuantizer.bits: {self.bits!r}")
+
         x_dtype = x.dtype
 
         if self.groupsize > 0:
@@ -122,6 +151,13 @@ class ActQuantizer(nn.Module):
         return x
 
     def find_params(self, x):
+        # FP block-scaled paths compute their block scales inside the forward
+        # call (per spec Section 6); there are no per-token / per-group scale
+        # parameters to fit ahead of time, so find_params is a no-op when
+        # bits is a string FP format identifier.
+        if isinstance(self.bits, str):
+            return
+
         if self.groupsize > 0:
             x_reshaped = x.reshape(
                 x.shape[0], x.shape[1], x.shape[2] // self.groupsize, self.groupsize
@@ -325,19 +361,54 @@ FP4_E2M1_MAX = 6.0
 
 
 def _round_to_nearest_value(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-    """Round each element of x to the nearest value in `values` (1D, sorted).
+    """Round each element of x to the nearest value in `values` (1D, sorted ascending).
 
-    Round-to-nearest-even on ties (stable when `values` are not exactly midway).
-    Used for both element quantization and scale rounding.
+    Implements round-to-nearest-even per spec Section 6: at exact midpoints between
+    two adjacent representable values, choose the one with the EVEN-indexed encoding
+    (i.e., the smaller index, since encoded code 0..N-1; "even" = index%2==0). For
+    formats whose representable set is enumerated in monotonically increasing order
+    (FP4 E2M1 positive, FP8 E4M3 positive), this corresponds to "round to the
+    representable whose encoded value has a 0 in its LSB", matching IEEE 754
+    round-half-to-even semantics for these encodings.
+
+    Spec Section 6 reference: ties-to-even at element quantization step.
     """
-    # values: (V,)  sorted ascending; x can be any shape
+    # values: (V,) sorted ascending; x can be any shape
     values = values.to(x.device, dtype=x.dtype)
     sign = torch.sign(x)
     absx = x.abs()
-    # find nearest in `values` (positive set)
-    diffs = (absx.unsqueeze(-1) - values).abs()
-    idx = diffs.argmin(dim=-1)
-    return sign * values[idx]
+
+    # For each absx, find the two adjacent representables that bracket it:
+    # idx_lo such that values[idx_lo] <= absx <= values[idx_lo+1].
+    # Use torch.searchsorted (returns position where absx would insert) and clamp.
+    insert = torch.searchsorted(values, absx, right=False)  # (..., )
+    insert = insert.clamp(min=0, max=values.numel() - 1)
+    # Lower-bound index: largest representable <= absx (or smallest if absx <
+    # values[0]). Upper-bound: insert clamped to V-1.
+    idx_hi = insert.clamp(min=1, max=values.numel() - 1)
+    idx_lo = (idx_hi - 1).clamp(min=0)
+    # If absx is exactly a representable, both idx_lo and idx_hi may bracket it;
+    # the standard "nearest" logic still picks correctly because diff_lo==0.
+
+    val_lo = values[idx_lo]
+    val_hi = values[idx_hi]
+    diff_lo = (absx - val_lo).abs()
+    diff_hi = (val_hi - absx).abs()
+
+    # Default: pick the closer one
+    pick_hi = diff_hi < diff_lo
+
+    # Tie-break: at exact midpoint (diff_lo == diff_hi), pick the one whose
+    # encoded index is EVEN. Index encoding: idx_lo and idx_hi are the
+    # representable-set positions; even-indexed code = idx % 2 == 0.
+    is_tie = (diff_hi - diff_lo).abs() < 1e-12  # exact midpoint up to fp precision
+    even_idx_is_lo = (idx_lo % 2) == 0
+    # When tie: pick lo if lo's index is even, otherwise pick hi (which is
+    # idx_lo+1 and therefore the other parity — guaranteed even when lo is odd).
+    pick_hi = torch.where(is_tie, ~even_idx_is_lo, pick_hi)
+
+    chosen_idx = torch.where(pick_hi, idx_hi, idx_lo)
+    return sign * values[chosen_idx]
 
 
 def _ceil_to_value(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
