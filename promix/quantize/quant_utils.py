@@ -22,6 +22,41 @@ def get_minq_maxq(bits, sym):
     return minq, maxq
 
 
+# Supported FP block-scaled formats (Round 3): the canonical strings ActQuantizer /
+# ActQuantWrapper / WeightQuantizer accept in place of numeric `bits`. Adding a
+# new FP format means: (1) add the string here, (2) implement
+# `fake_quantize_<name>` per the spec, (3) extend the dispatch in
+# ActQuantizer.forward and WeightQuantizer.configure.
+SUPPORTED_FP_FORMATS = ("mxfp8", "nvfp4")
+
+
+def _quant_enabled(bits):
+    """Predicate: is this `bits` value a request to actually quantize?
+
+    Used at every call site that previously did `bits < 16` (which TypeErrors
+    on string FP format identifiers). For numeric, true when below 16-bit
+    pass-through. For string, true when the format is in SUPPORTED_FP_FORMATS.
+    """
+    if isinstance(bits, str):
+        return bits in SUPPORTED_FP_FORMATS
+    return bits < 16
+
+
+def _apply_fp_format(x, fmt):
+    """Dispatch a tensor segment through the spec-derived fake quantizer.
+
+    Used by ActQuantizer.forward when bits / high_bits / low_bits are string
+    FP format identifiers. Block-alignment is checked inside the underlying
+    fake_quantize_* helper (it asserts shape[-1] % block_size == 0 with a
+    clear error message).
+    """
+    if fmt == "mxfp8":
+        return fake_quantize_mxfp8(x)
+    if fmt == "nvfp4":
+        return fake_quantize_nvfp4(x)
+    raise ValueError(f"Unsupported FP format identifier: {fmt!r}")
+
+
 class STEQuantize(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, scale, maxq):
@@ -105,19 +140,56 @@ class ActQuantizer(nn.Module):
         if self.bits == 16:
             return x
 
-        # FP block-scaled fake quantization (plan task9 routing). String bits
-        # value selects the spec-derived helper; ignores INT scale/zero/maxq
-        # state. The forward consumes the LAST dim of x as the K (contraction)
-        # axis (consistent with both the spec and ActQuantizer's existing
-        # per-token behavior).
+        # FP block-scaled fake quantization (plan task9 routing). String `bits`
+        # selects the spec-derived helper; ignores INT scale/zero/maxq state.
+        # When high_bits / low_bits are also configured (the PRIMARY mixed
+        # MXFP8+NVFP4 design from the plan), apply the same [low | main | high]
+        # split as the INT branch but route each segment to its own FP format.
+        # Block-alignment of each segment length is asserted (MXFP8 needs %32,
+        # NVFP4 needs %16; per spec Section 2).
         if isinstance(self.bits, str):
             x_dtype = x.dtype
-            if self.bits == "mxfp8":
-                return fake_quantize_mxfp8(x).to(x_dtype)
-            elif self.bits == "nvfp4":
-                return fake_quantize_nvfp4(x).to(x_dtype)
-            else:
-                raise ValueError(f"Unsupported FP format for ActQuantizer.bits: {self.bits!r}")
+            high_len = int(self.high_bits_length)
+            low_len = int(self.low_bits_length)
+            high_fmt = self.high_bits if isinstance(self.high_bits, str) else None
+            low_fmt = self.low_bits if isinstance(self.low_bits, str) else None
+            main_fmt = self.bits
+
+            # Single-format path (no high/low split): quantize whole tensor.
+            if high_len == 0 and low_len == 0:
+                return _apply_fp_format(x, main_fmt).to(x_dtype)
+
+            # Mixed: split [low_seg | main_seg | high_seg] along last dim.
+            high_dim = x.shape[-1] - high_len
+            x_l = x[..., :low_len] if low_len > 0 else None
+            x_m = x[..., low_len:high_dim]
+            x_h = x[..., high_dim:] if high_len > 0 else None
+
+            parts = []
+            if x_l is not None and low_fmt is not None:
+                parts.append(_apply_fp_format(x_l, low_fmt))
+            elif x_l is not None:
+                # low segment configured numerically; not currently supported
+                # alongside string main format. Surface a clear error rather
+                # than silently mismatching.
+                raise ValueError(
+                    "Mixed FP/INT segment routing not supported: low_bits must be a "
+                    "string FP format when bits is a string, got "
+                    f"low_bits={self.low_bits!r}"
+                )
+
+            parts.append(_apply_fp_format(x_m, main_fmt))
+
+            if x_h is not None and high_fmt is not None:
+                parts.append(_apply_fp_format(x_h, high_fmt))
+            elif x_h is not None:
+                raise ValueError(
+                    "Mixed FP/INT segment routing not supported: high_bits must be a "
+                    "string FP format when bits is a string, got "
+                    f"high_bits={self.high_bits!r}"
+                )
+
+            return torch.cat(parts, dim=-1).to(x_dtype)
 
         x_dtype = x.dtype
 
@@ -270,7 +342,7 @@ class ActQuantWrapper(nn.Module):
             else:
                 x = matmul_hadU_cuda(x, self.had_K, self.K)
 
-        if self.quantizer.bits < 16:
+        if _quant_enabled(self.quantizer.bits):
             self.quantizer.find_params(x)
             x = self.quantizer(x).to(x_dtype)
             self.quantizer.free()
@@ -284,7 +356,7 @@ class ActQuantWrapper(nn.Module):
         inner = {k: v for k, v in kwargs.items() if k in self._inner_kwargs}
         x = self.module(x, **inner).to(x_dtype)
 
-        if self.out_quantizer.bits < 16:
+        if _quant_enabled(self.out_quantizer.bits):
             self.out_quantizer.find_params(x)
             x = self.out_quantizer(x).to(x_dtype)
             self.out_quantizer.free()

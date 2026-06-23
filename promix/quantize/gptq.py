@@ -164,6 +164,14 @@ def gptq_fwrd(model, dataloader, dev, config):
     logging.info("-----GPTQ Quantization-----")
     qcfg = config['quantize']
     w_bits = qcfg['w_bits']
+    # PLAQuant-SM100 PRIMARY (Round 3): when high_bits / low_bits are FP
+    # block-scaled identifier strings ("mxfp8" / "nvfp4"), GPTQ's
+    # WeightQuantizer skips INT scale fitting and routes weight rounding
+    # through the spec-derived fake_quantize_* helpers. quantize_to_int
+    # returns (None, None, None) for FP — real INT-byte packing belongs
+    # to the M3 weight_packer pass. No GPTQ-config changes needed for
+    # this round; the existing call sites pass the string directly into
+    # WeightQuantizer.configure which now accepts strings.
     w_sym = not qcfg.get('w_asym', False)
     w_clip = qcfg.get('w_clip', True)
     w_groupsize = qcfg.get('w_groupsize', -1)

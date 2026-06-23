@@ -34,6 +34,13 @@ class WeightQuantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
+        # FP block-scaled formats (Round 3): when bits is the string
+        # identifier "mxfp8" / "nvfp4", skip the INT maxq computation
+        # entirely. Block scales are computed inside the spec-derived
+        # fake_quantize_* helpers; there's no per-channel scale fitting
+        # step at the WeightQuantizer level for FP.
+        if isinstance(bits, str):
+            return
         if sym:
             self.maxq = torch.tensor(2 ** (bits - 1) - 1)
         else:
@@ -44,6 +51,17 @@ class WeightQuantizer(nn.Module):
 
     def find_params(self, x):
         if self.bits == 16:
+            return
+        # FP block-scaled formats: no per-channel scale to fit (block scales
+        # are computed inside the fake_quantize_* helpers per call). Mark
+        # as ready by setting a non-zero scale buffer so `ready()` returns
+        # True; the `.quantize()` path then dispatches to the FP helper.
+        if isinstance(self.bits, str):
+            # Use a unit scale just to satisfy `ready()` — actual block
+            # scale lives inside the FP helper. Shape conventions match the
+            # INT path (scale repeated per row when not perchannel).
+            self.scale = torch.ones((x.shape[0], 1), device=x.device, dtype=x.dtype)
+            self.zero = torch.zeros_like(self.scale)
             return
         dev = x.device
         self.maxq = self.maxq.to(dev)
@@ -103,6 +121,11 @@ class WeightQuantizer(nn.Module):
         self.zero = self.zero.reshape(shape)
 
     def quantize(self, x):
+        # FP block-scaled formats: dispatch to the spec-derived fake
+        # quantizer; no scale/maxq machinery used.
+        if isinstance(self.bits, str):
+            from promix.quantize.quant_utils import _apply_fp_format
+            return _apply_fp_format(x, self.bits)
         if self.ready() and self.bits < 16:
             if self.sym:
                 return STEQuantize.apply(x, self.scale, self.maxq)
@@ -110,7 +133,16 @@ class WeightQuantizer(nn.Module):
         return x
 
     def quantize_to_int(self, x):
-        """Return raw integer values and scale/zero."""
+        """Return raw integer values and scale/zero (INT path only).
+
+        For FP block-scaled formats this is intentionally a no-op: real
+        packing of FP weights into an INT-style buffer is part of the M3
+        weight_packer work (per plan), not the GPTQ output stage. Returns
+        (None, None, None) for FP so the caller skips integer storage and
+        relies on `quantize()` (fake-FP) for fake-quant PPL eval.
+        """
+        if isinstance(self.bits, str):
+            return None, None, None
         if self.ready() and self.bits < 16:
             scale = self.scale.to(x.device)
             if self.sym:

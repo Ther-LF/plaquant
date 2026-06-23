@@ -99,6 +99,8 @@ def optimize_rotation(
     v_groupsize: int = 64,
     high_bits: int = 8,
     low_bits: int = 2,
+    a_bits=4,
+    a_asym: bool = True,
 ):
     """Optimize rotation matrices on the Stiefel manifold.
 
@@ -212,6 +214,30 @@ def optimize_rotation(
 
     cleanup_memory()
     add_actquant(model)
+
+    # PLAQuant-SM100 PRIMARY (Round 3): Step 1 (rotation training) MUST configure
+    # the activation quantizers with the same FP/INT bits + segment split as
+    # Step 2 (PTQ eval). Without this call, ActQuantWrapper.quantizer stays at
+    # default bits=16 and the wrappers are no-ops, so trainer.train() optimizes
+    # R against ZERO quantization noise — meaningless. We import lazily to
+    # avoid a circular dependency between promix.quantize and promix.eval.
+    from promix.eval.ptq import configure_quantizers as _configure_quantizers
+
+    _configure_quantizers(model, {"quantize": {
+        "a_bits": a_bits,
+        "high_bits": high_bits,
+        "low_bits": low_bits,
+        "high_fraction": high_fraction,
+        "low_fraction": low_fraction,
+        "a_asym": a_asym,
+        "v_bits": 16,  # KV not quantized during R training
+        "k_bits": 16,
+    }})
+    print(
+        f"[optimize_rotation] configured activation quantizers: "
+        f"a_bits={a_bits} high_bits={high_bits} low_bits={low_bits}"
+    )
+
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     for name in qlayers:
         if "down_proj" in name:
@@ -440,6 +466,8 @@ def main():
         v_groupsize=config["quantize"]["v_groupsize"],
         high_bits=config["quantize"]["high_bits"],
         low_bits=config["quantize"]["low_bits"],
+        a_bits=config["quantize"].get("a_bits", 4),
+        a_asym=config["quantize"].get("a_asym", True),
     )
 
     print(f"\nDone! Optimized rotation saved to: {rotation_path}")

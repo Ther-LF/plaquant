@@ -350,3 +350,115 @@ def test_act_quantizer_legacy_int_bits_still_works():
     assert out.dtype == x.dtype
     # Quantized output should differ from input (real quantization happened)
     assert not torch.equal(out, x)
+
+
+# ---------------------------------------------------------------------------
+# Round 3 regression tests for the model-level paths Codex round-2 review
+# flagged as still broken: ActQuantWrapper guard, segment-wise FP split,
+# WeightQuantizer FP routing.
+# ---------------------------------------------------------------------------
+
+def test_act_quant_wrapper_no_typeerror_on_string_bits():
+    """ActQuantWrapper(nn.Linear) with bits='nvfp4' must NOT TypeError on first
+    forward. Round 2 used `bits < 16` numeric comparison which crashed on
+    strings. This test deterministically fails on Round 2 code."""
+    import torch.nn as nn
+    from promix.quantize.quant_utils import ActQuantWrapper
+
+    lin = nn.Linear(64, 32, bias=False)
+    wrapper = ActQuantWrapper(lin)
+    wrapper.quantizer.configure(bits="nvfp4", sym=True, perchannel=False)
+    x = torch.randn(2, 16, 64, dtype=torch.float32)
+    # Should not raise.
+    out = wrapper(x)
+    assert out.shape == (2, 16, 32)
+    assert out.dtype == x.dtype
+
+
+def test_act_quant_wrapper_nvfp4_matches_direct_call():
+    """Routed forward must equal direct fake_quantize_nvfp4 followed by linear."""
+    import torch.nn as nn
+    from promix.quantize.quant_utils import ActQuantWrapper
+
+    lin = nn.Linear(64, 32, bias=False)
+    wrapper = ActQuantWrapper(lin)
+    wrapper.quantizer.configure(bits="nvfp4", sym=True, perchannel=False)
+    torch.manual_seed(0)
+    x = torch.randn(1, 8, 64, dtype=torch.float32)
+    direct = lin(fake_quantize_nvfp4(x).to(x.dtype))
+    routed = wrapper(x)
+    assert torch.allclose(direct, routed, atol=1e-6), (
+        "ActQuantWrapper bits='nvfp4' forward does not match direct fake_quantize_nvfp4 + linear"
+    )
+
+
+def test_act_quantizer_segment_split_mxfp8_high_nvfp4_main():
+    """Mixed segment dispatch: bits='nvfp4' main, high_bits='mxfp8' for high_bits_length=32.
+    The high segment must be MXFP8-quantized; the main must be NVFP4-quantized.
+    Round 2 ignored high/low split for string bits and quantized the whole
+    tensor as one format."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(
+        bits="nvfp4",
+        sym=True,
+        perchannel=False,
+        high_bits_length=32,
+        high_bits="mxfp8",
+        low_bits_length=0,
+        low_bits=2,
+    )
+    torch.manual_seed(0)
+    # x.shape[-1] = 256; main = 224, high = 32.
+    x = torch.randn(1, 8, 256, dtype=torch.float32)
+    out = q(x)
+    # Reconstruct expected: main=NVFP4 on x[..., :224]; high=MXFP8 on x[..., 224:]
+    main_expected = fake_quantize_nvfp4(x[..., :224])
+    high_expected = fake_quantize_mxfp8(x[..., 224:])
+    expected = torch.cat([main_expected, high_expected], dim=-1)
+    assert torch.equal(out, expected), (
+        "ActQuantizer segment split does not match per-segment direct dispatch"
+    )
+
+
+def test_weight_quantizer_string_bits_no_crash():
+    """WeightQuantizer.configure() must accept string FP format identifiers
+    without crashing. Round 2 path computes `2 ** (bits - 1)` which TypeErrors
+    on string."""
+    from promix.quantize.kv_quant import WeightQuantizer
+
+    wq = WeightQuantizer()
+    # Should not raise:
+    wq.configure(bits="mxfp8", perchannel=True, sym=True, mse=False)
+    assert wq.bits == "mxfp8"
+
+
+def test_weight_quantizer_string_bits_quantize_routes_to_fp_helper():
+    """WeightQuantizer.quantize() with string bits should produce same output
+    as direct fake_quantize_* call."""
+    from promix.quantize.kv_quant import WeightQuantizer
+
+    wq = WeightQuantizer()
+    wq.configure(bits="mxfp8", perchannel=True, sym=True, mse=False)
+    torch.manual_seed(0)
+    x = torch.randn(8, 256, dtype=torch.float32)
+    wq.find_params(x)
+    out = wq.quantize(x)
+    expected = fake_quantize_mxfp8(x)
+    assert torch.equal(out, expected)
+
+
+def test_weight_quantizer_string_bits_quantize_to_int_returns_none():
+    """quantize_to_int is INT-only by design; FP path returns (None, None, None)
+    and real packing is deferred to the M3 weight_packer."""
+    from promix.quantize.kv_quant import WeightQuantizer
+
+    wq = WeightQuantizer()
+    wq.configure(bits="nvfp4", perchannel=True, sym=True, mse=False)
+    x = torch.randn(8, 256, dtype=torch.float32)
+    wq.find_params(x)
+    qint, scale, zero = wq.quantize_to_int(x)
+    assert qint is None
+    assert scale is None
+    assert zero is None
