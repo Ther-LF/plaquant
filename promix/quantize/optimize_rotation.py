@@ -192,6 +192,13 @@ def optimize_rotation(
             "[optimize_rotation] o_proj_global detected; applying full hidden_dim PCA "
             "to o_proj input (per-head v_proj output rotation kept)."
         )
+        # Mark each attention layer so its forward drops dynamic per-head R2
+        # from the o_proj path. Step 1 must optimize the same transform that
+        # Step 2 will fuse; without this flag, the trained R lives under a
+        # different basis than the eval-time o_proj input transform and the
+        # rotation training target diverges from what PTQ measures.
+        for layer in model.model.layers:
+            layer.self_attn.use_oproj_global = True
 
     for idx, layer in enumerate(model.model.layers):
         rotate_attention_inputs(layer, U_attn)

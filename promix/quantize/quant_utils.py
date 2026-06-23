@@ -521,6 +521,109 @@ def _e8m0_round_up(scale: torch.Tensor) -> torch.Tensor:
     return chosen
 
 
+def select_block_scales_mxfp8(
+    W: torch.Tensor, block_size: int = 32
+) -> torch.Tensor:
+    """Compute per-row-per-block MXFP8 scales using the spec-derived rule.
+
+    Used by Section-11-style GPTQ (and any other consumer that needs the
+    block scale separately from the rounding step). The scale is computed
+    EXACTLY the way `fake_quantize_mxfp8` computes it: max_abs(block) /
+    FP8_E4M3_MAX, then rounded UP to the nearest power of 2 (E8M0).
+
+    Args:
+        W: weight segment with shape (..., K) where K is along the
+           contraction axis. K must be divisible by block_size.
+        block_size: 32 for MXFP8 (per spec).
+
+    Returns:
+        Tensor with shape (..., K // block_size); float32.
+    """
+    assert W.shape[-1] % block_size == 0, (
+        f"select_block_scales_mxfp8: K ({W.shape[-1]}) not divisible by block_size ({block_size})"
+    )
+    Wf = W.to(torch.float32)
+    *prefix, k = Wf.shape
+    num_blocks = k // block_size
+    Wf_blk = Wf.reshape(*prefix, num_blocks, block_size)
+    block_max = Wf_blk.abs().amax(dim=-1).clamp_min(0.0)
+    ideal = block_max / FP8_E4M3_MAX
+    return _e8m0_round_up(ideal.clamp_min(2.0 ** -127))
+
+
+def select_block_scales_nvfp4(
+    W: torch.Tensor, block_size: int = 16
+) -> torch.Tensor:
+    """Compute per-row-per-block NVFP4 scales using the spec-derived rule.
+
+    Same role as `select_block_scales_mxfp8` but for NVFP4. The scale is
+    `max_abs(block) / FP4_E2M1_MAX`, then rounded UP to the nearest FP8
+    E4M3 representable value.
+
+    Args:
+        W: weight segment, shape (..., K). K divisible by block_size.
+        block_size: 16 for NVFP4 (per spec).
+
+    Returns:
+        Tensor with shape (..., K // block_size); float32.
+    """
+    assert W.shape[-1] % block_size == 0, (
+        f"select_block_scales_nvfp4: K ({W.shape[-1]}) not divisible by block_size ({block_size})"
+    )
+    Wf = W.to(torch.float32)
+    *prefix, k = Wf.shape
+    num_blocks = k // block_size
+    Wf_blk = Wf.reshape(*prefix, num_blocks, block_size)
+    block_max = Wf_blk.abs().amax(dim=-1)
+    ideal = (block_max / FP4_E2M1_MAX).clamp_min(2.0 ** -9)
+    fp8_e4m3_values = torch.tensor(_FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
+    return _ceil_to_value(ideal, fp8_e4m3_values)
+
+
+def quantize_column_with_frozen_scale(
+    w_col: torch.Tensor,
+    frozen_scales: torch.Tensor,
+    col_idx: int,
+    fmt: str,
+) -> torch.Tensor:
+    """Round a single column of W to the nearest FP representable value
+    given a pre-computed (frozen) per-row block scale for that column.
+
+    This is the building block for spec Section 11 FP GPTQ: the block
+    scale is frozen up-front from the original (uncorrected) weight,
+    then GPTQ's per-column Hessian-corrected value is rounded against
+    the SAME frozen scale.
+
+    Args:
+        w_col: shape (rows,); a single column of the segment.
+        frozen_scales: shape (rows, n_blocks); pre-computed scales.
+        col_idx: column index within the segment; selects the block via
+                 col_idx // block_size for the segment's format.
+        fmt: "mxfp8" (block_size=32, FP8 E4M3 element grid) or
+             "nvfp4" (block_size=16, FP4 E2M1 element grid).
+
+    Returns:
+        Quantized column (same shape & dtype as w_col): each element
+        is `representable_grid_value × frozen_scales[r, col_idx // block_size]`.
+    """
+    if fmt == "mxfp8":
+        block_size = 32
+        max_format = FP8_E4M3_MAX
+        grid = torch.tensor(_FP8_E4M3_POS, device=w_col.device, dtype=torch.float32)
+    elif fmt == "nvfp4":
+        block_size = 16
+        max_format = FP4_E2M1_MAX
+        grid = torch.tensor(FP4_E2M1_POS, device=w_col.device, dtype=torch.float32)
+    else:
+        raise ValueError(f"unknown FP format {fmt!r}; expected 'mxfp8' or 'nvfp4'")
+
+    block_idx = col_idx // block_size
+    scale = frozen_scales[..., block_idx]  # (rows,)
+    scaled = (w_col.to(torch.float32) / scale).clamp(-max_format, max_format)
+    q = _round_to_nearest_value(scaled, grid)
+    return (q * scale).to(w_col.dtype)
+
+
 def fake_quantize_mxfp8(
     x: torch.Tensor,
     block_size: int = 32,

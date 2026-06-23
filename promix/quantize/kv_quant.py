@@ -51,14 +51,28 @@ class WeightQuantizer(nn.Module):
     def find_params(self, x):
         if self.bits == 16:
             return
-        # FP block-scaled formats: no per-channel scale to fit (block scales
-        # are computed inside the fake_quantize_* helpers per call). Mark
-        # as ready by setting a non-zero scale buffer so `ready()` returns
-        # True; the `.quantize()` path then dispatches to the FP helper.
+        # FP block-scaled formats: compute & freeze the per-row-per-block
+        # scale up front. Section-11-style FP GPTQ then rounds each
+        # column's Hessian-corrected value against the SAME frozen scale,
+        # rather than recomputing the scale on every per-column round
+        # (which is impossible anyway because per-column quant violates
+        # block alignment). Mark `ready()` True by also setting a non-zero
+        # `scale` buffer for legacy callers that only check that.
         if isinstance(self.bits, str):
-            # Use a unit scale just to satisfy `ready()` — actual block
-            # scale lives inside the FP helper. Shape conventions match the
-            # INT path (scale repeated per row when not perchannel).
+            from promix.quantize.quant_utils import (
+                select_block_scales_mxfp8,
+                select_block_scales_nvfp4,
+            )
+            if self.bits == "mxfp8":
+                self.frozen_scales = select_block_scales_mxfp8(x, block_size=32)
+                self.frozen_block_size = 32
+            elif self.bits == "nvfp4":
+                self.frozen_scales = select_block_scales_nvfp4(x, block_size=16)
+                self.frozen_block_size = 16
+            else:
+                raise NotImplementedError(
+                    f"WeightQuantizer.find_params: unknown FP format {self.bits!r}"
+                )
             self.scale = torch.ones((x.shape[0], 1), device=x.device, dtype=x.dtype)
             self.zero = torch.zeros_like(self.scale)
             return
@@ -118,6 +132,29 @@ class WeightQuantizer(nn.Module):
         shape = [-1] + [1] * (len(shape) - 1)
         self.scale = self.scale.reshape(shape)
         self.zero = self.zero.reshape(shape)
+
+    def quantize_column_with_frozen_scale(self, w_col, col_idx):
+        """Round one column to nearest FP representable using the frozen
+        block scale set by `find_params(W)`. FP-only.
+
+        Used by Section 11 GPTQ: the block scale is frozen up-front from
+        the original (uncorrected) weight; the per-column Hessian-corrected
+        value is then rounded against that frozen scale so block scales
+        and Hessian correction compose cleanly.
+        """
+        from promix.quantize.quant_utils import quantize_column_with_frozen_scale
+        if not isinstance(self.bits, str):
+            raise RuntimeError(
+                "quantize_column_with_frozen_scale is FP-only; got numeric bits "
+                f"{self.bits!r}"
+            )
+        if not hasattr(self, "frozen_scales"):
+            raise RuntimeError(
+                "quantize_column_with_frozen_scale requires find_params(W) first"
+            )
+        return quantize_column_with_frozen_scale(
+            w_col, self.frozen_scales, col_idx, fmt=self.bits
+        )
 
     def quantize(self, x):
         # FP block-scaled formats: dispatch to the spec-derived fake

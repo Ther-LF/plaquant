@@ -80,22 +80,23 @@ class GPTQ:
 
         # Detect whether any active quantizer uses a string FP format
         # identifier (e.g. "mxfp8", "nvfp4"). FP block-scaled formats
-        # require last-dim sizes divisible by their block size (32 / 16),
-        # so per-column quantization (last dim = 1) is invalid for them.
+        # have a per-block FP32 scale that the per-column GPTQ inner
+        # loop must NOT recompute (recomputing would defeat the
+        # fixed-scale property and require block-aligned column
+        # windows, which the inner loop does not provide).
         #
-        # POLICY (temporary, fake-FP smoke path): when any segment is FP,
-        # skip the per-column Hessian-corrected GPTQ loop entirely and
-        # fall back to plain block-scaled round-to-nearest on the whole
-        # weight tensor. This is NOT the spec's GPTQ-with-fixed-block-scale
-        # behavior — it loses Hessian correction. It is the minimum
-        # plumbing needed to produce a first fake-FP PPL measurement.
-        # If that PPL is within the non-regression bar of the INT
-        # baseline (±0.05 across 1B/3B/8B), this stays. If PPL
-        # regresses, a future round implements the spec's
-        # Hessian-conditioned element rounding under fixed block scales
-        # (i.e. compute the block scale once per block from the original
-        # weights, freeze it, then run the per-element GPTQ rounding
-        # using the FP element grid instead of the INT grid).
+        # Implementation per spec Section 11 (fixed-block-scale,
+        # Hessian-conditioned element rounding): each FP quantizer's
+        # `find_params(W_segment)` (called above) freezes a per-row
+        # per-block scale tensor on the original uncorrected weight.
+        # Inside the per-column inner loop, FP segments call
+        # `quantize_column_with_frozen_scale(w_corrected, col_idx)`
+        # instead of `quantize(w_unsqueezed)`; the column's frozen
+        # block scale is selected by `col_idx // block_size`. Hessian
+        # correction is preserved (the corrected `w` is still rounded
+        # to the nearest representable on the SAME element grid the
+        # fake quantizer uses), so the FP path is genuine GPTQ, not
+        # whole-tensor RTN.
         #
         # Q_int is None for FP because there is no integer storage; real
         # FP-byte packing is the kernel-side weight packer's job, not
@@ -110,27 +111,16 @@ class GPTQ:
                 any_fp = any_fp or _is_fp(self.low_quantizer)
         Q_int = None if any_fp else torch.zeros_like(W, dtype=torch.int16)
 
-        if any_fp:
-            # Round-to-nearest (no Hessian correction) per active quantizer
-            # for each segment. The columns of W are already block-aligned by
-            # construction (K_total is a multiple of MMA block sizes for
-            # all real layer shapes; the segment lengths are configured to
-            # respect those block sizes elsewhere). Segment quantizers only
-            # exist when their corresponding *_length is non-zero (mirrors
-            # the find_params gating above).
-            if mp:
-                if self.low_bits_length != 0:
-                    Q[:, :low_dim] = self.low_quantizer.quantize(W[:, :low_dim])
-                Q[:, low_dim:high_dim] = self.quantizer.quantize(W[:, low_dim:high_dim])
-                if self.high_bits_length != 0:
-                    Q[:, high_dim:] = self.high_quantizer.quantize(W[:, high_dim:])
-            else:
-                Q = self.quantizer.quantize(W)
-            self.layer.weight.data = Q.reshape(self.layer.weight.shape).to(
-                self.layer.weight.data.dtype
+        if any_fp and groupsize != -1:
+            # Re-running find_params on a column window during the GPTQ
+            # loop would re-freeze the FP block scale on the corrected
+            # weights, breaking the spec's "scale frozen up-front from
+            # the ORIGINAL weight" rule. Configurations that mix FP
+            # segments with non-trivial groupsize are not yet supported.
+            raise NotImplementedError(
+                "FP GPTQ requires groupsize=-1; got groupsize="
+                f"{groupsize}. Per-group FP scale refresh is future work."
             )
-            self.Q_int = None
-            return
 
         damp = percdamp * torch.mean(torch.diag(H))
         diag = torch.arange(self.columns, device=self.dev)
@@ -163,18 +153,41 @@ class GPTQ:
                         self.quantizer.find_params(W[:, (i1 + i):(i1 + i + groupsize)])
 
                 if mp and (i1 + i) >= high_dim:
-                    q = self.high_quantizer.quantize(w.unsqueeze(1)).flatten()
-                    if not _is_fp(self.high_quantizer):
+                    if _is_fp(self.high_quantizer):
+                        # FP path: round Hessian-corrected `w` against the
+                        # frozen per-block scale for this segment-relative
+                        # column. The high segment starts at column high_dim
+                        # in W; segment_col indexes into the high segment.
+                        segment_col = (i1 + i) - high_dim
+                        q = self.high_quantizer.quantize_column_with_frozen_scale(
+                            w, segment_col
+                        )
+                    else:
+                        q = self.high_quantizer.quantize(w.unsqueeze(1)).flatten()
                         q_int_val, _, _ = self.high_quantizer.quantize_to_int(w.unsqueeze(1))
                         Q_int[:, i1 + i] = q_int_val.flatten()
                 elif mp and (i1 + i) < low_dim:
-                    q = self.low_quantizer.quantize(w.unsqueeze(1)).flatten()
-                    if not _is_fp(self.low_quantizer):
+                    if _is_fp(self.low_quantizer):
+                        # Low segment starts at column 0 of W.
+                        segment_col = i1 + i
+                        q = self.low_quantizer.quantize_column_with_frozen_scale(
+                            w, segment_col
+                        )
+                    else:
+                        q = self.low_quantizer.quantize(w.unsqueeze(1)).flatten()
                         q_int_val, _, _ = self.low_quantizer.quantize_to_int(w.unsqueeze(1))
                         Q_int[:, i1 + i] = q_int_val.flatten()
                 else:
-                    q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
-                    if not _is_fp(self.quantizer):
+                    if _is_fp(self.quantizer):
+                        # Main segment starts at column low_dim of W (or 0
+                        # when not mp). segment_col indexes into the main
+                        # segment for the frozen-scale lookup.
+                        segment_col = (i1 + i) - low_dim
+                        q = self.quantizer.quantize_column_with_frozen_scale(
+                            w, segment_col
+                        )
+                    else:
+                        q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
                         q_int_val, _, _ = self.quantizer.quantize_to_int(w.unsqueeze(1))
                         Q_int[:, i1 + i] = q_int_val.flatten()
 
@@ -187,7 +200,8 @@ class GPTQ:
             Q[:, i1:i2] = Q1
             W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:])
 
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         if actorder:
             Q = Q[:, invperm]

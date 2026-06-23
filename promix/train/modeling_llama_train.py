@@ -417,6 +417,17 @@ class LlamaAttention(nn.Module):
         self.R2_0 = None
         self.R2_1 = None
         self.R2_2 = None
+        # When the basis bundle uses `o_proj_pca: full_global`, fuse_basis_to_model
+        # applies a single hidden_dim PCA basis (`U_oproj_g`) to the o_proj
+        # input and does NOT compose dynamic per-head R2 into that transform.
+        # Step 1 must train the SAME transform Step 2 fuses, otherwise the
+        # optimization target and the evaluation target are different bases.
+        # When this flag is True, the o_proj forward in this attention layer
+        # drops dynamic R2 (the v_proj path keeps R2 because R2 is intrinsic
+        # to attention's V path; only the o_proj input transform changes).
+        # `optimize_rotation.py` sets this per-layer when global o_proj is in
+        # use; legacy per-head mode keeps it False.
+        self.use_oproj_global = False
 
         # TODO (joao): remove in v4.46 (RoPE is computed in the model, not in the decoder layers)
         self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
@@ -536,8 +547,11 @@ class LlamaAttention(nn.Module):
 
         attn_output = attn_output.reshape(bsz, q_len, -1)
 
-        # rearrange attn_output and o_proj weight
-        attn_output = self.o_proj(attn_output, R1, R2 = R2, transpose=True)
+        # Rearrange attn_output and o_proj weight. In global o_proj mode
+        # the fused transform (U_oproj_g) does not compose R2, so training
+        # must drop R2 here too — see __init__ comment.
+        oproj_R2 = None if self.use_oproj_global else R2
+        attn_output = self.o_proj(attn_output, R1, R2=oproj_R2, transpose=True)
 
         if not output_attentions:
             attn_weights = None
@@ -676,8 +690,10 @@ class LlamaFlashAttention2(LlamaAttention):
         )
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
-        # rearrange attn_output and o_proj weight
-        attn_output = self.o_proj(attn_output, R1, R2 = R2, transpose=True)
+        # Drop R2 from o_proj path in global mode (same rationale as
+        # LlamaAttention; see __init__ comment).
+        oproj_R2 = None if self.use_oproj_global else R2
+        attn_output = self.o_proj(attn_output, R1, R2=oproj_R2, transpose=True)
 
 
         if not output_attentions:
@@ -798,8 +814,10 @@ class LlamaSdpaAttention(LlamaAttention):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
 
-        # rearrange attn_output and o_proj weight
-        attn_output = self.o_proj(attn_output, R1, R2 = R2,transpose=True)
+        # Drop R2 from o_proj path in global mode (same rationale as
+        # LlamaAttention; see __init__ comment).
+        oproj_R2 = None if self.use_oproj_global else R2
+        attn_output = self.o_proj(attn_output, R1, R2=oproj_R2, transpose=True)
 
 
         return attn_output, None, past_key_value

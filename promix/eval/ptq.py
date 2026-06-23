@@ -106,6 +106,43 @@ def configure_quantizers(model, config):
         )
 
 
+def run_gptq_if_enabled(model, config, dev, *, _gptq_fwrd=None,
+                        _get_wikitext2=None, _AutoTokenizer=None):
+    """Run GPTQ weight quantization iff `w_bits` is anything except FP16.
+
+    Extracted from `main()` so the FP-aware gate can be exercised in tests
+    without booting the full `main()` model-load + tokenizer + evaluator
+    machinery. Keeps the same control flow `main()` uses; the underscore
+    keyword arguments are seams for tests to stub the heavyweight
+    dependencies (real callers leave them at None to use the imports).
+
+    The gate uses `_quant_enabled(...)`, the shared FP-aware predicate,
+    so string FP-format identifiers like "nvfp4" / "mxfp8" route through
+    GPTQ instead of TypeErroring on a bare `bits < 16`.
+
+    Returns True iff GPTQ ran, False if w_bits was 16 (no quant).
+    """
+    if not _quant_enabled(config['quantize']['w_bits']):
+        return False
+    if _gptq_fwrd is None:
+        _gptq_fwrd = gptq_fwrd
+    if _get_wikitext2 is None:
+        from promix.eval.data import get_wikitext2 as _get_wikitext2
+    if _AutoTokenizer is None:
+        _AutoTokenizer = transformers.AutoTokenizer
+    print("Running GPTQ weight quantization...")
+    tokenizer_calib = _AutoTokenizer.from_pretrained(config['model']['name'])
+    trainloader = _get_wikitext2(
+        nsamples=config['calibration'].get('nsamples', 128),
+        seed=config['calibration'].get('seed', 0),
+        seqlen=2048,
+        tokenizer=tokenizer_calib,
+        eval_mode=False,
+    )
+    _gptq_fwrd(model, trainloader, dev, config)
+    return True
+
+
 def setup_down_proj_hadamard(model):
     """Set online Hadamard rotation for down_proj layers."""
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
@@ -169,22 +206,10 @@ def main():
     setup_down_proj_hadamard(model)
     install_column_order_hooks(model)
 
-    # 5b. GPTQ weight quantization. _quant_enabled accepts both numeric
-    # bits (below-16 enables INT quant) and string FP-format identifiers
-    # ("mxfp8", "nvfp4"); a bare numeric comparison would TypeError on
-    # the string form, so always route through the predicate.
-    if _quant_enabled(config['quantize']['w_bits']):
-        print("Running GPTQ weight quantization...")
-        from promix.eval.data import get_wikitext2 as get_wikitext2_calib
-        tokenizer_calib = transformers.AutoTokenizer.from_pretrained(config['model']['name'])
-        trainloader = get_wikitext2_calib(
-            nsamples=config['calibration'].get('nsamples', 128),
-            seed=config['calibration'].get('seed', 0),
-            seqlen=2048,
-            tokenizer=tokenizer_calib,
-            eval_mode=False,
-        )
-        gptq_fwrd(model, trainloader, DEV, config)
+    # 5b. GPTQ weight quantization. The FP-aware gate lives in
+    # `run_gptq_if_enabled` so the same control flow can be exercised
+    # by tests without the full model-load / tokenizer machinery.
+    run_gptq_if_enabled(model, config, DEV)
 
     # 6. Configure quantizers
     configure_quantizers(model, config)
