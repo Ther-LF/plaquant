@@ -39,6 +39,12 @@ def configure_quantizers(model, config):
     low_fraction = qcfg.get('low_fraction', 0.0)
     high_bits_length = int(high_fraction * model_dim)
     low_bits_length = int(low_fraction * model_dim)
+    # When the basis bundle was built with global hidden-dim PCA on o_proj
+    # input, the per-head group concept is gone for o_proj. The o_proj
+    # quantizer must use groupsize=-1 with hidden-dim-derived high/low
+    # split, matching every other Linear (q/k/v/gate/up/down). Detect via
+    # the same config knob basis.py / rotation.py read.
+    o_proj_global = qcfg.get('o_proj_pca', 'per_head') == 'full_global'
 
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     for name in qlayers:
@@ -63,9 +69,16 @@ def configure_quantizers(model, config):
             )
 
         if "o_proj" in name:
-            layer_groupsize = head_dim
-            layer_high_length = int(head_dim * high_fraction)
-            layer_low_length = int(head_dim * low_fraction)
+            if o_proj_global:
+                # Global hidden-dim split (no per-head groupsize): o_proj
+                # follows the same code path as q/k/v/gate/up/down.
+                layer_groupsize = -1
+                layer_high_length = high_bits_length
+                layer_low_length = low_bits_length
+            else:
+                layer_groupsize = head_dim
+                layer_high_length = int(head_dim * high_fraction)
+                layer_low_length = int(head_dim * low_fraction)
 
         if "lm_head" in name:
             layer_bits = 16

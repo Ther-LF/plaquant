@@ -212,9 +212,9 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
         if R2_0 is not None:
             R2 = torch.block_diag(R2_0.cuda().to(torch.float64), R2)
 
-    # Detect whether basis bundle was built with `o_proj_pca: full_global`
-    # mode (PLAQuant-SM100 PRIMARY). Presence of this key on at least one layer
-    # opts the rotation pipeline into the global-hidden-dim path for o_proj.
+    # Detect whether the basis bundle was built with `o_proj_pca: full_global`
+    # mode. Presence of this key on at least one layer opts the rotation
+    # pipeline into the global-hidden-dim path for o_proj.
     use_oproj_global = any(
         f"layer.{i}.self_attn.o_proj_global" in U_cpk for i in range(len(layers))
     )

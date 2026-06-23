@@ -180,9 +180,9 @@ def optimize_rotation(
     num_heads_model = model.config.num_attention_heads
     head_dim_model = model.config.hidden_size // num_heads_model
 
-    # PLAQuant-SM100 PRIMARY: detect global o_proj PCA basis emitted by
-    # `o_proj_pca: full_global` mode in basis.py. When present, replace the
-    # per-head `value` PCA on o_proj input with a single hidden_dim transform.
+    # Detect the global o_proj PCA basis emitted by `o_proj_pca: full_global`
+    # in basis.py. When present, replace the per-head `value` PCA on o_proj
+    # input with a single hidden_dim transform.
     use_oproj_global = any(
         f"layer.{i}.self_attn.o_proj_global" in U_cpk for i in range(len(model.model.layers))
     )
@@ -215,12 +215,12 @@ def optimize_rotation(
     cleanup_memory()
     add_actquant(model)
 
-    # PLAQuant-SM100 PRIMARY (Round 3): Step 1 (rotation training) MUST configure
-    # the activation quantizers with the same FP/INT bits + segment split as
-    # Step 2 (PTQ eval). Without this call, ActQuantWrapper.quantizer stays at
-    # default bits=16 and the wrappers are no-ops, so trainer.train() optimizes
-    # R against ZERO quantization noise — meaningless. We import lazily to
-    # avoid a circular dependency between promix.quantize and promix.eval.
+    # Rotation training MUST configure the activation quantizers with the
+    # same FP/INT bits + segment split as PTQ eval. Without this call,
+    # ActQuantWrapper.quantizer stays at default bits=16 and the wrappers
+    # are no-ops, so trainer.train() optimizes R against zero quantization
+    # noise. Lazy import avoids a circular dependency between
+    # promix.quantize and promix.eval.
     from promix.eval.ptq import configure_quantizers as _configure_quantizers
 
     _configure_quantizers(model, {"quantize": {

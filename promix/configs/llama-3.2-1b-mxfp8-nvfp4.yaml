@@ -19,10 +19,10 @@ quantize:
   # the spec-derived fake_quantize_mxfp8 / fake_quantize_nvfp4 helpers.
   # Existing INT-numeric paths still work; configs that mix INT and FP are
   # not supported in this round.
-  w_bits: 4              # weight bit-width retained for reporting (per-channel weight scale lives in epilogue)
-  a_bits: "nvfp4"        # main activation path = NVFP4 (low channels)
-  high_bits: "mxfp8"     # high-variance channel activation path = MXFP8
-  low_bits: 2            # low-variance INT fallback bits — unused under FP routing but retained for backward compat
+  w_bits: "nvfp4"        # main weight path = NVFP4 (block-scaled fake quant)
+  a_bits: "nvfp4"        # main activation path = NVFP4 (low/main channels)
+  high_bits: "mxfp8"     # high-variance channel path (weights + activations) = MXFP8
+  low_bits: 2            # ignored under FP routing; kept for backward-compat schema
   high_fraction: 0.125
   low_fraction: 0.0
   a_asym: true

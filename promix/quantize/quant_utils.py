@@ -22,11 +22,10 @@ def get_minq_maxq(bits, sym):
     return minq, maxq
 
 
-# Supported FP block-scaled formats (Round 3): the canonical strings ActQuantizer /
-# ActQuantWrapper / WeightQuantizer accept in place of numeric `bits`. Adding a
-# new FP format means: (1) add the string here, (2) implement
-# `fake_quantize_<name>` per the spec, (3) extend the dispatch in
-# ActQuantizer.forward and WeightQuantizer.configure.
+# Canonical strings ActQuantizer / ActQuantWrapper / WeightQuantizer accept
+# in place of numeric `bits`. Adding a new FP block-scaled format means:
+# (1) add the string here, (2) implement `fake_quantize_<name>`, (3) extend
+# the dispatch in ActQuantizer.forward and WeightQuantizer.configure.
 SUPPORTED_FP_FORMATS = ("mxfp8", "nvfp4")
 
 
@@ -140,13 +139,13 @@ class ActQuantizer(nn.Module):
         if self.bits == 16:
             return x
 
-        # FP block-scaled fake quantization (plan task9 routing). String `bits`
-        # selects the spec-derived helper; ignores INT scale/zero/maxq state.
-        # When high_bits / low_bits are also configured (the PRIMARY mixed
-        # MXFP8+NVFP4 design from the plan), apply the same [low | main | high]
-        # split as the INT branch but route each segment to its own FP format.
-        # Block-alignment of each segment length is asserted (MXFP8 needs %32,
-        # NVFP4 needs %16; per spec Section 2).
+        # FP block-scaled fake quantization. String `bits` selects the
+        # spec-derived helper; INT scale/zero/maxq state is ignored. When
+        # high_bits / low_bits are also configured (mixed MXFP8+NVFP4),
+        # apply the same [low | main | high] segment split as the INT
+        # branch but route each segment to its own FP format.
+        # Block-alignment of each segment length is asserted inside the
+        # underlying helper (MXFP8 needs %32, NVFP4 needs %16).
         if isinstance(self.bits, str):
             x_dtype = x.dtype
             high_len = int(self.high_bits_length)
@@ -389,14 +388,13 @@ def find_qlayers(module, layers=None, name=""):
 
 
 # ---------------------------------------------------------------------------
-# MXFP8 / NVFP4 fake quantizers (PLAQuant-SM100, plan AC-1 / spec Section 6)
+# MXFP8 / NVFP4 fake quantizers
 # ---------------------------------------------------------------------------
 #
-# These are PURE PyTorch reference implementations of the format spec at
-# docs/specs/spec-mxfp8-nvfp4.md. They are the source of truth for fake
-# quantization and the reference the AC-1 fake-vs-real equivalence test
-# (spec Section 12) checks against. The kernel epilogue / real packer must
-# produce bit-identical outputs on the same input.
+# Pure PyTorch reference implementations of the block-scaled FP format spec
+# at docs/specs/spec-mxfp8-nvfp4.md. Source of truth for fake quantization;
+# the kernel epilogue / real packer must produce bit-identical outputs on
+# the same input (verified by the fake-vs-real equivalence test).
 #
 # Both functions are quantize-then-dequantize ("fake quant"): the returned
 # tensor has the same dtype/shape as the input but its values are constrained
@@ -547,7 +545,7 @@ def fake_quantize_mxfp8(
         MXFP8 representable set.
     """
     if elem_format != "e4m3":
-        raise NotImplementedError("Round 1 implements MXFP8 E4M3 only; E5M2 is a future option.")
+        raise NotImplementedError("MXFP8 E4M3 only; E5M2 is a future option.")
     assert x.shape[-1] % block_size == 0, (
         f"MXFP8 quantization requires K ({x.shape[-1]}) divisible by block_size ({block_size})"
     )

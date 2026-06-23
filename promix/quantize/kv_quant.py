@@ -34,11 +34,10 @@ class WeightQuantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
-        # FP block-scaled formats (Round 3): when bits is the string
-        # identifier "mxfp8" / "nvfp4", skip the INT maxq computation
-        # entirely. Block scales are computed inside the spec-derived
-        # fake_quantize_* helpers; there's no per-channel scale fitting
-        # step at the WeightQuantizer level for FP.
+        # When bits is the string identifier "mxfp8" / "nvfp4" (block-scaled
+        # FP), skip the INT maxq computation entirely. Block scales are
+        # computed inside the spec-derived fake_quantize_* helpers; there's
+        # no per-channel scale fitting at the WeightQuantizer level for FP.
         if isinstance(bits, str):
             return
         if sym:
@@ -136,8 +135,8 @@ class WeightQuantizer(nn.Module):
         """Return raw integer values and scale/zero (INT path only).
 
         For FP block-scaled formats this is intentionally a no-op: real
-        packing of FP weights into an INT-style buffer is part of the M3
-        weight_packer work (per plan), not the GPTQ output stage. Returns
+        packing of FP weights into an INT-style buffer happens in the
+        kernel-side weight packer, not at the GPTQ output stage. Returns
         (None, None, None) for FP so the caller skips integer storage and
         relies on `quantize()` (fake-FP) for fake-quant PPL eval.
         """

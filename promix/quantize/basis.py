@@ -120,13 +120,13 @@ def compute_basis(
         down_proj_blocksize: Block size for down_proj covariance
         rotation_granularity: "full_shared", "per_layer", or "one_per_decoder"
         o_proj_pca: "per_head" (default, original ResQ behavior) or "full_global"
-            (PLAQuant-SM100 PRIMARY: hidden_dim 2048x2048 PCA on the o_proj input
-            instead of per-head 64x64 block-diagonal). When "full_global", an
-            additional H_oproj covariance is collected from o_proj input
+            (hidden_dim x hidden_dim PCA on the o_proj input instead of
+            per-head head_dim x head_dim block-diagonal). When "full_global",
+            an additional H_oproj covariance is collected from o_proj input
             activations and stored under basis_dict[f"layer.{{i}}.self_attn.o_proj_global"].
-            The original per-head H_value path is also kept for backward compat;
-            downstream rotation.py is responsible for picking up the
-            o_proj_global key when present (Round 2+ wiring).
+            The original per-head H_value path is also kept for backward
+            compat; downstream rotation.py picks up the o_proj_global key
+            when present.
 
     Returns:
         Tuple of (basis_path, rotation_path, eval_path)

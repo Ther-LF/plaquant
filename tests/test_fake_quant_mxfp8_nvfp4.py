@@ -462,3 +462,68 @@ def test_weight_quantizer_string_bits_quantize_to_int_returns_none():
     assert qint is None
     assert scale is None
     assert zero is None
+
+
+# ---------------------------------------------------------------------------
+# GPTQ.fasterquant() FP-segment smoke test
+# ---------------------------------------------------------------------------
+
+
+def test_gptq_fasterquant_fp_path_no_crash_and_q_int_none():
+    """GPTQ.fasterquant() must not crash when any active WeightQuantizer
+    uses a string FP format identifier.
+
+    The per-column INT GPTQ loop calls quantize_to_int() and expects an
+    integer tensor it can flatten into Q_int. For block-scaled FP formats
+    that returns None and the call would TypeError on `None.flatten()`.
+    fasterquant() detects FP via `isinstance(bits, str)` on any active
+    quantizer and bypasses the per-column loop, falling back to plain
+    block-scaled fake-quantize on the whole tensor; Q_int is left as None.
+    """
+    import torch.nn as nn
+
+    from promix.quantize.gptq import GPTQ
+    from promix.quantize.kv_quant import WeightQuantizer
+
+    torch.manual_seed(0)
+    in_features = 256  # 32 (MXFP8 block) and 16 (NVFP4 block) both divide
+    out_features = 64
+    high_bits_length = 32   # MXFP8 segment, %32==0
+    low_bits_length = 0     # no low segment in W4A4 high-only split
+
+    layer = nn.Linear(in_features, out_features, bias=False)
+    layer.weight.data = torch.randn_like(layer.weight.data) * 0.1
+
+    gptq = GPTQ(
+        layer,
+        mixed_precision=True,
+        high_bits_length=high_bits_length,
+        low_bits_length=low_bits_length,
+    )
+
+    main_q = WeightQuantizer()
+    main_q.configure(bits="nvfp4", perchannel=True, sym=True, mse=False)
+    gptq.quantizer = main_q
+
+    high_q = WeightQuantizer()
+    high_q.configure(bits="mxfp8", perchannel=True, sym=True, mse=False)
+    gptq.high_quantizer = high_q
+
+    # add_batch records Hessian; for FP path it is unused because the
+    # per-column GPTQ loop is skipped, but the call must still not crash.
+    inp = torch.randn(2, 8, in_features)
+    out = layer(inp)
+    gptq.add_batch(inp, out)
+
+    # Should not raise; should set self.Q_int to None on the FP path.
+    gptq.fasterquant(blocksize=64, percdamp=0.01, groupsize=-1, actorder=False)
+
+    assert getattr(gptq, "Q_int", "missing") is None, (
+        "GPTQ.fasterquant() FP-segment path must set self.Q_int = None; "
+        f"got {getattr(gptq, 'Q_int', 'missing')!r}"
+    )
+    # Weight should be replaced with fake-quantized values (not equal to
+    # original modulo numerical fluctuation; at minimum the dtype/shape
+    # round-trip must hold).
+    assert layer.weight.shape == (out_features, in_features)
+    assert layer.weight.dtype == torch.float32 or layer.weight.dtype == torch.float16

@@ -77,7 +77,49 @@ class GPTQ:
 
         Losses = torch.zeros_like(W)
         Q = torch.zeros_like(W)
-        Q_int = torch.zeros_like(W, dtype=torch.int16)
+
+        # Detect whether any active quantizer uses a string FP format
+        # identifier (e.g. "mxfp8", "nvfp4"). FP block-scaled formats
+        # require last-dim sizes divisible by their block size (32 / 16),
+        # so per-column quantization (last dim = 1) is invalid for them.
+        # When any segment is FP, skip the per-column Hessian-corrected
+        # GPTQ loop and fall back to plain block-scaled fake-quantize on
+        # the whole weight tensor (round-to-nearest within fixed block
+        # scales). This loses GPTQ's Hessian correction but is sufficient
+        # for fake-FP perplexity evaluation; full FP-aware GPTQ that
+        # threads block scales through the column-wise update is future
+        # work. Q_int is None for FP since there is no integer storage.
+        def _is_fp(q_):
+            return isinstance(getattr(q_, "bits", None), str)
+        any_fp = _is_fp(self.quantizer)
+        if mp:
+            if self.high_bits_length != 0:
+                any_fp = any_fp or _is_fp(self.high_quantizer)
+            if self.low_bits_length != 0:
+                any_fp = any_fp or _is_fp(self.low_quantizer)
+        Q_int = None if any_fp else torch.zeros_like(W, dtype=torch.int16)
+
+        if any_fp:
+            # Round-to-nearest (no Hessian correction) per active quantizer
+            # for each segment. The columns of W are already block-aligned by
+            # construction (K_total is a multiple of MMA block sizes for
+            # all real layer shapes; the segment lengths are configured to
+            # respect those block sizes elsewhere). Segment quantizers only
+            # exist when their corresponding *_length is non-zero (mirrors
+            # the find_params gating above).
+            if mp:
+                if self.low_bits_length != 0:
+                    Q[:, :low_dim] = self.low_quantizer.quantize(W[:, :low_dim])
+                Q[:, low_dim:high_dim] = self.quantizer.quantize(W[:, low_dim:high_dim])
+                if self.high_bits_length != 0:
+                    Q[:, high_dim:] = self.high_quantizer.quantize(W[:, high_dim:])
+            else:
+                Q = self.quantizer.quantize(W)
+            self.layer.weight.data = Q.reshape(self.layer.weight.shape).to(
+                self.layer.weight.data.dtype
+            )
+            self.Q_int = None
+            return
 
         damp = percdamp * torch.mean(torch.diag(H))
         diag = torch.arange(self.columns, device=self.dev)
@@ -111,16 +153,19 @@ class GPTQ:
 
                 if mp and (i1 + i) >= high_dim:
                     q = self.high_quantizer.quantize(w.unsqueeze(1)).flatten()
-                    q_int_val, _, _ = self.high_quantizer.quantize_to_int(w.unsqueeze(1))
-                    Q_int[:, i1 + i] = q_int_val.flatten()
+                    if not _is_fp(self.high_quantizer):
+                        q_int_val, _, _ = self.high_quantizer.quantize_to_int(w.unsqueeze(1))
+                        Q_int[:, i1 + i] = q_int_val.flatten()
                 elif mp and (i1 + i) < low_dim:
                     q = self.low_quantizer.quantize(w.unsqueeze(1)).flatten()
-                    q_int_val, _, _ = self.low_quantizer.quantize_to_int(w.unsqueeze(1))
-                    Q_int[:, i1 + i] = q_int_val.flatten()
+                    if not _is_fp(self.low_quantizer):
+                        q_int_val, _, _ = self.low_quantizer.quantize_to_int(w.unsqueeze(1))
+                        Q_int[:, i1 + i] = q_int_val.flatten()
                 else:
                     q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
-                    q_int_val, _, _ = self.quantizer.quantize_to_int(w.unsqueeze(1))
-                    Q_int[:, i1 + i] = q_int_val.flatten()
+                    if not _is_fp(self.quantizer):
+                        q_int_val, _, _ = self.quantizer.quantize_to_int(w.unsqueeze(1))
+                        Q_int[:, i1 + i] = q_int_val.flatten()
 
                 Q1[:, i] = q
                 Losses[:, i1 + i] = (w - q) ** 2 / d ** 2
@@ -135,12 +180,15 @@ class GPTQ:
 
         if actorder:
             Q = Q[:, invperm]
-            Q_int = Q_int[:, invperm]
+            if Q_int is not None:
+                Q_int = Q_int[:, invperm]
 
         self.layer.weight.data = Q.reshape(self.layer.weight.shape).to(
             self.layer.weight.data.dtype
         )
-        self.Q_int = Q_int.reshape(self.layer.weight.shape)
+        self.Q_int = (
+            Q_int.reshape(self.layer.weight.shape) if Q_int is not None else None
+        )
 
     def free(self):
         self.H = None
@@ -164,14 +212,13 @@ def gptq_fwrd(model, dataloader, dev, config):
     logging.info("-----GPTQ Quantization-----")
     qcfg = config['quantize']
     w_bits = qcfg['w_bits']
-    # PLAQuant-SM100 PRIMARY (Round 3): when high_bits / low_bits are FP
-    # block-scaled identifier strings ("mxfp8" / "nvfp4"), GPTQ's
-    # WeightQuantizer skips INT scale fitting and routes weight rounding
-    # through the spec-derived fake_quantize_* helpers. quantize_to_int
-    # returns (None, None, None) for FP — real INT-byte packing belongs
-    # to the M3 weight_packer pass. No GPTQ-config changes needed for
-    # this round; the existing call sites pass the string directly into
-    # WeightQuantizer.configure which now accepts strings.
+    # When high_bits / low_bits are FP block-scaled identifier strings
+    # ("mxfp8" / "nvfp4"), WeightQuantizer skips INT scale fitting and
+    # routes weight rounding through the spec-derived fake_quantize_*
+    # helpers. quantize_to_int returns (None, None, None) for FP — real
+    # INT-byte packing happens in the kernel-side weight packer. The
+    # existing call sites pass the string directly into
+    # WeightQuantizer.configure which accepts strings.
     w_sym = not qcfg.get('w_asym', False)
     w_clip = qcfg.get('w_clip', True)
     w_groupsize = qcfg.get('w_groupsize', -1)
