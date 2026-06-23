@@ -118,12 +118,14 @@ The fake-vs-real equivalence test (Section 12) explicitly checks this compositio
 For a block of `block_size` consecutive K-direction elements:
 1. Compute `block_max = max_abs(block)` (largest absolute value in the block)
 2. Compute the "ideal" scale: `ideal_scale = block_max / max_format_value` where `max_format_value` is the largest representable element value (MXFP8 E4M3: 448; NVFP4 E2M1: 6)
-3. **Round the scale DOWN to the nearest representable scale value** (NOT round-to-nearest):
-   - MXFP8 E8M0 scale: `chosen_scale = 2^ceil(log2(ideal_scale))` — i.e., the smallest power-of-2 ≥ ideal_scale. Rounding UP (using ceil) ensures element after division stays within representable range.
-   - NVFP4 E4M3 scale: `chosen_scale = nearest_representable_FP8_E4M3_above(ideal_scale)` — smallest E4M3 value ≥ ideal_scale.
-4. Edge case: if `block_max == 0`, set `chosen_scale = 1.0` (the smallest representable scale; produces all-zero quantized block).
+3. **Round the scale UP to the nearest representable scale value** (i.e., toward larger magnitude; smallest representable scale ≥ ideal_scale):
+   - MXFP8 E8M0 scale: `chosen_scale = 2^ceil(log2(ideal_scale))` — the smallest power-of-2 ≥ ideal_scale.
+   - NVFP4 E4M3 scale: `chosen_scale = smallest_representable_FP8_E4M3_above_or_equal(ideal_scale)` — the smallest E4M3 value ≥ ideal_scale.
+4. Edge case: if `block_max == 0`, set `chosen_scale = smallest_positive_representable_scale` (E8M0: 2^-127; E4M3: 2^-9 subnormal-min). All-zero quantized block.
 
-The "round scale up" rule prevents elements from clipping to ±max_format_value when the original block contains an outlier. The minor tradeoff is slightly conservative scale, costing < 1 mantissa bit on average.
+The "round scale UP" rule guarantees `block_max / chosen_scale ≤ max_format_value`, so elements never saturate after the divide-and-round step. The minor tradeoff is a slightly conservative scale (worst case ~1× the ideal), costing under 1 effective mantissa bit on average.
+
+> **Reconciliation note (Round 1)**: the original plan AC-1 said "rounded down to the nearest representable scale value", which conflicted with both the math expressed here (ceil / above-or-equal) and with the safety property the rule is meant to enforce. The plan AC-1 line and this spec section have been reconciled to "round UP" as the canonical rule. Rounding DOWN would push some elements above `max_format_value` after division, forcing saturation and silently corrupting the quantized representation; that would defeat the whole point of a block scale.
 
 ---
 
@@ -266,7 +268,7 @@ If any pair disagrees, the disagreement source must be identified before any ker
 | Element max value | 448 (E4M3) / 57344 (E5M2) | 6 |
 | Block size (K-direction) | 32 | 16 |
 | Block scale dtype | FP8 E8M0 (power-of-2) | FP8 E4M3 (with mantissa) |
-| Scale rounding direction | round UP to nearest representable | round UP to nearest representable |
+| Scale rounding direction | round UP (toward larger magnitude; smallest representable ≥ ideal) | round UP (toward larger magnitude; smallest representable ≥ ideal) |
 | Element rounding | RNE (ties-to-even) | RNE (ties-to-even) |
 | Saturation | clamp ±448 (E4M3) | clamp ±6 |
 | NaN/Inf | E4M3 has NaN; rejected at calibration | no NaN/Inf in E2M1; rejected at calibration |
@@ -283,8 +285,8 @@ If any pair disagrees, the disagreement source must be identified before any ker
 ## Cross-References
 
 - Plan: `.humanize/plans/plaquant-sm100-fp8-nvfp4.md` — AC-1 positive/negative tests, broader context
-- CUTLASS source: `third_party/cutlass/include/cute/atom/mma_traits_sm100.hpp` — atom shape constraints
-- CUTLASS PTX literals: `third_party/cutlass/include/cute/arch/mma_sm100_umma.hpp` lines 993-1197
+- **CUTLASS atom reference memo**: `docs/specs/cutlass-sm100-atom-references.md` — inline excerpts of the SM100 atom traits this spec depends on. The CUTLASS submodule (`third_party/cutlass`, pinned commit `cb37157db`) is not initialized in every checkout, so the memo serves as the reproducible defensive copy. Run `git submodule update --init --recursive third_party/cutlass` to fetch the full source if in-tree verification is needed.
+- CUTLASS upstream (canonical source): <https://github.com/NVIDIA/cutlass> at commit `cb37157db50d0528c4aea99feb37946ec278e3d9`. Files of interest: `include/cute/atom/mma_traits_sm100.hpp` (atom traits) and `include/cute/arch/mma_sm100_umma.hpp` (PTX wrapper macros).
 - Reference INT path: `kernels/mixed_gemm_l20/mixed_gemm_l20.cu` — the SM80 PLAQuant implementation that this spec's MXFP8/NVFP4 path replaces
 - ResQ algorithm: `project-resq/` (submodule) — the upstream rotation method whose noise model R must be retrained against (per plan AC-2)
 

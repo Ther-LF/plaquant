@@ -103,6 +103,7 @@ def compute_basis(
     sparse_fraction: float = 0.0,
     down_proj_blocksize: int = 256,
     rotation_granularity: str = "full_shared",
+    o_proj_pca: str = "per_head",
 ):
     """Compute PCA basis and initial rotation matrices.
 
@@ -118,6 +119,14 @@ def compute_basis(
         sparse_fraction: Fraction for sparsity (0 = no sparsity)
         down_proj_blocksize: Block size for down_proj covariance
         rotation_granularity: "full_shared", "per_layer", or "one_per_decoder"
+        o_proj_pca: "per_head" (default, original ResQ behavior) or "full_global"
+            (PLAQuant-SM100 PRIMARY: hidden_dim 2048x2048 PCA on the o_proj input
+            instead of per-head 64x64 block-diagonal). When "full_global", an
+            additional H_oproj covariance is collected from o_proj input
+            activations and stored under basis_dict[f"layer.{{i}}.self_attn.o_proj_global"].
+            The original per-head H_value path is also kept for backward compat;
+            downstream rotation.py is responsible for picking up the
+            o_proj_global key when present (Round 2+ wiring).
 
     Returns:
         Tuple of (basis_path, rotation_path, eval_path)
@@ -290,6 +299,17 @@ def compute_basis(
     H_value = torch.zeros((nlayers, kv_heads, head_dim, head_dim))
     H_key_pos = torch.zeros((nlayers, kv_heads, head_dim, head_dim))
 
+    # PLAQuant-SM100 extension: when o_proj_pca == "full_global", collect a
+    # hidden_dim x hidden_dim covariance directly from o_proj input (the
+    # post-attention concatenated vector). This replaces the per-head 64x64
+    # PCA on V with a global PCA on the actual o_proj input and aligns o_proj
+    # with the q/k/v/gate/up code path (which already uses hidden_dim PCA).
+    use_oproj_global = o_proj_pca == "full_global"
+    if use_oproj_global:
+        H_oproj = torch.zeros((nlayers, hidden_dim, hidden_dim))
+    else:
+        H_oproj = None
+
     for i in tqdm(range(nlayers), desc="Collecting covariance"):
         layer = layers[i].cuda()
 
@@ -312,6 +332,9 @@ def compute_basis(
         def hook_fn_downproj(module, input, output):
             hook_state["input_down"] = input[0]
 
+        def hook_fn_oproj(module, input, output):
+            hook_state["input_oproj"] = input[0]
+
         hooks = [
             layer.self_attn.q_proj.register_forward_hook(hook_fn_qproj),
             layer.self_attn.k_proj.register_forward_hook(hook_fn_kproj),
@@ -319,6 +342,8 @@ def compute_basis(
             layer.mlp.up_proj.register_forward_hook(hook_fn_upproj),
             layer.mlp.down_proj.register_forward_hook(hook_fn_downproj),
         ]
+        if use_oproj_global:
+            hooks.append(layer.self_attn.o_proj.register_forward_hook(hook_fn_oproj))
 
         for j in range(nbatches):
             outs[j] = layer(
@@ -369,6 +394,14 @@ def compute_basis(
                 dim=0,
             ).cpu()
 
+            if use_oproj_global:
+                input_oproj = hook_state["input_oproj"]
+                # input_oproj has shape (batch, seqlen, hidden_dim); accumulate
+                # the full hidden_dim x hidden_dim covariance (no per-head split).
+                H_oproj[i] += torch.sum(
+                    input_oproj.double().mT @ input_oproj.double(), dim=0
+                ).cpu()
+
         for hook in hooks:
             hook.remove()
         layers[i] = layers[i].cpu()
@@ -408,6 +441,18 @@ def compute_basis(
             eval_dict[f"layer.{i}.self_attn.value"] = eval_value.cpu()
             eval_dict[f"layer.{i}.self_attn.key_pos"] = eval_k_pos.cpu()
             eval_dict[f"layer.{i}.mlp.down_proj"] = eval_down.cpu()
+
+            if use_oproj_global:
+                # Hidden_dim x hidden_dim PCA on o_proj input. Stored under a
+                # NEW key (o_proj_global) so the legacy "value" key remains
+                # available for downstream code that still expects per-head.
+                # rotation.py / quant pipeline must opt into reading
+                # o_proj_global; until then, this is an additional artifact.
+                eval_oproj_g, evec_oproj_g = eigen_decompose(
+                    H_oproj[i] / (nbatches * seqlen)
+                )
+                basis_dict[f"layer.{i}.self_attn.o_proj_global"] = evec_oproj_g.cpu()
+                eval_dict[f"layer.{i}.self_attn.o_proj_global"] = eval_oproj_g.cpu()
 
     elif "per_layer" in rotation_granularity.lower():
         basis_dict["config"] = "per_layer_rotation"
@@ -487,6 +532,7 @@ def main():
         sparse_fraction=config["quantize"].get("sparse_fraction", 0.0),
         down_proj_blocksize=config["quantize"].get("down_proj_blocksize", 256),
         rotation_granularity=config["quantize"]["rotation_granularity"],
+        o_proj_pca=config["quantize"].get("o_proj_pca", "per_head"),
     )
 
     print(f"\nDone! Files saved:")
