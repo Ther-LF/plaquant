@@ -1,24 +1,22 @@
-# ProMix Quantization Config: Llama-3.2-1B — PLAQuant-SM100 PRIMARY (MXFP8 high path + NVFP4 low path)
+# ProMix Quantization Config: Llama-3.2-1B mixed MXFP8 (high) + NVFP4 (main)
 #
-# This config selects the FP block-scaled fake quantizer (per spec
-# docs/specs/spec-mxfp8-nvfp4.md) and enables the global hidden_dim PCA on
-# o_proj input (per plan AC-2.1 / task7). Use for fake-FP PPL evaluation
-# in M1 (Round 3+ remote runs); the same config will apply to real-FP
-# integration in M3.
+# Selects the block-scaled FP fake quantizer (see
+# docs/specs/spec-mxfp8-nvfp4.md) and enables global hidden_dim PCA on
+# o_proj input.
 #
 # Output paths are deliberately distinct from the INT W4A4 config so the
-# two pipelines can coexist without overwriting each other's basis / R / PTQ
-# artifacts.
+# two pipelines can coexist without overwriting each other's basis / R /
+# PTQ artifacts.
 
 model:
   name: "unsloth/Llama-3.2-1B"
   type: "llama"
 
 quantize:
-  # Activation / weight bit-format: string identifiers route ActQuantizer to
-  # the spec-derived fake_quantize_mxfp8 / fake_quantize_nvfp4 helpers.
-  # Existing INT-numeric paths still work; configs that mix INT and FP are
-  # not supported in this round.
+  # Activation / weight bit-format: string identifiers route ActQuantizer
+  # and WeightQuantizer to the spec-derived fake_quantize_mxfp8 /
+  # fake_quantize_nvfp4 helpers. Numeric INT paths still work; configs
+  # that mix INT and FP within a single Linear are not supported.
   w_bits: "nvfp4"        # main weight path = NVFP4 (block-scaled fake quant)
   a_bits: "nvfp4"        # main activation path = NVFP4 (low/main channels)
   high_bits: "mxfp8"     # high-variance channel path (weights + activations) = MXFP8
@@ -27,7 +25,7 @@ quantize:
   low_fraction: 0.0
   a_asym: true
   w_asym: false
-  k_bits: 16             # KV cache stays FP16 in this W4A4 baseline; W4A4KV4 lives in a separate config
+  k_bits: 16             # KV cache stays FP16 in this W4A4 baseline; KV4 variant lives in a separate config
   v_bits: 16
   k_asym: true
   v_asym: true
@@ -41,9 +39,11 @@ quantize:
   down_proj_blocksize: 256
   rotate_mode: "resq"
   rotation_granularity: "full_shared"
-  # PLAQuant-SM100 PRIMARY: replace per-head 64x64 o_proj PCA with full
-  # hidden_dim PCA. basis.py emits an extra `o_proj_global` key per layer;
-  # rotation.py / optimize_rotation.py automatically consume it when present.
+  # Replace per-head head_dim x head_dim o_proj PCA with full hidden_dim
+  # PCA. basis.py emits an extra `o_proj_global` key per layer;
+  # rotation.py / optimize_rotation.py / configure_quantizers consume it
+  # when present and switch to a global hidden-dim [low | main | high]
+  # split for o_proj.
   o_proj_pca: "full_global"
 
 paths:

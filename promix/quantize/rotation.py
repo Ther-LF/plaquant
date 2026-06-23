@@ -118,8 +118,25 @@ def _apply_had_to_linear(module, had_dim, output, R2, per_head):
     module.weight.data = W_.to(device=dev, dtype=dtype)
 
 
-def rearrange_columns(model, high_fraction, low_fraction=0.0):
-    """Rearrange o_proj columns so [low|main|high] are physically contiguous."""
+def rearrange_columns(model, high_fraction, low_fraction=0.0, o_proj_pca="per_head"):
+    """Rearrange o_proj columns so [low|main|high] are physically contiguous.
+
+    Per-head mode: each head's columns end with the highest-variance
+    coordinates after the per-head value PCA. Without rearrangement the
+    quantizer sees high channels scattered across heads (h0_high, h1_high,
+    ...); the helper below moves all per-head high tails to the end of
+    the full tensor producing [low_all | main_all | high_all].
+
+    Global mode (o_proj_pca == "full_global"): the o_proj input has been
+    rotated by a single hidden_dim PCA basis whose columns are sorted
+    ascending by eigenvalue (see `eigen_decompose`), so the tensor is
+    ALREADY in [low_all | main_all | high_all] order — the highest-variance
+    coordinates sit at the end of the full hidden dim, not at the end of
+    each head. Rearranging again would scramble the variance order.
+    Skip the helper and leave `new_column_order` at its default `None`.
+    """
+    if o_proj_pca == "full_global":
+        return
     head_dim = model.config.hidden_size // model.config.num_attention_heads
     high_bits_length = int(high_fraction * model.config.hidden_size)
     low_bits_length = int(low_fraction * model.config.hidden_size)

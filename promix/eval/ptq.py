@@ -16,7 +16,12 @@ from promix.utils import DEV, cleanup_memory
 from promix.models.loader import load_model, install_column_order_hooks
 from promix.quantize.fuse_norm import fuse_layer_norms
 from promix.quantize.rotation import fuse_basis_to_model, rearrange_columns
-from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
+from promix.quantize.quant_utils import (
+    ActQuantWrapper,
+    _quant_enabled,
+    add_actquant,
+    find_qlayers,
+)
 from promix.quantize.hadamard import get_hadK
 from promix.quantize.kv_quant import setup_k_quant
 from promix.quantize.gptq import gptq_fwrd
@@ -54,7 +59,7 @@ def configure_quantizers(model, config):
         layer_high_length = high_bits_length
         layer_low_length = low_bits_length
 
-        if "v_proj" in name and qcfg.get('v_bits', 16) < 16:
+        if "v_proj" in name and _quant_enabled(qcfg.get('v_bits', 16)):
             v_groupsize = head_dim
             v_high = int(v_groupsize * high_fraction)
             v_low = int(v_groupsize * low_fraction)
@@ -155,6 +160,7 @@ def main():
         model,
         high_fraction=config['quantize']['high_fraction'],
         low_fraction=config['quantize'].get('low_fraction', 0.0),
+        o_proj_pca=config['quantize'].get('o_proj_pca', 'per_head'),
     )
     cleanup_memory()
 
@@ -163,8 +169,11 @@ def main():
     setup_down_proj_hadamard(model)
     install_column_order_hooks(model)
 
-    # 5b. GPTQ weight quantization (if w_bits < 16)
-    if config['quantize']['w_bits'] < 16:
+    # 5b. GPTQ weight quantization. _quant_enabled accepts both numeric
+    # bits (below-16 enables INT quant) and string FP-format identifiers
+    # ("mxfp8", "nvfp4"); a bare numeric comparison would TypeError on
+    # the string form, so always route through the predicate.
+    if _quant_enabled(config['quantize']['w_bits']):
         print("Running GPTQ weight quantization...")
         from promix.eval.data import get_wikitext2 as get_wikitext2_calib
         tokenizer_calib = transformers.AutoTokenizer.from_pretrained(config['model']['name'])

@@ -101,6 +101,7 @@ def optimize_rotation(
     low_bits: int = 2,
     a_bits=4,
     a_asym: bool = True,
+    o_proj_pca: str = "per_head",
 ):
     """Optimize rotation matrices on the Stiefel manifold.
 
@@ -223,6 +224,12 @@ def optimize_rotation(
     # promix.quantize and promix.eval.
     from promix.eval.ptq import configure_quantizers as _configure_quantizers
 
+    # `o_proj_pca` MUST match the value the basis bundle was built with.
+    # If the bundle has `o_proj_global` keys but configure_quantizers is
+    # called without `o_proj_pca: "full_global"`, Step 1 trains the
+    # rotation under a per-head o_proj quantizer noise model while Step 2
+    # later configures o_proj as global hidden-dim — the two steps then
+    # disagree on the o_proj quantizer's groupsize and high/low split.
     _configure_quantizers(model, {"quantize": {
         "a_bits": a_bits,
         "high_bits": high_bits,
@@ -232,6 +239,7 @@ def optimize_rotation(
         "a_asym": a_asym,
         "v_bits": 16,  # KV not quantized during R training
         "k_bits": 16,
+        "o_proj_pca": o_proj_pca,
     }})
     print(
         f"[optimize_rotation] configured activation quantizers: "
@@ -468,6 +476,7 @@ def main():
         low_bits=config["quantize"]["low_bits"],
         a_bits=config["quantize"].get("a_bits", 4),
         a_asym=config["quantize"].get("a_asym", True),
+        o_proj_pca=config["quantize"].get("o_proj_pca", "per_head"),
     )
 
     print(f"\nDone! Optimized rotation saved to: {rotation_path}")

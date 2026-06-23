@@ -160,31 +160,28 @@ def test_nvfp4_quantization_error_bounded(small_input_nvfp4):
     )
 
 
+@pytest.mark.skip(
+    reason=(
+        "Heuristic ratio-normalization is brittle: it assumes the smallest "
+        "observed non-zero output magnitude is always 0.5*scale, which only "
+        "holds when at least one element rounds there. With seed 42 the "
+        "smallest observed magnitude maps to a larger E2M1 multiple, the "
+        "ratios shift, and legitimate E2M1 values like 0.75 (ratio 1.5 vs "
+        "the new 'smallest') appear to fail. The test passes for some seeds "
+        "and fails for others; it is not a sound representable-set check. A "
+        "proper rewrite would recompute the same block scale the helper "
+        "uses (round-UP to FP8 E4M3 of block_max / FP4_E2M1_MAX) and verify "
+        "out / chosen_scale ∈ {±FP4_E2M1_POS} element-wise. That requires "
+        "exposing the scale-selection step from fake_quantize_nvfp4 as a "
+        "helper, which is round 6+ work; representable-set membership is "
+        "already covered by the no-clipping-after-block-scale invariant "
+        "test (fake_quantize_nvfp4 saturating + element rounding) and the "
+        "RNE midpoint tests."
+    )
+)
 def test_nvfp4_representable_set_membership():
-    """All NVFP4 outputs (after dividing by block scale) should land on E2M1 representable values."""
-    torch.manual_seed(42)
-    x = torch.randn(1, 16, dtype=torch.float32) * 2.0  # scale up to exercise more values
-    out = fake_quantize_nvfp4(x)
-    # Reconstruct what scale was used: out_max / max(FP4_E2M1_POS)
-    out_max = out.abs().max().item()
-    # The element values (out / scale) should all be in FP4_E2M1_POS or its negation.
-    # Since the test uses one block, we recover scale as out_max / 6.0 if out_max > 0.
-    if out_max > 0:
-        # Find scale by looking at quantized values' GCD-like structure
-        # Easier: just verify each output is some representable_value * scale for SOME
-        # scale that is power-of-2-ish or FP8 E4M3-ish.
-        unique_abs = sorted(set(out.abs().flatten().tolist()))
-        # Filter near-zero
-        unique_abs = [v for v in unique_abs if v > 1e-9]
-        if unique_abs:
-            base = unique_abs[0]  # smallest non-zero magnitude
-            ratios = sorted(set(round(v / base, 4) for v in unique_abs))
-            # Ratios should be a subset of {1, 2, 3, 4, 6, 8, 12} etc (E2M1 multiples)
-            allowed_ratios = {round(v / FP4_E2M1_POS[1], 4) for v in FP4_E2M1_POS if v > 0}
-            # E2M1 positive values normalized by smallest nonzero (0.5): {1, 2, 3, 4, 6, 8, 12}
-            assert all(r in allowed_ratios or r * 0.5 in allowed_ratios for r in ratios), (
-                f"NVFP4 output ratios {ratios} not all in E2M1 set {allowed_ratios}"
-            )
+    """SKIP — see reason above."""
+    raise RuntimeError("skipped at decorator")
 
 
 # ---------------------------------------------------------------------------
@@ -527,3 +524,111 @@ def test_gptq_fasterquant_fp_path_no_crash_and_q_int_none():
     # round-trip must hold).
     assert layer.weight.shape == (out_features, in_features)
     assert layer.weight.dtype == torch.float32 or layer.weight.dtype == torch.float16
+
+
+# ---------------------------------------------------------------------------
+# Config-level entry-point smoke tests: verify promix.eval.ptq's GPTQ /
+# v_proj gates accept string FP-format identifiers without TypeError.
+# Round 4 added a direct GPTQ.fasterquant() smoke test, but did not exercise
+# `promix/eval/ptq.py`'s string-bits gate that prevents Step 2 from ever
+# reaching gptq_fwrd() when w_bits is "nvfp4".
+# ---------------------------------------------------------------------------
+
+
+def test_quant_enabled_accepts_string_fp_formats():
+    """The shared FP-aware predicate must return True for both numeric
+    quantization (bits<16) and the canonical string FP-format identifiers.
+
+    All ptq.py / inference gates that previously did `bits < 16` must
+    route through this predicate to avoid TypeError on string `bits`.
+    """
+    from promix.quantize.quant_utils import _quant_enabled
+
+    # Numeric: <16 enables quantization, >=16 is pass-through.
+    assert _quant_enabled(4) is True
+    assert _quant_enabled(8) is True
+    assert _quant_enabled(16) is False
+    # String FP-format identifiers must enable quantization.
+    assert _quant_enabled("mxfp8") is True
+    assert _quant_enabled("nvfp4") is True
+    # Unknown strings safely return False (typo guard); validated loudly
+    # at config-load time is a Round 6+ improvement.
+    assert _quant_enabled("nvf4") is False
+
+
+def test_ptq_string_w_bits_does_not_crash_on_legacy_numeric_compare():
+    """Regression test for the round-4 review's main blocker: with
+    `w_bits: "nvfp4"`, a bare `w_bits < 16` (the pre-round-5 ptq.py
+    check) raises TypeError on string-vs-int comparison. Verify the
+    new gate uses _quant_enabled and accepts the string.
+    """
+    import os
+    import yaml
+
+    from promix.quantize.quant_utils import _quant_enabled
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = os.path.join(
+        repo_root, "promix", "configs", "llama-3.2-1b-mxfp8-nvfp4.yaml"
+    )
+    with open(cfg_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    w_bits = cfg["quantize"]["w_bits"]
+    assert isinstance(w_bits, str), (
+        f"FP config must declare string w_bits; got {w_bits!r}"
+    )
+    # Legacy numeric comparison MUST raise TypeError on string — this
+    # confirms the test is exercising the correct regression surface.
+    raised = False
+    try:
+        _ = w_bits < 16  # noqa: B015 — intentional crash regression
+    except TypeError:
+        raised = True
+    assert raised, (
+        "string < int should TypeError; if this assertion fails, the test "
+        "is no longer guarding the round-4 blocker"
+    )
+    # New gate accepts the string FP identifier without crashing.
+    assert _quant_enabled(w_bits) is True
+
+
+def test_ptq_source_does_not_compare_w_bits_numerically():
+    """Source-level regression guard: `promix/eval/ptq.py` must NOT contain
+    a bare `w_bits < 16` (or other numeric comparison on `w_bits`) — that
+    would TypeError when w_bits is "nvfp4" / "mxfp8". The check is a
+    string scan because the runtime path requires `transformers`, which
+    is not installed in the local lightweight test harness.
+
+    Allowed: `_quant_enabled(config['quantize']['w_bits'])` or any other
+    predicate that handles both numeric and string forms.
+    Disallowed: `< 16`, `>= 16`, `== 16`, `!= 16` applied directly to
+    `w_bits` (or any string-typed bits field) without first dispatching
+    on type.
+    """
+    import os
+    import re
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ptq_path = os.path.join(repo_root, "promix", "eval", "ptq.py")
+    with open(ptq_path, "r") as f:
+        src = f.read()
+
+    # Pattern: `w_bits` or `config['quantize']['w_bits']` followed by
+    # numeric comparison. Whitespace flexible.
+    bad_patterns = [
+        r"\bw_bits\b\s*[<>=!]=?\s*16\b",
+        r"\bw_bits\b\s*[<>=!]=?\s*\d+\b",
+    ]
+    for pat in bad_patterns:
+        m = re.search(pat, src)
+        assert m is None, (
+            f"promix/eval/ptq.py contains a numeric comparison on w_bits "
+            f"({m.group(0)!r}); this TypeErrors on string FP identifiers. "
+            f"Use _quant_enabled(w_bits) instead."
+        )
+
+    # Positive assertion: the predicate-based gate must be present.
+    assert "_quant_enabled" in src, (
+        "promix/eval/ptq.py must use the shared _quant_enabled predicate "
+        "for w_bits / v_bits gates"
+    )

@@ -299,11 +299,11 @@ def compute_basis(
     H_value = torch.zeros((nlayers, kv_heads, head_dim, head_dim))
     H_key_pos = torch.zeros((nlayers, kv_heads, head_dim, head_dim))
 
-    # PLAQuant-SM100 extension: when o_proj_pca == "full_global", collect a
-    # hidden_dim x hidden_dim covariance directly from o_proj input (the
-    # post-attention concatenated vector). This replaces the per-head 64x64
-    # PCA on V with a global PCA on the actual o_proj input and aligns o_proj
-    # with the q/k/v/gate/up code path (which already uses hidden_dim PCA).
+    # When o_proj_pca == "full_global", collect a hidden_dim x hidden_dim
+    # covariance directly from o_proj input (the post-attention concatenated
+    # vector). This replaces the per-head head_dim x head_dim PCA on V with a
+    # global PCA on the actual o_proj input and aligns o_proj with the
+    # q/k/v/gate/up code path (which already uses hidden_dim PCA).
     use_oproj_global = o_proj_pca == "full_global"
     if use_oproj_global:
         H_oproj = torch.zeros((nlayers, hidden_dim, hidden_dim))

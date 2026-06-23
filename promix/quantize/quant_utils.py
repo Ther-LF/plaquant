@@ -109,10 +109,10 @@ class ActQuantizer(nn.Module):
 
     def configure(self, bits, groupsize=-1, sym=False, clip_ratio=1.0,
                   high_bits_length=0, high_bits=16, low_bits_length=0, low_bits=16, **kwargs):
-        # FP block-scaled formats (per spec docs/specs/spec-mxfp8-nvfp4.md, plan
-        # task9): when `bits` is the string "mxfp8" or "nvfp4", the forward
-        # path dispatches to the spec-derived fake_quantize_* helpers and
-        # skips the INT scale/zero/maxq machinery entirely (block scales are
+        # FP block-scaled formats (per spec docs/specs/spec-mxfp8-nvfp4.md):
+        # when `bits` is the string "mxfp8" or "nvfp4", the forward path
+        # dispatches to the spec-derived fake_quantize_* helpers and skips
+        # the INT scale/zero/maxq machinery entirely (block scales are
         # computed internally per call).
         if isinstance(bits, str):
             self.bits = bits

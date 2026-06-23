@@ -82,13 +82,24 @@ class GPTQ:
         # identifier (e.g. "mxfp8", "nvfp4"). FP block-scaled formats
         # require last-dim sizes divisible by their block size (32 / 16),
         # so per-column quantization (last dim = 1) is invalid for them.
-        # When any segment is FP, skip the per-column Hessian-corrected
-        # GPTQ loop and fall back to plain block-scaled fake-quantize on
-        # the whole weight tensor (round-to-nearest within fixed block
-        # scales). This loses GPTQ's Hessian correction but is sufficient
-        # for fake-FP perplexity evaluation; full FP-aware GPTQ that
-        # threads block scales through the column-wise update is future
-        # work. Q_int is None for FP since there is no integer storage.
+        #
+        # POLICY (temporary, fake-FP smoke path): when any segment is FP,
+        # skip the per-column Hessian-corrected GPTQ loop entirely and
+        # fall back to plain block-scaled round-to-nearest on the whole
+        # weight tensor. This is NOT the spec's GPTQ-with-fixed-block-scale
+        # behavior — it loses Hessian correction. It is the minimum
+        # plumbing needed to produce a first fake-FP PPL measurement.
+        # If that PPL is within the non-regression bar of the INT
+        # baseline (±0.05 across 1B/3B/8B), this stays. If PPL
+        # regresses, a future round implements the spec's
+        # Hessian-conditioned element rounding under fixed block scales
+        # (i.e. compute the block scale once per block from the original
+        # weights, freeze it, then run the per-element GPTQ rounding
+        # using the FP element grid instead of the INT grid).
+        #
+        # Q_int is None for FP because there is no integer storage; real
+        # FP-byte packing is the kernel-side weight packer's job, not
+        # GPTQ's output.
         def _is_fp(q_):
             return isinstance(getattr(q_, "bits", None), str)
         any_fp = _is_fp(self.quantizer)
