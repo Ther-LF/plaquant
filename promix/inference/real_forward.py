@@ -149,7 +149,7 @@ def install_real_forward(model):
     Skips layers with per-group quantization (o_proj) — they keep fake quant.
     Call after pack_model_weights().
     """
-    from promix.quantize.quant_utils import ActQuantWrapper
+    from promix.quantize.quant_utils import ActQuantWrapper, _quant_enabled
 
     count = 0
     skipped = 0
@@ -158,7 +158,7 @@ def install_real_forward(model):
             module._fake_forward = module.forward
             module.forward = lambda x, _m=module, **kwargs: real_forward(_m, x)
             count += 1
-        elif isinstance(module, ActQuantWrapper) and module.quantizer.bits < 16:
+        elif isinstance(module, ActQuantWrapper) and _quant_enabled(module.quantizer.bits):
             skipped += 1
 
     print(f"Installed real forward on {count} layers (skipped {skipped} per-group layers)")

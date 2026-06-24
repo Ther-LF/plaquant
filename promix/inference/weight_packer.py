@@ -6,7 +6,7 @@ ready for tensor core GEMM.
 
 import torch
 
-from promix.quantize.quant_utils import ActQuantWrapper, find_qlayers
+from promix.quantize.quant_utils import ActQuantWrapper, _quant_enabled, find_qlayers
 from promix.inference.quant_ops import (
     quantize_weight_per_channel_symmetric,
     pack_int4,
@@ -17,18 +17,24 @@ from promix.inference.quant_ops import (
 def pack_model_weights(model, w_bits=4):
     """Pack all linear layer weights for real INT inference.
 
-    For each ActQuantWrapper with bits < 16:
+    For each ActQuantWrapper with INT bits < 16:
     - Split weight into main (K_main) and high (K_high) groups
     - Quantize main to w_bits (default 4) per-channel symmetric → pack INT4
     - Quantize high to 8-bit per-channel symmetric
     - Pre-compute column sums for bias correction
+
+    FP-string layers (`bits` ∈ {"mxfp8", "nvfp4"}) are skipped; the
+    M3 FP weight packer (task24) handles them separately.
 
     Stores packed data as buffers on the wrapper.
     """
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
 
     for name, wrapper in qlayers.items():
-        if wrapper.quantizer.bits >= 16:
+        bits = wrapper.quantizer.bits
+        if not _quant_enabled(bits):
+            continue
+        if isinstance(bits, str):
             continue
 
         # Skip per-group layers (o_proj) — they keep fake quant

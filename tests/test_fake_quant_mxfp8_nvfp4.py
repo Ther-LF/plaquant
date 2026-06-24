@@ -2738,3 +2738,179 @@ def test_configure_quantizers_rejects_typo_in_k_bits():
         "configure_quantizers must raise on typo'd k_bits; without "
         "this, KV4 quantization would silently disable on a typo"
     )
+
+
+def test_install_real_forward_does_not_crash_on_string_bits():
+    """Round 16 closes a forgotten BL-20260623-numeric-vs-string-bits-guards
+    instance in install_real_forward(). Before the fix, a model with
+    `w_bits: "nvfp4"` would TypeError on `module.quantizer.bits < 16`
+    when M3 real-FP integration starts. The fix replaces the numeric
+    gate with the shared `_quant_enabled(...)` predicate so FP-string
+    layers without `_real_inference_ready` fall into the `skipped`
+    bucket cleanly.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    import torch.nn as nn
+
+    from promix.quantize.quant_utils import ActQuantWrapper
+    from promix.inference.real_forward import install_real_forward
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Legacy INT path layer
+            self.int_layer = ActQuantWrapper(nn.Linear(32, 32, bias=False))
+            self.int_layer.quantizer.configure(bits=4, groupsize=-1, sym=True)
+            # FP-string path layer (round-9 KV4 / W4A4 FP yamls)
+            self.fp_layer = ActQuantWrapper(nn.Linear(32, 32, bias=False))
+            self.fp_layer.quantizer.configure(bits="nvfp4", groupsize=-1, sym=True)
+
+    model = _Model()
+    # Neither layer has _real_inference_ready=True, so both should
+    # land in the "skipped" branch (which previously hit `bits < 16`
+    # and TypeError'd on the string).
+
+    install_real_forward(model)  # must not raise
+
+    # Both wrappers retain their original forward (no real_forward
+    # installed) because neither was packed.
+    int_wrapper = model.int_layer
+    fp_wrapper = model.fp_layer
+    assert not hasattr(int_wrapper, "_fake_forward"), (
+        "Int layer was not _real_inference_ready; install_real_forward "
+        "must not have installed real_forward on it"
+    )
+    assert not hasattr(fp_wrapper, "_fake_forward"), (
+        "FP layer was not _real_inference_ready; install_real_forward "
+        "must not have installed real_forward on it"
+    )
+
+
+def test_install_real_forward_installs_for_real_inference_ready():
+    """Verify the legacy INT-numeric install path still works after
+    the round-16 _quant_enabled refactor — wrappers with
+    _real_inference_ready=True still get real_forward installed.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    import torch.nn as nn
+
+    from promix.quantize.quant_utils import ActQuantWrapper
+    from promix.inference.real_forward import install_real_forward
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.int_layer = ActQuantWrapper(nn.Linear(32, 32, bias=False))
+            self.int_layer.quantizer.configure(bits=4, groupsize=-1, sym=True)
+            self.int_layer._real_inference_ready = True
+
+    model = _Model()
+    pre_install_func = type(model.int_layer).forward
+
+    install_real_forward(model)
+
+    assert hasattr(model.int_layer, "_fake_forward"), (
+        "install_real_forward must save the original forward as "
+        "_fake_forward when _real_inference_ready is True"
+    )
+    # Saved _fake_forward must wrap the original (pre-install) class
+    # method, not the freshly-installed lambda. Compare via the
+    # underlying function, not the bound-method instance (`is`
+    # comparison on bound methods is unreliable — Python rebinds
+    # each access).
+    assert callable(model.int_layer._fake_forward), (
+        "_fake_forward must be callable after install"
+    )
+    assert getattr(model.int_layer._fake_forward, "__func__", None) is pre_install_func, (
+        "_fake_forward.__func__ must be the original ActQuantWrapper.forward"
+    )
+    # Replaced forward is now the real_forward lambda; importantly,
+    # it is NOT the same callable as the saved _fake_forward.
+    assert model.int_layer.forward is not model.int_layer._fake_forward, (
+        "forward must have been replaced with the real_forward shim"
+    )
+    assert getattr(model.int_layer.forward, "__func__", None) is not pre_install_func, (
+        "the active forward must no longer be the original ActQuantWrapper.forward"
+    )
+
+
+def test_pack_model_weights_skips_string_bits_layer():
+    """Round 16 closes the `bits >= 16` numeric gate at
+    promix/inference/weight_packer.py. With the fix, an FP-string
+    `nvfp4` layer is skipped cleanly (the INT-only `pack_int4(...)`
+    path is not reached); the M3 FP weight packer (task24) handles
+    FP layers separately. Numeric INT4 layers continue to pack as
+    before.
+    """
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    import torch
+    import torch.nn as nn
+
+    from promix.quantize.quant_utils import ActQuantWrapper
+    from promix.inference.weight_packer import pack_model_weights
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Legacy INT4 layer; groupsize=-1 (per-tensor) so it
+            # passes the per-group skip and gets packed.
+            int_lin = nn.Linear(32, 16, bias=False)
+            with torch.no_grad():
+                int_lin.weight.copy_(torch.randn(16, 32) * 0.1)
+            self.int_layer = ActQuantWrapper(int_lin)
+            self.int_layer.quantizer.configure(
+                bits=4, groupsize=-1, sym=True,
+                high_bits_length=0, high_bits=16,
+            )
+            # FP-string layer; before round 16 this would TypeError
+            # on `bits >= 16`. After the fix, it's skipped before the
+            # INT packer runs.
+            fp_lin = nn.Linear(32, 16, bias=False)
+            with torch.no_grad():
+                fp_lin.weight.copy_(torch.randn(16, 32) * 0.1)
+            self.fp_layer = ActQuantWrapper(fp_lin)
+            self.fp_layer.quantizer.configure(
+                bits="nvfp4", groupsize=-1, sym=True,
+                high_bits_length=0, high_bits=16,
+            )
+
+    model = _Model()
+
+    pack_model_weights(model, w_bits=4)
+
+    # INT layer: real_inference_ready, packer ran, buffers installed.
+    assert getattr(model.int_layer, "_real_inference_ready", False), (
+        "INT4 layer must be marked real_inference_ready after packing"
+    )
+    assert hasattr(model.int_layer, "W_main_packed"), (
+        "INT4 layer must have W_main_packed after packing"
+    )
+    assert hasattr(model.int_layer, "s_w_main"), (
+        "INT4 layer must have s_w_main after packing"
+    )
+
+    # FP layer: skipped, no INT-packer buffers, not marked ready.
+    assert not getattr(model.fp_layer, "_real_inference_ready", False), (
+        "FP-string layer must NOT be marked real_inference_ready by "
+        "the INT packer; the FP packer (task24) handles FP layers"
+    )
+    assert not hasattr(model.fp_layer, "W_main_packed"), (
+        "FP-string layer must NOT have W_main_packed; the INT packer "
+        "skipped it before pack_int4 ran"
+    )
+    assert not hasattr(model.fp_layer, "s_w_main"), (
+        "FP-string layer must NOT have s_w_main; the INT packer "
+        "skipped it before quantize_weight_per_channel_symmetric ran"
+    )
