@@ -178,6 +178,62 @@ def run_gptq_if_enabled(model, config, dev, *, _gptq_fwrd=None,
     return True
 
 
+def prepare_ptq_model(config, dev, *, run_gptq=True):
+    """Build a fully PTQ-prepared model from a config dict.
+
+    Performs the canonical Step 2 sequence: load model, fuse layer
+    norms, fuse basis + rotation, rearrange columns (with `o_proj_pca`
+    awareness), add ActQuantWrapper, setup down_proj online Hadamard,
+    install column-order hooks on attention output, run GPTQ if the
+    weight bits are quantized, configure activation quantizers, and
+    setup KV cache quantization. After this returns, the model is
+    ready for forward passes that exercise the full PTQ algorithm
+    Step 2 evaluates against.
+
+    Used by both `ptq.main()` (Step 2 PPL) and
+    `promix.eval.cosine_sanity` (AC-2.4 layer-wise cosine), so the two
+    measurement paths cannot drift in their PTQ build sequence.
+
+    Args:
+        config: yaml config dict (already loaded).
+        dev: torch device string / object passed to GPTQ + KV setup.
+        run_gptq: keep True for production paths; tests can pass False
+            to skip the GPTQ tokenizer + dataloader machinery and
+            still get a fully wrapped model.
+
+    Returns: the prepared `model`.
+    """
+    print("Loading model...")
+    model = load_model(config['model']['name'], dtype=torch.float16)
+    print("Fusing layer norms...")
+    fuse_layer_norms(model)
+    print("Fusing basis and rotation...")
+    fuse_basis_to_model(
+        model,
+        basis_path=config['paths']['basis'],
+        rotation_path=config['paths']['rotation'],
+        high_fraction=config['quantize']['high_fraction'],
+        low_fraction=config['quantize'].get('low_fraction', 0.0),
+    )
+    rearrange_columns(
+        model,
+        high_fraction=config['quantize']['high_fraction'],
+        low_fraction=config['quantize'].get('low_fraction', 0.0),
+        o_proj_pca=config['quantize'].get('o_proj_pca', 'per_head'),
+    )
+    cleanup_memory()
+    add_actquant(model)
+    setup_down_proj_hadamard(model)
+    install_column_order_hooks(model)
+    if run_gptq:
+        run_gptq_if_enabled(model, config, dev)
+    configure_quantizers(model, config)
+    setup_k_quant(model, config,
+                  basis_path=config['paths']['basis'],
+                  rotation_path=config['paths']['rotation'])
+    return model
+
+
 def setup_down_proj_hadamard(model):
     """Set online Hadamard rotation for down_proj layers."""
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
@@ -209,52 +265,13 @@ def main():
 
     transformers.set_seed(config['calibration'].get('seed', 0))
 
-    # 1. Load model
-    print("Loading model...")
-    model = load_model(config['model']['name'], dtype=torch.float16)
+    # 1-7. Build the canonical PTQ model. The same helper is used by
+    # `promix.eval.cosine_sanity` so AC-2.4 measures the SAME path
+    # Step 2 PPL evaluates against (no drift between measurement
+    # surfaces).
+    model = prepare_ptq_model(config, DEV, run_gptq=True)
 
-    # 2. Fuse layer norms
-    print("Fusing layer norms...")
-    fuse_layer_norms(model)
-
-    # 3. Fuse basis + rotation into weights
-    print("Fusing basis and rotation...")
-    fuse_basis_to_model(
-        model,
-        basis_path=config['paths']['basis'],
-        rotation_path=config['paths']['rotation'],
-        high_fraction=config['quantize']['high_fraction'],
-        low_fraction=config['quantize'].get('low_fraction', 0.0),
-    )
-
-    # 4. Rearrange columns
-    rearrange_columns(
-        model,
-        high_fraction=config['quantize']['high_fraction'],
-        low_fraction=config['quantize'].get('low_fraction', 0.0),
-        o_proj_pca=config['quantize'].get('o_proj_pca', 'per_head'),
-    )
-    cleanup_memory()
-
-    # 5. Add quantization wrappers
-    add_actquant(model)
-    setup_down_proj_hadamard(model)
-    install_column_order_hooks(model)
-
-    # 5b. GPTQ weight quantization. The FP-aware gate lives in
-    # `run_gptq_if_enabled` so the same control flow can be exercised
-    # by tests without the full model-load / tokenizer machinery.
-    run_gptq_if_enabled(model, config, DEV)
-
-    # 6. Configure quantizers
-    configure_quantizers(model, config)
-
-    # 7. Setup KV cache quantization (if k_bits < 16)
-    setup_k_quant(model, config,
-                  basis_path=config['paths']['basis'],
-                  rotation_path=config['paths']['rotation'])
-
-    # 7. Evaluate PPL
+    # 8. Evaluate PPL
     print("\nEvaluating wikitext perplexity...")
     tokenizer = transformers.AutoTokenizer.from_pretrained(config['model']['name'])
     model.seqlen = config['eval']['max_length']
@@ -269,7 +286,7 @@ def main():
     print(f"Wikitext-2 Perplexity: {ppl:.2f}")
     print(f"{'='*50}")
 
-    # 8. lm-eval benchmarks
+    # 9. lm-eval benchmarks
     tasks_str = ",".join(config['eval'].get('tasks', []))
     t_results = None
     if tasks_str:
@@ -291,7 +308,7 @@ def main():
         )
         print(make_table(t_results))
 
-    # 9. Save results
+    # 10. Save results
     output_dir = config['paths']['output_dir']
     os.makedirs(output_dir, exist_ok=True)
     results = {"wikitext2_ppl": ppl}

@@ -1781,3 +1781,238 @@ def test_cosine_sanity_per_layer_returns_dict():
         assert c > 0.999, (
             f"layer {idx}: identical-model cosine should be ~1.0; got {c}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Round-11 cosine harness defect-fix tests (Codex round-10 review found
+# 4 substantive defects; these assert the fixes hold).
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_wikitext_yields_correct_shape_tuples():
+    """`chunk_wikitext_for_cosine` (via lower-level
+    `_chunk_from_input_ids`) MUST return a list of `(input_ids, None)`
+    tuples each with shape `(1, seqlen)`, deterministic by seed.
+
+    Round 10's CLI passed the raw BatchEncoding directly into the
+    harness which expects `(input_ids, _)` tuples; the fix is to
+    chunk explicitly.
+    """
+    from promix.eval.cosine_sanity import _chunk_from_input_ids
+
+    total_tokens = 4096
+    seqlen = 256
+    nsamples = 5
+    fake_input_ids = torch.arange(total_tokens, dtype=torch.long).unsqueeze(0)
+
+    chunks = _chunk_from_input_ids(
+        fake_input_ids, nsamples=nsamples, seqlen=seqlen, seed=0
+    )
+    assert isinstance(chunks, list)
+    assert len(chunks) == nsamples
+    for input_ids, label in chunks:
+        assert isinstance(input_ids, torch.Tensor)
+        assert input_ids.shape == (1, seqlen)
+        assert label is None
+
+    # Determinism: same seed -> same chunks.
+    chunks_again = _chunk_from_input_ids(
+        fake_input_ids, nsamples=nsamples, seqlen=seqlen, seed=0
+    )
+    for (a, _), (b, _) in zip(chunks, chunks_again):
+        assert torch.equal(a, b)
+
+    # Different seed -> at least one different chunk start (probabilistic
+    # but deterministic for these specific values).
+    chunks_seed1 = _chunk_from_input_ids(
+        fake_input_ids, nsamples=nsamples, seqlen=seqlen, seed=1
+    )
+    differs = any(
+        not torch.equal(a, b)
+        for (a, _), (b, _) in zip(chunks, chunks_seed1)
+    )
+    assert differs, (
+        "different seeds should produce different chunk offsets"
+    )
+
+
+def test_chunk_from_input_ids_rejects_short_sequences():
+    """Insufficient token budget must error explicitly, not silently
+    produce overlapping chunks or out-of-bounds slicing."""
+    from promix.eval.cosine_sanity import _chunk_from_input_ids
+
+    short = torch.arange(50, dtype=torch.long).unsqueeze(0)
+    try:
+        _chunk_from_input_ids(short, nsamples=2, seqlen=64, seed=0)
+        raise AssertionError("expected RuntimeError on insufficient tokens")
+    except RuntimeError as e:
+        assert "insufficient tokens" in str(e).lower()
+
+
+def test_cosine_cli_requires_reference_config():
+    """The CLI argparse must reject invocations without
+    `--reference_config`. Round 10 silently fell back to self-cosine
+    (always 1.0); round 11 makes the flag mandatory.
+    """
+    from promix.eval.cosine_sanity import _build_argparser
+
+    parser = _build_argparser()
+    # argparse's required=True path raises SystemExit(2) when the flag is
+    # missing, after printing to stderr.
+    raised = False
+    try:
+        parser.parse_args(["--config", "fake.yaml"])
+    except SystemExit as e:
+        raised = True
+        assert e.code != 0, (
+            f"argparse should exit non-zero when --reference_config is "
+            f"missing; got exit code {e.code}"
+        )
+    assert raised, (
+        "CLI must reject missing --reference_config; round 10 silently "
+        "fell back to self-cosine (always 1.0)"
+    )
+
+    # Sanity: providing both flags parses successfully.
+    args = parser.parse_args([
+        "--config", "fp.yaml",
+        "--reference_config", "int.yaml",
+    ])
+    assert args.config == "fp.yaml"
+    assert args.reference_config == "int.yaml"
+
+
+def test_cosine_sanity_main_calls_prepare_ptq_model_for_both_configs(monkeypatch):
+    """Round 10's cosine CLI used a partial ad-hoc build path that
+    omitted `install_column_order_hooks`, `run_gptq_if_enabled`, and
+    `setup_k_quant`. Round 11 routes both primary and reference through
+    `promix.eval.ptq.prepare_ptq_model` so AC-2.4 measures the SAME
+    PTQ algorithm Step 2 PPL evaluates against.
+
+    This test patches `prepare_ptq_model`, `chunk_wikitext_for_cosine`,
+    `compute_oproj_cosine_per_layer`, and `transformers.AutoTokenizer`,
+    invokes `main()` with both configs pointing at the same model name,
+    and asserts the patched `prepare_ptq_model` was called exactly
+    twice (once per config).
+    """
+    _install_heavyweight_stubs()
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    from promix.eval import cosine_sanity as cs_mod
+    from promix.eval import ptq as ptq_mod
+
+    # Use real config files (same model.name ensures the
+    # checkpoint-equality guard passes).
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    primary = os.path.join(repo_root, "promix", "configs",
+                           "llama-3.2-1b-mxfp8-nvfp4.yaml")
+    reference = os.path.join(repo_root, "promix", "configs",
+                             "llama-3.2-1b-w4a4.yaml")
+
+    calls = {"prepare": [], "tokenize": [], "chunk": [], "compute": []}
+
+    class _FakeTokenizer:
+        @staticmethod
+        def from_pretrained(name):
+            calls["tokenize"].append(name)
+            return object()
+
+    def fake_prepare(config, dev, *, run_gptq=True):
+        calls["prepare"].append({
+            "model": config["model"]["name"],
+            "w_bits": config["quantize"]["w_bits"],
+            "run_gptq": run_gptq,
+        })
+        return object()
+
+    def fake_chunk(tokenizer, *, nsamples, seqlen, seed=0):
+        calls["chunk"].append({"nsamples": nsamples, "seqlen": seqlen})
+        return [(torch.zeros(1, seqlen, dtype=torch.long), None)
+                for _ in range(nsamples)]
+
+    def fake_compute(model, dataloader, *, reference_model=None,
+                     device=None, max_batches=8):
+        calls["compute"].append({"max_batches": max_batches})
+        return {0: 0.999, 1: 0.999}
+
+    # Patch in cosine_sanity's namespace
+    monkeypatch.setattr(ptq_mod, "prepare_ptq_model", fake_prepare)
+
+    import transformers as _tf
+    monkeypatch.setattr(_tf, "AutoTokenizer", _FakeTokenizer)
+    monkeypatch.setattr(cs_mod, "chunk_wikitext_for_cosine", fake_chunk)
+    monkeypatch.setattr(cs_mod, "compute_oproj_cosine_per_layer", fake_compute)
+
+    # Argparse will read sys.argv; build it directly.
+    monkeypatch.setattr("sys.argv", [
+        "cosine_sanity",
+        "--config", primary,
+        "--reference_config", reference,
+        "--nsamples", "2",
+        "--seqlen", "32",
+        "--threshold", "0.99",
+    ])
+
+    cs_mod.main()
+
+    assert len(calls["prepare"]) == 2, (
+        f"prepare_ptq_model must be called exactly twice (primary + "
+        f"reference); got {len(calls['prepare'])} calls: {calls['prepare']}"
+    )
+    # Both call args carry a model.name; for these configs they match
+    # (cosine guard would have raised otherwise).
+    primary_call, reference_call = calls["prepare"]
+    assert primary_call["w_bits"] == "nvfp4"
+    assert reference_call["w_bits"] == 4  # legacy INT W4A4
+    assert primary_call["run_gptq"] is True
+    assert reference_call["run_gptq"] is True
+
+
+def test_cosine_sanity_main_rejects_mismatched_checkpoints(monkeypatch):
+    """When --config and --reference_config use different `model.name`
+    values, main() must raise SystemExit with a clear error rather
+    than silently measuring cosine across different checkpoints.
+
+    Round 10 documented `llama-3.2-1b-mxfp8-nvfp4.yaml` (base) +
+    `llama-3.2-1b-resq.yaml` (instruct) which were different
+    checkpoints; this test guards the round-11 fix.
+    """
+    _install_heavyweight_stubs()
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    from promix.eval import cosine_sanity as cs_mod
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    primary = os.path.join(repo_root, "promix", "configs",
+                           "llama-3.2-1b-mxfp8-nvfp4.yaml")
+    # llama-3.2-1b-resq.yaml is intentionally the WRONG reference
+    # because its model.name is unsloth/Llama-3.2-1B-Instruct vs the
+    # FP config's unsloth/Llama-3.2-1B.
+    bad_reference = os.path.join(repo_root, "promix", "configs",
+                                 "llama-3.2-1b-resq.yaml")
+
+    monkeypatch.setattr("sys.argv", [
+        "cosine_sanity",
+        "--config", primary,
+        "--reference_config", bad_reference,
+        "--nsamples", "2",
+        "--seqlen", "32",
+    ])
+
+    raised = False
+    try:
+        cs_mod.main()
+    except SystemExit as e:
+        raised = True
+        assert "same base checkpoint" in str(e) or "model.name" in str(e), (
+            f"error must explain the checkpoint mismatch; got {e}"
+        )
+    assert raised, (
+        "main() must raise SystemExit when configs use different model.name"
+    )
