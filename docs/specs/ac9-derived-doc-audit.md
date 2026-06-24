@@ -155,9 +155,20 @@ Each hit is classified into one of four categories:
 
 | Clause | Status | Action |
 |--------|--------|--------|
-| Derived docs use MXFP8=E8M0 (not E4M3) | **MET** | 0 (c)-class hits; 8 (b)-class correct uses; 2 (a)-class corrective citations |
-| Atom name `SM100_MMA_MXF8F6F4_*` (not F8F6F4) | **MET** | 0 (c)-class hits; 1 (a)-class corrective citation contrasting the dense F8F6F4 vs the microscaled MXF8F6F4 family |
-| Corrected β-4 alignment example pairs | **MET** | 0 (c)-class hits; one (a)-class corrective citation in `cutlass-sm100-atom-references.md` |
+| Derived docs use MXFP8=E8M0 (not E4M3) | **MET** | 0 (c)-class hits; 9 (b)-class correct uses; 2 (a)-class corrective citations (11 Term 1 hits total) |
+| Atom name `SM100_MMA_MXF8F6F4_*` (not F8F6F4) | **MET** | 0 (c)-class hits; 1 (a)-class corrective citation contrasting the dense F8F6F4 vs the microscaled MXF8F6F4 family (1 Term 2 hit total) |
+| Corrected β-4 alignment example pairs | **MET** | 0 (c)-class hits; 1 (a)-class corrective citation in `cutlass-sm100-atom-references.md` (1 Term 3 hit total) |
+
+**Current totals** (post-Round 19): **13 raw hits** across the
+three terms (Term 1 = 11, Term 2 = 1, Term 3 = 1); all 13
+classified as (a) corrective citation or (b) correct canonical
+usage; allowlist in
+`tests/test_fake_quant_mxfp8_nvfp4.py::test_no_stale_ac9_terms_in_derived_docs`
+matches exactly (zero unexpected hits, zero missing-allowlist
+entries). The historical round-17/18 totals were 12 raw hits
+(Term 1 = 10, Term 2 = 1, Term 3 = 1); round 19 added the
+(b)-class entry at `cutlass-sm100-atom-references.md:160`,
+bumping Term 1 from 10 to 11 and the total from 12 to 13.
 
 **AC-9 derived-doc clause: fully met** (zero (c)-class hits across
 the corrected scan universe). Audit method first authored in
@@ -237,7 +248,10 @@ trace which round introduced or modified each entry.
   cover `.cu`, `.cuh`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`,
   `.inl` (for future M2 kernel sources). Codex round-18
   review independently reproduced the documented 10/1/1 hit
-  split and accepted the derived-doc clause as MET.
+  split (Term 1 = 10, Term 2 = 1, Term 3 = 1; total = 12 raw
+  hits — historical figure for round 18; round 19 later
+  bumped Term 1 to 11) and accepted the derived-doc clause
+  as MET.
 - **Round 19** (verification side-effect addition). Round 19
   added a Verification section to
   `docs/specs/cutlass-sm100-atom-references.md` that includes
@@ -245,7 +259,9 @@ trace which round introduced or modified each entry.
   distinction context (line 160). The allowlist was extended
   with this entry. The regression test caught the new hit
   immediately at edit time, proving the round-18 expanded
-  scope works.
+  scope works. **Counts after this round: Term 1 = 11
+  (10 + 1 new (b)-class), Term 2 = 1, Term 3 = 1; total = 13
+  raw hits** (was 12 before).
 - **Round 20** (no audit-doc edit). Round 20 fixed the NVFP4
   trait-table M-dimension row in
   `docs/specs/cutlass-sm100-atom-references.md` but the
