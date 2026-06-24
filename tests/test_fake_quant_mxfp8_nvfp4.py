@@ -714,6 +714,116 @@ def _install_heavyweight_stubs():
         sys.modules["fast_hadamard_transform"] = fht
 
 
+def _install_transformers_train_stubs():
+    """Install minimal stubs for the transformers submodules
+    `promix.train.modeling_llama_train` imports at module scope.
+    Used by the real-attention runtime test, which needs to actually
+    import the train model on a harness without `transformers`.
+
+    The stubs implement only the names imported, with no behavior — they
+    are constructed once and shared. Anything the test invokes directly
+    (e.g. `LlamaSdpaAttention.forward`) calls torch / promix code, not
+    these stubs, so empty placeholders are safe.
+    """
+    import sys
+    import types
+
+    _install_heavyweight_stubs()  # ensure transformers root is stubbed
+
+    def _ensure(name, attrs=None):
+        if name not in sys.modules:
+            mod = types.ModuleType(name)
+            if attrs:
+                for k, v in attrs.items():
+                    setattr(mod, k, v)
+            sys.modules[name] = mod
+            # also attach as attribute on parent if applicable
+            parent_name = name.rsplit(".", 1)[0]
+            if parent_name in sys.modules:
+                setattr(sys.modules[parent_name], name.rsplit(".", 1)[1], mod)
+        return sys.modules[name]
+
+    # transformers.activations: ACT2FN dict
+    import torch.nn.functional as _F
+    _ensure(
+        "transformers.activations",
+        {"ACT2FN": {"silu": _F.silu, "gelu": _F.gelu, "relu": _F.relu}},
+    )
+
+    class _Stub:
+        pass
+
+    _ensure(
+        "transformers.cache_utils",
+        {"Cache": _Stub, "DynamicCache": _Stub, "StaticCache": _Stub},
+    )
+    _ensure(
+        "transformers.modeling_attn_mask_utils",
+        {"AttentionMaskConverter": _Stub},
+    )
+    _ensure(
+        "transformers.modeling_flash_attention_utils",
+        {"_flash_attention_forward": lambda *a, **k: None},
+    )
+    _ensure(
+        "transformers.modeling_outputs",
+        {
+            "BaseModelOutputWithPast": _Stub,
+            "CausalLMOutputWithPast": _Stub,
+            "QuestionAnsweringModelOutput": _Stub,
+            "SequenceClassifierOutputWithPast": _Stub,
+            "TokenClassifierOutput": _Stub,
+        },
+    )
+    _ensure("transformers.modeling_rope_utils", {"ROPE_INIT_FUNCTIONS": {}})
+
+    import torch.nn as _nn
+    class _PreTrainedModel(_nn.Module):
+        config_class = None
+        base_model_prefix = "model"
+    _ensure("transformers.modeling_utils", {"PreTrainedModel": _PreTrainedModel})
+
+    _ensure("transformers.pytorch_utils", {"ALL_LAYERNORM_LAYERS": []})
+
+    class _Logger:
+        @staticmethod
+        def warning_once(*_a, **_kw):
+            pass
+        @staticmethod
+        def warning(*_a, **_kw):
+            pass
+        @staticmethod
+        def info(*_a, **_kw):
+            pass
+
+    class _LoggingNamespace:
+        @staticmethod
+        def get_logger(*_a, **_kw):
+            return _Logger()
+
+    _ensure(
+        "transformers.utils",
+        {
+            "add_start_docstrings": (lambda *a, **k: (lambda f: f)),
+            "add_start_docstrings_to_model_forward": (lambda *a, **k: (lambda f: f)),
+            "is_flash_attn_greater_or_equal_2_10": (lambda *a, **k: False),
+            "is_torchdynamo_compiling": (lambda *a, **k: False),
+            "logging": _LoggingNamespace,
+            "replace_return_docstrings": (lambda *a, **k: (lambda f: f)),
+        },
+    )
+    _ensure("transformers.models", {})
+    _ensure("transformers.models.llama", {})
+
+    class _LlamaConfig(_Stub):
+        pass
+
+    _ensure(
+        "transformers.models.llama.configuration_llama",
+        {"LlamaConfig": _LlamaConfig},
+    )
+
+
 def test_run_gptq_if_enabled_dispatches_for_string_w_bits(monkeypatch):
     """Real entry-point smoke: exercise the FP-aware gate end-to-end on
     the FP yaml. The gate (`if _quant_enabled(config['quantize']['w_bits']):`)
@@ -1251,4 +1361,181 @@ def test_gptq_down_proj_mixed_precision_freezes_mxfp8_scales():
     assert (nearest_dist <= 1e-3).all(), (
         f"down_proj high segment values fall off MXFP8 grid; "
         f"max distance = {nearest_dist.max().item()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Real-attention forward R2-drop regression (round-7 contract item that
+# round-7 satisfied with a source-pattern scan instead of a runtime
+# forward call). This test constructs an actual `LlamaSdpaAttention`
+# instance, runs forward(), and records each QuantizeLinear call's R2.
+# It catches semantic regressions of the round-6 fix that survive a
+# textual pattern check.
+# ---------------------------------------------------------------------------
+
+
+def test_real_sdpa_attention_drops_R2_on_oproj_in_global_mode():
+    """Real-forward regression: builds a `LlamaSdpaAttention` (bypassing
+    `__init__` which calls `LlamaRotaryEmbedding`), provides
+    pre-computed `position_embeddings` to skip the rotary path, and
+    records each `QuantizeLinear` call's (R1, R2). Asserts:
+      - q/k receive R1 in both modes; v_proj receives R2 in both modes
+      - o_proj receives R2 in legacy mode (use_oproj_global=False)
+      - o_proj receives R2=None in global mode (use_oproj_global=True)
+
+    This is the runtime regression Codex round-7 review asked for; the
+    round-7 source-pattern scan is kept as secondary coverage but only
+    catches textual regressions of the conditional, not semantic ones.
+    """
+    _install_transformers_train_stubs()
+    import torch.nn as nn
+
+    from promix.train.modeling_llama_train import LlamaSdpaAttention
+    from promix.train.quant_linear import QuantizeLinear
+
+    bsz = 1
+    q_len = 4
+    num_heads = 2
+    num_key_value_heads = 2
+    head_dim = 4  # small but even (rotate_half splits last dim in half)
+    hidden_size = num_heads * head_dim  # 8
+
+    # Construct attn instance bypassing __init__: LlamaSdpaAttention's
+    # parent LlamaAttention.__init__ instantiates LlamaRotaryEmbedding,
+    # which we don't need (and would require a full LlamaConfig). We
+    # provide all attributes the forward path actually reads.
+    attn = LlamaSdpaAttention.__new__(LlamaSdpaAttention)
+    nn.Module.__init__(attn)
+    attn.layer_idx = 0
+    attn.attention_dropout = 0.0
+    attn.hidden_size = hidden_size
+    attn.num_heads = num_heads
+    attn.head_dim = head_dim
+    attn.num_key_value_heads = num_key_value_heads
+    attn.num_key_value_groups = num_heads // num_key_value_heads
+    attn.max_position_embeddings = 16
+    attn.rope_theta = 10000.0
+    attn.is_causal = True
+
+    attn.q_proj = QuantizeLinear(hidden_size, hidden_size, bias=False)
+    attn.k_proj = QuantizeLinear(
+        hidden_size, num_key_value_heads * head_dim, bias=False
+    )
+    attn.v_proj = QuantizeLinear(
+        hidden_size, num_key_value_heads * head_dim, bias=False
+    )
+    attn.o_proj = QuantizeLinear(
+        num_heads * head_dim, hidden_size, bias=False
+    )
+    attn.q_proj._test_name = "q_proj"
+    attn.k_proj._test_name = "k_proj"
+    attn.v_proj._test_name = "v_proj"
+    attn.o_proj._test_name = "o_proj"
+
+    # R2 is built inside forward() as `block_diag(R2_1.weight, R2_2.weight)`
+    # (with optional R2_0.weight prefix). Provide minimal stand-ins; the
+    # exact values don't matter — we only assert R2 IS or ISN'T passed.
+    class _RBlock:
+        def __init__(self, t):
+            self.weight = t
+
+    attn.R2_0 = None
+    attn.R2_1 = _RBlock(torch.eye(head_dim // 2))
+    attn.R2_2 = _RBlock(torch.eye(head_dim // 2))
+
+    # Pre-computed position_embeddings → forward() skips the rotary_emb
+    # call (which we would otherwise need a real LlamaRotaryEmbedding for).
+    cos = torch.randn(bsz, q_len, head_dim)
+    sin = torch.randn(bsz, q_len, head_dim)
+
+    torch.manual_seed(0)
+    hidden_states = torch.randn(bsz, q_len, hidden_size)
+    R1 = torch.eye(hidden_size, dtype=torch.float32)
+
+    captured = []
+    orig_forward = QuantizeLinear.forward
+
+    def recording_forward(self, input, R1=None, R2=None, transpose=False):
+        captured.append({
+            "name": getattr(self, "_test_name", "?"),
+            "R1_present": R1 is not None,
+            "R2_present": R2 is not None,
+            "transpose": transpose,
+        })
+        return orig_forward(self, input, R1=R1, R2=R2, transpose=transpose)
+
+    QuantizeLinear.forward = recording_forward
+    try:
+        # Run 1: legacy mode (use_oproj_global=False) — o_proj keeps R2.
+        attn.use_oproj_global = False
+        captured.clear()
+        attn.forward(
+            hidden_states=hidden_states,
+            attention_mask=None,
+            position_ids=None,
+            past_key_value=None,
+            output_attentions=False,
+            use_cache=False,
+            cache_position=None,
+            position_embeddings=(cos, sin),
+            R1=R1,
+        )
+        legacy_calls = list(captured)
+
+        # Run 2: global mode — o_proj drops R2.
+        attn.use_oproj_global = True
+        captured.clear()
+        attn.forward(
+            hidden_states=hidden_states,
+            attention_mask=None,
+            position_ids=None,
+            past_key_value=None,
+            output_attentions=False,
+            use_cache=False,
+            cache_position=None,
+            position_embeddings=(cos, sin),
+            R1=R1,
+        )
+        global_calls = list(captured)
+    finally:
+        QuantizeLinear.forward = orig_forward
+
+    def _by_name(calls, name):
+        return [c for c in calls if c["name"] == name]
+
+    # Both modes: q/k/v/o each called exactly once.
+    for calls, mode in [(legacy_calls, "legacy"), (global_calls, "global")]:
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            assert len(_by_name(calls, proj)) == 1, (
+                f"{mode} mode: expected exactly one {proj} call; got "
+                f"{len(_by_name(calls, proj))}"
+            )
+
+    # In BOTH modes, q/k/v/o receive R1 (the rotation training path
+    # always passes R1 through projections so gradients flow into R1).
+    for calls, mode in [(legacy_calls, "legacy"), (global_calls, "global")]:
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            assert _by_name(calls, proj)[0]["R1_present"] is True, (
+                f"{mode} mode: {proj} must receive R1"
+            )
+
+    # In BOTH modes, v_proj receives R2 (R2 is intrinsic to the
+    # attention V path; the round-6 fix only touches o_proj).
+    for calls, mode in [(legacy_calls, "legacy"), (global_calls, "global")]:
+        assert _by_name(calls, "v_proj")[0]["R2_present"] is True, (
+            f"{mode} mode: v_proj must receive R2 (intrinsic to V path)"
+        )
+
+    # The actual round-6 fix being regression-tested: o_proj receives
+    # R2 in legacy mode, but R2=None in global mode.
+    legacy_o = _by_name(legacy_calls, "o_proj")[0]
+    assert legacy_o["R2_present"] is True, (
+        "legacy mode (use_oproj_global=False): o_proj MUST receive R2; "
+        "if False, the round-6 fix has regressed in LlamaSdpaAttention.forward"
+    )
+    global_o = _by_name(global_calls, "o_proj")[0]
+    assert global_o["R2_present"] is False, (
+        "global mode (use_oproj_global=True): o_proj MUST NOT receive R2 "
+        "(final fuse applies U_oproj_g without composing R2; training must "
+        "match). If True, the round-6 fix regressed in LlamaSdpaAttention.forward"
     )
