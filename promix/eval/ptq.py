@@ -41,8 +41,12 @@ def configure_quantizers(model, config):
     # Validate every bits field loudly so a yaml typo like
     # `w_bits: "nvf4"` raises here rather than silently disabling
     # quantization (`_quant_enabled` would return False on the typo,
-    # producing an FP16 model labelled as quantized).
-    for field in ('w_bits', 'a_bits', 'high_bits', 'low_bits'):
+    # producing an FP16 model labelled as quantized). KV4 configs
+    # use string `k_bits` / `v_bits`; round 14 covered the four W/A
+    # fields, round 15 added k/v to complete the matrix.
+    for field in (
+        'w_bits', 'a_bits', 'high_bits', 'low_bits', 'k_bits', 'v_bits',
+    ):
         if field in qcfg:
             try:
                 assert_quant_format(qcfg[field])

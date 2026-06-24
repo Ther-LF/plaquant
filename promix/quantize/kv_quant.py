@@ -12,7 +12,9 @@ import types
 import torch
 import torch.nn as nn
 
-from promix.quantize.quant_utils import ActQuantizer, STEQuantize, AsymSTEQuantize, get_minq_maxq
+from promix.quantize.quant_utils import (
+    ActQuantizer, AsymSTEQuantize, STEQuantize, _quant_enabled, get_minq_maxq,
+)
 from promix.utils import HadamardTransform
 
 
@@ -317,7 +319,12 @@ def setup_k_quant(model, config, basis_path, rotation_path):
     """
     qcfg = config['quantize']
     k_bits = qcfg.get('k_bits', 16)
-    if k_bits >= 16:
+    # Use the shared FP-aware predicate (`_quant_enabled`) instead of
+    # a numeric `k_bits >= 16` comparison so string FP-format
+    # identifiers like "nvfp4" don't TypeError. Skip behavior for
+    # `k_bits == 16` (or any other numeric >= 16) is preserved
+    # because `_quant_enabled(16)` is False.
+    if not _quant_enabled(k_bits):
         return
 
     head_dim = model.config.hidden_size // model.config.num_attention_heads
