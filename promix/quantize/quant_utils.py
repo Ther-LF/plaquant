@@ -29,16 +29,49 @@ def get_minq_maxq(bits, sym):
 SUPPORTED_FP_FORMATS = ("mxfp8", "nvfp4")
 
 
-def _quant_enabled(bits):
+def _quant_enabled(bits, *, strict: bool = False):
     """Predicate: is this `bits` value a request to actually quantize?
 
-    Used at every call site that previously did `bits < 16` (which TypeErrors
-    on string FP format identifiers). For numeric, true when below 16-bit
-    pass-through. For string, true when the format is in SUPPORTED_FP_FORMATS.
+    Used at every call site that previously did `bits < 16` (which
+    TypeErrors on string FP format identifiers). For numeric, true
+    when below 16-bit pass-through. For string, true when the format
+    is in `SUPPORTED_FP_FORMATS`.
+
+    Default behavior (strict=False) is permissive: an unknown string
+    silently returns False (i.e. quantization is disabled). That has
+    been the contract since round 3 and many call sites rely on it
+    failing-closed.
+
+    `strict=True` raises `ValueError` on unknown strings, which is the
+    right behavior for config-loading entry points where a typo like
+    `"nvf4"` would silently produce an FP16 model labelled as
+    quantized. Use `assert_quant_format(bits)` at config-load surfaces.
     """
     if isinstance(bits, str):
-        return bits in SUPPORTED_FP_FORMATS
+        if bits in SUPPORTED_FP_FORMATS:
+            return True
+        if strict:
+            raise ValueError(
+                f"unknown FP quantization format {bits!r}; expected one "
+                f"of {SUPPORTED_FP_FORMATS} (or a numeric INT bit count "
+                f"< 16). Common typo: 'nvf4' -> 'nvfp4'."
+            )
+        return False
     return bits < 16
+
+
+def assert_quant_format(bits):
+    """Validate a `bits` field at config-load time.
+
+    Raises ValueError on unknown strings. Numeric values pass through
+    silently (any int / bool / float behaves as in `_quant_enabled`).
+    Use this at config-facing surfaces (`configure_quantizers`,
+    `gptq_fwrd`) so a typo in `w_bits` / `a_bits` / `high_bits` /
+    `low_bits` surfaces loudly instead of silently disabling
+    quantization and producing an FP16 model labelled as quantized.
+    """
+    _quant_enabled(bits, strict=True)
+    return True
 
 
 def _apply_fp_format(x, fmt):

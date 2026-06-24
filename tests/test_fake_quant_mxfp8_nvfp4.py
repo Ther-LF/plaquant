@@ -2388,3 +2388,178 @@ def test_init_distributed_helper_noop_when_initialized(monkeypatch):
             f"already-initialized branch should not modify {var}; "
             f"got {os.environ.get(var)!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Round-14 quality consolidation tests:
+#   - cosine harness raises clear errors on wrapper drift
+#   - _quant_enabled strict-mode rejects typos at config-load surfaces
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_attention_walker_raises_on_missing_layers():
+    """`_attention_layers()` must raise RuntimeError (not raw
+    AttributeError) when the model lacks `model.model.layers`. This
+    surfaces wrapper drift with a debuggable message instead of an
+    obscure `'XYZ' object has no attribute 'layers'` traceback.
+    """
+    import torch.nn as nn
+
+    from promix.eval.cosine_sanity import _attention_layers
+
+    class _Empty(nn.Module):
+        pass
+
+    raised = False
+    try:
+        list(_attention_layers(_Empty()))
+    except RuntimeError as e:
+        raised = True
+        assert "model.model.layers" in str(e) or "Llama" in str(e), (
+            f"diagnostic message must name the missing attribute path; got {e}"
+        )
+    assert raised, (
+        "_attention_layers must raise RuntimeError on missing "
+        "model.model.layers (was AttributeError before round 14)"
+    )
+
+
+def test_cosine_hook_install_raises_on_missing_o_proj():
+    """`_install_oproj_output_hook` must raise RuntimeError when the
+    attention module lacks `o_proj`, instead of the raw
+    AttributeError the round-13 code threw.
+    """
+    import torch.nn as nn
+
+    from promix.eval.cosine_sanity import _install_oproj_output_hook
+
+    class _AttnNoOProj(nn.Module):
+        pass
+
+    raised = False
+    sink = {}
+    try:
+        _install_oproj_output_hook(_AttnNoOProj(), sink, idx=0)
+    except RuntimeError as e:
+        raised = True
+        assert "o_proj" in str(e), (
+            f"diagnostic message must mention o_proj; got {e}"
+        )
+    assert raised, (
+        "_install_oproj_output_hook must raise RuntimeError when "
+        "attn_module lacks o_proj"
+    )
+
+
+def test_assert_quant_format_rejects_typo():
+    """`assert_quant_format("nvf4")` must raise ValueError listing the
+    supported set so a yaml typo surfaces loudly at PTQ entry.
+    """
+    from promix.quantize.quant_utils import assert_quant_format
+
+    raised = False
+    try:
+        assert_quant_format("nvf4")
+    except ValueError as e:
+        raised = True
+        msg = str(e)
+        assert "nvf4" in msg, f"error must echo the bad input; got {e}"
+        assert "nvfp4" in msg, (
+            f"error should hint the closest valid value; got {e}"
+        )
+    assert raised, (
+        "assert_quant_format('nvf4') must raise; without this, a typo "
+        "silently disables quantization (round-14 blocker)"
+    )
+
+    # Numeric values pass through.
+    assert_quant_format(4)
+    assert_quant_format(8)
+    assert_quant_format(16)
+    # Valid FP formats pass through.
+    assert_quant_format("nvfp4")
+    assert_quant_format("mxfp8")
+
+
+def test_quant_enabled_default_remains_permissive():
+    """`_quant_enabled(bits)` (no `strict=True`) must keep the
+    round-3 contract of returning False on unknown strings, since
+    multiple call sites (ActQuantWrapper.forward, kv_quant) rely on
+    that fail-closed semantics.
+    """
+    from promix.quantize.quant_utils import _quant_enabled
+
+    # Unknown strings: silent False (the historical contract).
+    assert _quant_enabled("nvf4") is False
+    assert _quant_enabled("garbage") is False
+
+    # Numeric path unchanged.
+    assert _quant_enabled(4) is True
+    assert _quant_enabled(16) is False
+
+    # Known FP formats: True.
+    assert _quant_enabled("mxfp8") is True
+    assert _quant_enabled("nvfp4") is True
+
+    # Strict-mode flips the unknown-string behavior.
+    raised = False
+    try:
+        _quant_enabled("nvf4", strict=True)
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_configure_quantizers_rejects_typo_in_config():
+    """`configure_quantizers(model, config)` must raise ValueError on
+    a typo like `w_bits: "nvf4"` (was: silently produced an FP16
+    model labelled as quantized).
+    """
+    _install_heavyweight_stubs()
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    from promix.eval.ptq import configure_quantizers
+
+    # Build a minimal model object the function inspects (it reads
+    # model.config.{hidden_size, intermediate_size,
+    # num_attention_heads}; the typo guard runs BEFORE find_qlayers
+    # is iterated, so we don't need a real wrapped model).
+    import torch.nn as nn
+
+    class _Cfg:
+        hidden_size = 16
+        intermediate_size = 64
+        num_attention_heads = 2
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = _Cfg()
+
+    cfg = {
+        "quantize": {
+            "w_bits": "nvf4",   # ← typo that silently disabled quant in round 13
+            "a_bits": "nvfp4",
+            "high_bits": "mxfp8",
+            "low_bits": 2,
+            "high_fraction": 0.125,
+            "low_fraction": 0.0,
+            "a_asym": True,
+        }
+    }
+
+    raised = False
+    try:
+        configure_quantizers(_Model(), cfg)
+    except ValueError as e:
+        raised = True
+        msg = str(e)
+        assert "w_bits" in msg, f"error must name the bad field; got {e}"
+        assert "nvf4" in msg, f"error must echo the typo value; got {e}"
+    assert raised, (
+        "configure_quantizers must raise on typo'd FP format string; "
+        "without this, the model would be FP16 but labelled FP-quantized"
+    )

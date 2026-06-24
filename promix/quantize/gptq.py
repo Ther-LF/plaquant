@@ -14,7 +14,11 @@ import torch
 import torch.nn as nn
 
 from promix.quantize.kv_quant import WeightQuantizer
-from promix.quantize.quant_utils import find_qlayers, ActQuantWrapper
+from promix.quantize.quant_utils import (
+    ActQuantWrapper,
+    assert_quant_format,
+    find_qlayers,
+)
 from promix.utils import cleanup_memory
 
 
@@ -236,6 +240,17 @@ def gptq_fwrd(model, dataloader, dev, config):
     """
     logging.info("-----GPTQ Quantization-----")
     qcfg = config['quantize']
+    # Validate every bits field loudly — same rationale as
+    # configure_quantizers: a typo like `w_bits: "nvf4"` would
+    # silently disable quantization without this guard.
+    for field in ('w_bits', 'high_bits', 'low_bits'):
+        if field in qcfg:
+            try:
+                assert_quant_format(qcfg[field])
+            except ValueError as e:
+                raise ValueError(
+                    f"config field quantize.{field}: {e}"
+                ) from None
     w_bits = qcfg['w_bits']
     # When high_bits / low_bits are FP block-scaled identifier strings
     # ("mxfp8" / "nvfp4"), WeightQuantizer skips INT scale fitting and

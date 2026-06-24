@@ -26,16 +26,47 @@ import torch
 def _attention_layers(model):
     """Yield (idx, attn_module) for each transformer block's self-attn.
 
-    Works for Llama-style HF models (`model.model.layers[i].self_attn`).
+    Expects a Llama-style HF model with
+    `model.model.layers[i].self_attn`. When the wrapper drifts (model
+    lacks `.model.layers` or a layer lacks `.self_attn`), raises a
+    clear RuntimeError naming the missing path so wrapper-drift
+    failures are debuggable instead of presenting as raw
+    AttributeError stack traces.
     """
-    for idx, layer in enumerate(model.model.layers):
+    inner = getattr(model, "model", None)
+    if inner is None or not hasattr(inner, "layers"):
+        raise RuntimeError(
+            f"cosine sanity: model {type(model).__name__} does not expose "
+            f"`model.model.layers` (Llama-style attribute path). The "
+            f"harness assumes a HuggingFace LlamaForCausalLM-shaped wrapper; "
+            f"check that the model loader returns the expected structure."
+        )
+    for idx, layer in enumerate(inner.layers):
+        if not hasattr(layer, "self_attn"):
+            raise RuntimeError(
+                f"cosine sanity: layer {idx} of "
+                f"{type(model).__name__}.model.layers does not have a "
+                f"`self_attn` attribute (got "
+                f"{type(layer).__name__}); cannot install o_proj hook"
+            )
         yield idx, layer.self_attn
 
 
 def _install_oproj_output_hook(attn_module, sink: Dict[int, list], idx: int):
     """Register a forward hook on `attn.o_proj` (the wrapper or Linear)
     that appends every output tensor to `sink[idx]`.
+
+    Raises RuntimeError when the attention module lacks the expected
+    `o_proj` attribute, instead of the raw AttributeError this used
+    to throw on wrapper drift.
     """
+    if not hasattr(attn_module, "o_proj"):
+        raise RuntimeError(
+            f"cosine sanity: attention module "
+            f"{type(attn_module).__name__} (layer index {idx}) does "
+            f"not expose an `o_proj` attribute; cannot install the "
+            f"forward hook required for AC-2.4 layer-wise cosine."
+        )
     sink.setdefault(idx, [])
 
     def _hook(_module, _inputs, output):

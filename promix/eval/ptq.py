@@ -20,6 +20,7 @@ from promix.quantize.quant_utils import (
     ActQuantWrapper,
     _quant_enabled,
     add_actquant,
+    assert_quant_format,
     find_qlayers,
 )
 from promix.quantize.hadamard import get_hadK
@@ -37,6 +38,18 @@ def load_config(config_path):
 def configure_quantizers(model, config):
     """Configure activation quantizers on all wrapped layers."""
     qcfg = config['quantize']
+    # Validate every bits field loudly so a yaml typo like
+    # `w_bits: "nvf4"` raises here rather than silently disabling
+    # quantization (`_quant_enabled` would return False on the typo,
+    # producing an FP16 model labelled as quantized).
+    for field in ('w_bits', 'a_bits', 'high_bits', 'low_bits'):
+        if field in qcfg:
+            try:
+                assert_quant_format(qcfg[field])
+            except ValueError as e:
+                raise ValueError(
+                    f"config field quantize.{field}: {e}"
+                ) from None
     model_dim = model.config.hidden_size
     intermediate_size = getattr(model.config, 'intermediate_size', None)
     num_heads = model.config.num_attention_heads
