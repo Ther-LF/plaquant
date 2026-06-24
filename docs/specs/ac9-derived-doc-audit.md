@@ -131,6 +131,7 @@ Each hit is classified into one of four categories:
 | `promix/quantize/quant_utils.py:635` | docstring: "fmt: 'mxfp8' (block_size=32, FP8 E4M3 element grid)" | (b) — element dtype context |
 | `promix/quantize/quant_utils.py:665` | docstring: "MXFP8 (block_size=32, FP8 E8M0 block scale, FP8 E4M3 elements)" | (b) — explicit correct distinction |
 | `promix/quantize/quant_utils.py:684` | "MXFP8 E4M3 only; E5M2 is a future option" | (b) — element dtype context |
+| `docs/specs/cutlass-sm100-atom-references.md:160` | "scale dtype = E8M0 for MXFP8 / MXFP4-VS-32 (asserted in trait) and E4M3 for NVFP4-VS-16 (downstream-pinned)" — round-19 verification checklist | (b) — explicit correct distinction (same pattern as `spec-mxfp8-nvfp4.md:103`) |
 
 **Classes (c) found: 0.**
 
@@ -154,7 +155,7 @@ Each hit is classified into one of four categories:
 
 | Clause | Status | Action |
 |--------|--------|--------|
-| Derived docs use MXFP8=E8M0 (not E4M3) | **MET** | 0 (c)-class hits; 7 (b)-class correct uses; 2 (a)-class corrective citations |
+| Derived docs use MXFP8=E8M0 (not E4M3) | **MET** | 0 (c)-class hits; 8 (b)-class correct uses; 2 (a)-class corrective citations |
 | Atom name `SM100_MMA_MXF8F6F4_*` (not F8F6F4) | **MET** | 0 (c)-class hits; 1 (a)-class corrective citation contrasting the dense F8F6F4 vs the microscaled MXF8F6F4 family |
 | Corrected β-4 alignment example pairs | **MET** | 0 (c)-class hits; one (a)-class corrective citation in `cutlass-sm100-atom-references.md` |
 

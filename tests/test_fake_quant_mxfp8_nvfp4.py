@@ -3015,6 +3015,7 @@ def test_no_stale_ac9_terms_in_derived_docs():
         ("docs/specs/cutlass-sm100-atom-references.md", 103, "mxfp8_scale_e4m3"),    # (a)
         ("docs/specs/cutlass-sm100-atom-references.md", 105, "atom_f8f6f4_no_mx"),   # (a) corrective citation contrasting F8F6F4 vs MXF8F6F4 atoms
         ("docs/specs/cutlass-sm100-atom-references.md", 107, "beta4_alignment_pair"),# (a)
+        ("docs/specs/cutlass-sm100-atom-references.md", 160, "mxfp8_scale_e4m3"),    # (b) round-19 verification checklist: explicit "E8M0 for MXFP8 ... E4M3 for NVFP4" distinction
         # docs/specs/spec-mxfp8-nvfp4.md
         ("docs/specs/spec-mxfp8-nvfp4.md", 50, "mxfp8_scale_e4m3"),   # (a)
         ("docs/specs/spec-mxfp8-nvfp4.md", 103, "mxfp8_scale_e4m3"),  # (b)

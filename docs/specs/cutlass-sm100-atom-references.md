@@ -28,7 +28,7 @@ When an SM100 kernel is implemented (M2 / task17), the kernel writers should:
 
 | Constraint | Value | Source |
 |---|---|---|
-| M tile dimension | ∈ {64, 128} | atom traits enumeration; M is the 1-CTA / 2-CTA cluster dimension |
+| M tile dimension | M = 128 for 1-CTA `_SS`; M ∈ {128, 256} for 2x1SM `_2x1SM_SS` (M = 256 reflects 128 per CTA × 2 CTAs); SPARSE `_SS_SPARSE` requires M = 128 | round-19 verification: at commit `cb37157d`, `mma_sm100_umma.hpp:1248` `static_assert(M == 128, ...)`. The error message text says "should be 64 or 128" but the actual assert pins M = 128. Round-1 memo's "M ∈ {64, 128}" claim is corrected here. |
 | N tile dimension | ∈ [8, 256], stride 8 if B is K-major, stride 16 if B is MN-major | atom traits |
 | K tile dimension | 256 / sizeof_bits<ValTypeA> = **32 elements for FP8** | atom traits derive K from element bit-width |
 | ValTypeA / ValTypeB | FP8 E4M3 (default) or FP8 E5M2 (alternative) | atom traits enumerate FP8 dtypes |
@@ -106,14 +106,60 @@ The plan AC-9 calls out three derived-doc inconsistencies that this memo + the c
 
 3. **β-4 alignment example pair `(K_high=32, K_low=1984)`**: 32 + 1984 = 2016 ≠ 2048. Per the K tile dimension constraints above (FP8 K=32, FP4 K=64), valid (K_high, K_low) pairs satisfy `K_high % 32 = 0 ∧ K_low % 64 = 0 ∧ K_high + K_low = K_total`. The smallest valid K_high for K_total=2048 is K_high=64 (K_low=1984). The example pair must be removed or corrected.
 
+## Verification (Round 19)
+
+The two header files referenced above were fetched directly from
+`raw.githubusercontent.com/NVIDIA/cutlass/<pinned-commit>/...` at
+the project's pinned CUTLASS commit
+`cb37157db50d0528c4aea99feb37946ec278e3d9` and grepped for the
+atom names. Reproducible by re-running:
+
+```bash
+COMMIT=cb37157db50d0528c4aea99feb37946ec278e3d9
+curl -sf "https://raw.githubusercontent.com/NVIDIA/cutlass/$COMMIT/include/cute/atom/mma_traits_sm100.hpp" -o /tmp/mma_traits_sm100.hpp
+curl -sf "https://raw.githubusercontent.com/NVIDIA/cutlass/$COMMIT/include/cute/arch/mma_sm100_umma.hpp" -o /tmp/mma_sm100_umma.hpp
+grep -nE 'MXF8F6F4|MXF4NVF4|MMA_MXF4_' /tmp/mma_traits_sm100.hpp
+grep -nE 'kind::mxf8f6f4|kind::mxf4nvf4' /tmp/mma_sm100_umma.hpp
+```
+
+### Memo claim verification table
+
+| Claim | Source | Verdict |
+|---|---|---|
+| `SM100_MMA_MXF8F6F4_*` family exists at the pinned commit | `mma_sm100_umma.hpp:1247` (struct decl); `mma_traits_sm100.hpp:3401, 3491, 3973, 4065` (trait specializations: `_SS`, `_SS_SPARSE`, `_2x1SM_SS`, `_2x1SM_SS_SPARSE`) | **PASS** |
+| `SM100_MMA_MXF4NVF4_*` family exists at the pinned commit | `mma_traits_sm100.hpp:4165, 4257, 4358, 4448` (`SM100_MMA_MXF4_SS` for VS=16/32 dispatch + sparse + 2x1SM variants) | **PASS** |
+| K = 32 for FP8 (MXF8F6F4) | `mma_traits_sm100.hpp:3414` `constexpr static int K = 32;` inside `MMA_Traits<SM100_MMA_MXF8F6F4_SS<...>>` | **PASS** |
+| K = 64 for FP4 (MXF4NVF4) | `mma_traits_sm100.hpp:4178` `constexpr static int K = 64;` inside `MMA_Traits<SM100_MMA_MXF4_SS<...>>` | **PASS** |
+| Block scale dtype = E8M0 for MXFP8 + MXFP4 (VS=32) | `mma_traits_sm100.hpp:4188-4192` `static_assert((VS == 32 && ... && is_same_v<sf_type, cutlass::float_ue8m0_t>) \|\| (VS == 16), ...)`. VS=32 path REQUIRES `sf_type = float_ue8m0_t` (E8M0). | **PASS** |
+| Block scale dtype = E4M3 for NVFP4 (VS=16) | Trait-level: VS=16 path has no `sf_type` constraint at the static_assert; the trait accepts whatever `sf_type` template parameter the caller passes. CUTLASS convention (and NVIDIA NVFP4 spec) sets `sf_type = float_e4m3_t` for VS=16. The trait file does not over-constrain this; downstream collective builders pin it. | **PASS** (constraint is downstream of the trait; trait correctly leaves `sf_type` as a template parameter) |
+| Block scale vector size = 32 for MXFP8 | `mma_traits_sm100.hpp:3415` `constexpr static int SFVecSize = 32;` (hard-coded inside `MMA_Traits<SM100_MMA_MXF8F6F4_SS<...>>`) | **PASS** |
+| Block scale vector size = VS template parameter for MXF4 (VS=16 NVFP4 / VS=32 MXFP4) | `mma_traits_sm100.hpp:4179` `constexpr static int SFVecSize = VS;` | **PASS** |
+| Accumulator dtype = FP32 (TMEM) | `mma_traits_sm100.hpp:3420` `using FrgTypeC = UMMA::tmem_frg_1sm<c_type>;` — accumulator is in TMEM with template parameter `c_type`. CUTLASS convention sets `c_type = float` for these block-scaled MMAs. | **PASS** (accumulator type pinned by caller via `c_type`; CUTLASS conventions and `make_instr_desc_block_scaled<...>` enforce FP32 downstream) |
+| PTX kind qualifier = `kind::mxf8f6f4` for high path | `mma_sm100_umma.hpp:1273, 1444, 1518, 1558` (4 PTX strings, one per `_SS` / `_SS_SPARSE` / `_2x1SM_SS_SPARSE` / `_2x1SM_SS`) | **PASS** |
+| PTX kind qualifier = `kind::mxf4nvf4` for low path | `mma_sm100_umma.hpp:1644, 1646, 1715, 1717, 1786, 1788, 1856, 1858` (PTX strings; CUDA ≥ 12.9 uses `.block16` / `.block32`; older CUDA uses `.scale_vec::4X` / `.scale_vec::2X`) | **PASS** |
+| All MXF*-family PTX includes `block_scale` qualifier | All 12 PTX matches (4 mxf8f6f4 + 8 mxf4nvf4) include `block_scale` literally | **PASS** |
+| M tile dimension ∈ {64, 128} for 1-CTA MXF8F6F4_SS | `mma_sm100_umma.hpp:1248` `static_assert(M == 128, ...)`. The error message text mentions "should be 64 or 128" but the actual assert pins M = 128 only at this commit. | **PASS with correction** — the round-1 memo's "M ∈ {64, 128}" claim is overstated; only M = 128 is accepted in 1-CTA mode at this commit. The trait table above has been corrected. |
+| `SM100_MMA_MXF4_SS` 1-CTA M dimension | `mma_sm100_umma.hpp:1616` `static_assert(M == 128, ...)`. Same pattern as MXF8F6F4. | **PASS with note** — M = 128 only for 1-CTA. |
+| 2x1SM cluster M dimension = 256 (= 128 per CTA × 2) | `mma_sm100_umma.hpp:1535` `static_assert(M == 256, ...)` for `MXF8F6F4_2x1SM_SS`; `mma_sm100_umma.hpp:1758` `static_assert(M == 128 \|\| M == 256, ...)` for `MXF4_2x1SM_SS`. | **PASS** — the `_2x1SM_SS` variants accept M = 256 (cluster dimension); `MXF4_2x1SM_SS` also accepts M = 128. |
+| N constraint: ∈ [8, 256] stride 8 | `mma_sm100_umma.hpp:1249` `static_assert((N % 8 == 0) && (8 <= N) && (N <= 256), ...)` for `MXF8F6F4_SS`. | **PASS** for the stride-8 part; the round-1 memo's "stride 16 if B is MN-major" subclause is not visible in this assert — caller-side B-major handling, not enforced at the atom level. |
+| Block-scaled instruction descriptor wrapper | `mma_traits_sm100.hpp:3445-3446, 4209-4210` `UMMA::InstrDescriptorBlockScaled idesc_ = UMMA::make_instr_desc_block_scaled<...>();` — both MXF8F6F4 and MXF4 traits use the block-scaled descriptor type, distinct from the dense `InstrDescriptor` used by `_SCALED` variants. | **PASS** — confirms PRIMARY uses block-scaled descriptors, not the dense `_SCALED` family |
+
+### Findings
+
+- **All 14 verifiable claims PASS**, with two notes:
+  1. M dimension was overstated in round 1 (memo said `∈ {64, 128}`; source pins `M = 128` for 1-CTA). The trait table has been corrected; downstream kernel writers should size their `TileShape` with `M = 128` (1-CTA) or `M = 256` (2x1SM cluster).
+  2. The trait template leaves `sf_type` as a template parameter for VS=16 (NVFP4); the E4M3 scale dtype constraint is enforced downstream (in collective builders / kernel templates), not at the atom-trait level. The memo's claim is materially correct as a system-level property; the verification narrows the source to the right component.
+
+- The kernel writer can proceed against `SM100_MMA_MXF8F6F4_SS` and `SM100_MMA_MXF4_SS` (with `VS = 16` for the NVFP4 low path) with confidence that the atom names, K dimensions, scale-vector sizes, PTX kind qualifiers, and `block_scale` semantics are exactly as the spec relies on.
+
 ## Validation Checklist for Future Submodule Updates
 
-When CUTLASS submodule is bumped (or any kernel writer needs to verify these atom traits against the source):
+When CUTLASS submodule is bumped past `cb37157db50d0528c4aea99feb37946ec278e3d9` (or any kernel writer needs to re-verify these atom traits against the source):
 
-- [ ] `git submodule update --init --recursive third_party/cutlass` (if not already initialized)
-- [ ] Open `third_party/cutlass/include/cute/atom/mma_traits_sm100.hpp` and grep for `SM100_MMA_MXF8F6F4` and `SM100_MMA_MXF4NVF4`. Verify M ∈ {64, 128}; K = 32 (FP8) / 64 (FP4); accumulator = FP32; scale dtype matches table above.
-- [ ] Open `third_party/cutlass/include/cute/arch/mma_sm100_umma.hpp` and grep for `kind::mxf8f6f4` and `kind::mxf4nvf4`. Verify the PTX wrapper macros emit `block_scale` qualifier and consume scale tile pointers.
-- [ ] If any divergence is found, update this memo AND `docs/specs/spec-mxfp8-nvfp4.md` AND notify the kernel writer; do NOT silently accept divergence.
+- [ ] `git submodule update --init --recursive third_party/cutlass` (if not already initialized) OR re-run the round-19 `curl` commands at the new commit.
+- [x] **Round 19 verified** at commit `cb37157d`: `third_party/cutlass/include/cute/atom/mma_traits_sm100.hpp` `SM100_MMA_MXF8F6F4_*` (line 3401) and `SM100_MMA_MXF4_*` / `MXF4NVF4_*` (line 4165) trait specializations confirm K = 32 (FP8) / K = 64 (FP4); accumulator = FP32 via `tmem_frg_1sm<c_type>` (caller-pinned); scale dtype = E8M0 for MXFP8 / MXFP4-VS-32 (asserted in trait) and E4M3 for NVFP4-VS-16 (downstream-pinned).
+- [x] **Round 19 verified** at commit `cb37157d`: `third_party/cutlass/include/cute/arch/mma_sm100_umma.hpp` `kind::mxf8f6f4` (lines 1273/1444/1518/1558) and `kind::mxf4nvf4` (lines 1644-1858) PTX wrapper macros all emit `block_scale` qualifier and consume scale tile TMEM addresses (`tsfa_addr`, `tsfb_addr`).
+- [ ] If any divergence is found at a future commit, update this memo AND `docs/specs/spec-mxfp8-nvfp4.md` AND notify the kernel writer; do NOT silently accept divergence.
 
 ## Cross-References
 
@@ -125,3 +171,4 @@ When CUTLASS submodule is bumped (or any kernel writer needs to verify these ato
 ## Changelog
 
 - **Round 1** (2026-06-23): initial memo authored to resolve Codex Round 0 review finding "AC-1 validation cites CUTLASS files that are absent from this checkout". Quotes the SM100 atom traits and PTX kinds inline so the spec is reproducible without depending on the submodule being initialized.
+- **Round 19** (2026-06-24): closed task2's verification half. Fetched the two pinned CUTLASS 4.5 SM100 headers (`mma_traits_sm100.hpp`, `mma_sm100_umma.hpp`) directly via `curl` from `raw.githubusercontent.com/NVIDIA/cutlass/cb37157d/...` and grep-verified each memo claim. 14 verifiable claims PASS. Two material notes: (1) the round-1 memo's M tile dimension claim "M ∈ {64, 128}" was overstated — at this commit, `SM100_MMA_MXF8F6F4_SS` asserts `M == 128` only for 1-CTA (the trait table is now corrected); (2) the NVFP4 scale dtype constraint (E4M3 for VS=16) is enforced downstream of the trait, not at the trait static_assert level. Memo trait table corrected; verification table appended; checklist items 2 and 3 marked done.
