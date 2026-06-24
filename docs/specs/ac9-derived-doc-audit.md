@@ -213,6 +213,49 @@ explicitly inventories the three textual issues in this draft.
 No fix needed — the draft is historical input, not a current
 source of truth.
 
+## Audit History
+
+The audit method and result tables were built up over four
+RLCR rounds. Tracking the history here so future readers can
+trace which round introduced or modified each entry.
+
+- **Round 17** (initial authoring). Three audit terms defined;
+  scan ran via `os.walk` over `docs/`, `kernels/`, `promix/`,
+  `tests/`, root `*.md`. Allowlist seeded with 12 (a)/(b)-class
+  entries: 10 in Term 1, 1 in Term 2, 1 in Term 3. Codex
+  round-17 review found two operational defects: the
+  documented Term 2 grep used `grep -v MXF8F6F4` which
+  filtered out the corrective citation the audit doc claimed,
+  and the audit doc and the regression test scanned different
+  universes (raw `grep` vs `os.walk` with `__pycache__`
+  exclusion).
+- **Round 18** (universe unification). Documented commands
+  and the regression test were both rewritten onto a shared
+  tracked-files-only `git ls-files` pipeline (same extension
+  list, same excluded path prefixes, same self-exclusion).
+  Term 2 filter dropped. Extension list expanded to also
+  cover `.cu`, `.cuh`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`,
+  `.inl` (for future M2 kernel sources). Codex round-18
+  review independently reproduced the documented 10/1/1 hit
+  split and accepted the derived-doc clause as MET.
+- **Round 19** (verification side-effect addition). Round 19
+  added a Verification section to
+  `docs/specs/cutlass-sm100-atom-references.md` that includes
+  the audit term "MXFP8 / E4M3" in a (b)-class correct-
+  distinction context (line 160). The allowlist was extended
+  with this entry. The regression test caught the new hit
+  immediately at edit time, proving the round-18 expanded
+  scope works.
+- **Round 20** (no audit-doc edit). Round 20 fixed the NVFP4
+  trait-table M-dimension row in
+  `docs/specs/cutlass-sm100-atom-references.md` but the
+  edited rows (32, 67-68) are above the audit-cited section.
+  Audit-cited line numbers (103, 105, 107, 160) were
+  unchanged; allowlist did not need updating.
+- **Round 21** (this provenance section). Audit method and
+  result tables unchanged. This section added so future
+  readers can trace the chain.
+
 ## Regression Prevention
 
 `tests/test_fake_quant_mxfp8_nvfp4.py::test_no_stale_ac9_terms_in_derived_docs`
