@@ -1941,6 +1941,12 @@ def test_cosine_sanity_main_calls_prepare_ptq_model_for_both_configs(monkeypatch
     # Patch in cosine_sanity's namespace
     monkeypatch.setattr(ptq_mod, "prepare_ptq_model", fake_prepare)
 
+    # Round 12 added a distributed-init step at the top of main();
+    # neutralize it for this checkpoint-equality test (covered by
+    # the dedicated test_cosine_sanity_main_initializes_distributed
+    # test below).
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
     import transformers as _tf
     monkeypatch.setattr(_tf, "AutoTokenizer", _FakeTokenizer)
     monkeypatch.setattr(cs_mod, "chunk_wikitext_for_cosine", fake_chunk)
@@ -1997,6 +2003,10 @@ def test_cosine_sanity_main_rejects_mismatched_checkpoints(monkeypatch):
     bad_reference = os.path.join(repo_root, "promix", "configs",
                                  "llama-3.2-1b-resq.yaml")
 
+    # Same neutralization as the sibling test (round-12's distributed
+    # init is covered separately).
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
     monkeypatch.setattr("sys.argv", [
         "cosine_sanity",
         "--config", primary,
@@ -2016,3 +2026,234 @@ def test_cosine_sanity_main_rejects_mismatched_checkpoints(monkeypatch):
     assert raised, (
         "main() must raise SystemExit when configs use different model.name"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-12 cosine harness defect-fix tests (Codex round-11 review found
+# distributed-init missing + vacuous-pass on empty capture; round 12
+# fixes both. These tests guard the fixes against regression.)
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_sanity_main_initializes_distributed_before_prepare(monkeypatch):
+    """`prepare_ptq_model` reaches `fuse_basis_to_model` which calls
+    `torch.distributed.barrier()`. The cosine CLI must initialize
+    distributed BEFORE the first `prepare_ptq_model` call, matching
+    `ptq.py:main()` behavior. Round 11's CLI omitted this and would
+    crash on `barrier()`.
+    """
+    _install_heavyweight_stubs()
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    from promix.eval import cosine_sanity as cs_mod
+    from promix.eval import ptq as ptq_mod
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    primary = os.path.join(repo_root, "promix", "configs",
+                           "llama-3.2-1b-mxfp8-nvfp4.yaml")
+    reference = os.path.join(repo_root, "promix", "configs",
+                             "llama-3.2-1b-w4a4.yaml")
+
+    call_order = []
+
+    # Force not-initialized so init_process_group is exercised.
+    monkeypatch.setattr(
+        torch.distributed, "is_initialized", lambda: False
+    )
+
+    def fake_init(*_a, **_kw):
+        call_order.append("init_process_group")
+
+    monkeypatch.setattr(
+        torch.distributed, "init_process_group", fake_init
+    )
+
+    def fake_prepare(config, dev, *, run_gptq=True):
+        call_order.append("prepare_ptq_model")
+        return object()
+
+    def fake_chunk(*_a, **_kw):
+        return [(torch.zeros(1, 8, dtype=torch.long), None) for _ in range(2)]
+
+    def fake_compute(*_a, **_kw):
+        return {0: 0.999}
+
+    monkeypatch.setattr(ptq_mod, "prepare_ptq_model", fake_prepare)
+    import transformers as _tf
+
+    class _Tok:
+        @staticmethod
+        def from_pretrained(*_a, **_kw):
+            return object()
+
+    monkeypatch.setattr(_tf, "AutoTokenizer", _Tok)
+    monkeypatch.setattr(cs_mod, "chunk_wikitext_for_cosine", fake_chunk)
+    monkeypatch.setattr(cs_mod, "compute_oproj_cosine_per_layer", fake_compute)
+
+    monkeypatch.setattr("sys.argv", [
+        "cosine_sanity",
+        "--config", primary,
+        "--reference_config", reference,
+        "--nsamples", "2",
+        "--seqlen", "32",
+    ])
+
+    cs_mod.main()
+
+    # init_process_group MUST be called before any prepare_ptq_model
+    # call. There may be multiple prepare_ptq_model calls (primary +
+    # reference); the first init must precede them all.
+    assert "init_process_group" in call_order, (
+        "cosine_sanity main() did not call init_process_group at all; "
+        "without it, prepare_ptq_model -> fuse_basis_to_model -> "
+        "torch.distributed.barrier() will crash on the remote run"
+    )
+    init_idx = call_order.index("init_process_group")
+    prepare_idxs = [i for i, c in enumerate(call_order) if c == "prepare_ptq_model"]
+    assert prepare_idxs, "prepare_ptq_model was never called"
+    assert init_idx < prepare_idxs[0], (
+        f"init_process_group must precede the first prepare_ptq_model "
+        f"call; got call_order={call_order}"
+    )
+
+
+def test_cosine_compute_raises_on_empty_capture():
+    """If the model has no attention layers (e.g. `model.model.layers`
+    is empty or self_attn / o_proj is missing), the harness must
+    raise RuntimeError rather than silently return {} which would
+    lead to "OVERALL: PASS" with zero rows.
+    """
+    import torch.nn as nn
+
+    from promix.eval.cosine_sanity import compute_oproj_cosine_per_layer
+
+    class _Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList()  # ZERO layers
+
+        def forward(self, x):
+            return x
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = _Inner()
+
+        def forward(self, x):
+            return self.model(x)
+
+    model = _Model()
+    inputs = [(torch.zeros(1, 4, dtype=torch.long), None)]
+
+    raised = False
+    try:
+        compute_oproj_cosine_per_layer(
+            model, inputs, max_batches=1, device=torch.device("cpu")
+        )
+    except RuntimeError as e:
+        raised = True
+        msg = str(e).lower()
+        assert ("zero attention layers" in msg
+                or "no attention layers" in msg
+                or "no o_proj" in msg
+                or "model.model.layers" in str(e)), (
+            f"empty-capture error must explain the failure; got {e}"
+        )
+    assert raised, (
+        "compute_oproj_cosine_per_layer must raise on zero-layer model; "
+        "round 11 silently returned {} which round-12 forbids"
+    )
+
+
+def test_cosine_compute_raises_on_layer_count_mismatch():
+    """Primary and reference models must have the same number of
+    attention layers; the harness must raise RuntimeError when they
+    differ rather than silently dropping mismatched layers.
+    """
+    import torch.nn as nn
+
+    from promix.eval.cosine_sanity import compute_oproj_cosine_per_layer
+
+    class _Attn(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.o_proj = nn.Linear(dim, dim, bias=False)
+
+        def forward(self, x):
+            return self.o_proj(x)
+
+    class _Block(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.self_attn = _Attn(dim)
+
+        def forward(self, x):
+            return self.self_attn(x)
+
+    class _Inner(nn.Module):
+        def __init__(self, dim, n_layers):
+            super().__init__()
+            self.layers = nn.ModuleList([_Block(dim) for _ in range(n_layers)])
+
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    class _Model(nn.Module):
+        def __init__(self, dim=8, n_layers=2):
+            super().__init__()
+            self.model = _Inner(dim, n_layers)
+
+        def forward(self, x):
+            return self.model(x)
+
+    primary = _Model(dim=8, n_layers=2)
+    reference = _Model(dim=8, n_layers=3)  # mismatch
+    inputs = [(torch.randn(1, 4, 8), None)]
+
+    raised = False
+    try:
+        compute_oproj_cosine_per_layer(
+            primary, inputs, reference_model=reference,
+            max_batches=1, device=torch.device("cpu"),
+        )
+    except RuntimeError as e:
+        raised = True
+        msg = str(e)
+        # Must cite both layer counts so the user can debug quickly.
+        assert "2" in msg and "3" in msg, (
+            f"mismatch error must cite both layer counts; got {e}"
+        )
+    assert raised, (
+        "compute_oproj_cosine_per_layer must raise when primary and "
+        "reference layer counts differ"
+    )
+
+
+def test_evaluate_against_threshold_raises_on_empty():
+    """`_evaluate_against_threshold({})` must raise rather than
+    return True (Python's `all([])` is True). This guard catches the
+    case where compute_oproj_cosine_per_layer somehow produced no
+    cosine values yet didn't already raise — defense in depth.
+    """
+    from promix.eval.cosine_sanity import _evaluate_against_threshold
+
+    raised = False
+    try:
+        _evaluate_against_threshold({}, threshold=0.99)
+    except RuntimeError as e:
+        raised = True
+        assert "no per-layer cosines" in str(e).lower() or "empty" in str(e).lower()
+    assert raised, (
+        "_evaluate_against_threshold({}) must raise; round-11 returned "
+        "True (all([]) == True) which would silently print OVERALL: PASS"
+    )
+
+    # Sanity: non-empty input still works.
+    assert _evaluate_against_threshold({0: 0.99, 1: 0.995}, 0.99) is True
+    assert _evaluate_against_threshold({0: 0.99, 1: 0.98}, 0.99) is False

@@ -178,6 +178,23 @@ def run_gptq_if_enabled(model, config, dev, *, _gptq_fwrd=None,
     return True
 
 
+def init_distributed_for_ptq_main_if_needed():
+    """Initialize a single-process `nccl env://` distributed context.
+
+    `prepare_ptq_model()` reaches `fuse_basis_to_model()` which calls
+    `torch.distributed.barrier()` (the rotation pipeline assumes a
+    valid process group even for single-GPU runs). Both
+    `promix.eval.ptq.main()` and `promix.eval.cosine_sanity.main()`
+    must call this helper BEFORE `prepare_ptq_model()` to avoid the
+    barrier crashing.
+
+    Idempotent: no-op when distributed is already initialized.
+    """
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(
+            backend='nccl', init_method='env://', world_size=1, rank=0)
+
+
 def prepare_ptq_model(config, dev, *, run_gptq=True):
     """Build a fully PTQ-prepared model from a config dict.
 
@@ -258,10 +275,8 @@ def main():
     print(f"  High fraction: {config['quantize']['high_fraction']}")
     print()
 
-    # Initialize distributed (needed for rotation barrier)
-    if not torch.distributed.is_initialized():
-        torch.distributed.init_process_group(
-            backend='nccl', init_method='env://', world_size=1, rank=0)
+    # Initialize distributed (needed by fuse_basis_to_model's barrier).
+    init_distributed_for_ptq_main_if_needed()
 
     transformers.set_seed(config['calibration'].get('seed', 0))
 

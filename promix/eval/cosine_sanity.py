@@ -144,15 +144,42 @@ def compute_oproj_cosine_per_layer(
         reference_model = reference_model.to(device).eval()
 
     primary_outs: Dict[int, list] = {}
+    primary_layer_count = 0
     handles = []
     for idx, attn in _attention_layers(model):
         handles.append(_install_oproj_output_hook(attn, primary_outs, idx))
+        primary_layer_count += 1
+
+    # Fail closed: empty layer iteration means the model has no
+    # accessible `model.model.layers[i].self_attn` and the harness
+    # would silently return {} -> "OVERALL: PASS" with no rows.
+    if primary_layer_count == 0:
+        for h in handles:
+            h.remove()
+        raise RuntimeError(
+            "cosine sanity: primary model has zero attention layers "
+            "(model.model.layers is empty or self_attn / o_proj missing); "
+            "cannot measure AC-2.4 without layers"
+        )
 
     ref_outs: Dict[int, list] = {}
     ref_handles = []
+    reference_layer_count = 0
     if reference_model is not None:
         for idx, attn in _attention_layers(reference_model):
             ref_handles.append(_install_oproj_output_hook(attn, ref_outs, idx))
+            reference_layer_count += 1
+        if reference_layer_count != primary_layer_count:
+            for h in handles:
+                h.remove()
+            for h in ref_handles:
+                h.remove()
+            raise RuntimeError(
+                f"cosine sanity: primary has {primary_layer_count} "
+                f"attention layers but reference has "
+                f"{reference_layer_count}; the two models must have "
+                f"matching architecture for AC-2.4"
+            )
 
     try:
         with torch.no_grad():
@@ -170,12 +197,40 @@ def compute_oproj_cosine_per_layer(
         for h in ref_handles:
             h.remove()
 
+    # Post-forward validation: fail closed on any contract violation
+    # so an empty / asymmetric capture cannot silently print PASS.
+    if not primary_outs:
+        raise RuntimeError(
+            "cosine sanity: hooks captured zero o_proj outputs; "
+            "verify the dataloader produced batches and the forward "
+            "pass actually traversed the attention layers"
+        )
+    for idx, batches in primary_outs.items():
+        if len(batches) == 0:
+            raise RuntimeError(
+                f"cosine sanity: layer {idx} captured zero primary "
+                f"o_proj outputs; the forward pass did not reach this "
+                f"layer"
+            )
+    if reference_model is not None:
+        missing = sorted(set(primary_outs) - set(ref_outs))
+        if missing:
+            raise RuntimeError(
+                f"cosine sanity: layers {missing} have primary captures "
+                f"but no reference captures; the two models' forward "
+                f"paths disagree on which layers are exercised"
+            )
+        for idx, batches in ref_outs.items():
+            if len(batches) == 0:
+                raise RuntimeError(
+                    f"cosine sanity: layer {idx} captured zero "
+                    f"reference o_proj outputs"
+                )
+
     results: Dict[int, float] = {}
     for idx, primary_batches in primary_outs.items():
         primary = torch.cat([t.flatten() for t in primary_batches])
         if reference_model is not None:
-            if idx not in ref_outs:
-                continue
             reference = torch.cat([t.flatten() for t in ref_outs[idx]])
         else:
             # Unit-test sentinel: cosine of the vector with itself.
@@ -192,6 +247,20 @@ def compute_oproj_cosine_per_layer(
 def _evaluate_against_threshold(
     cosines: Dict[int, float], threshold: float
 ) -> bool:
+    """Return True iff every layer's cosine is >= threshold.
+
+    Fails closed on empty input: `all([])` is True in Python, which
+    would let an empty cosine dict silently print "OVERALL: PASS"
+    with zero rows. AC-2.4 requires every attention layer to satisfy
+    the threshold; "no layers measured" is a harness failure, not
+    a pass.
+    """
+    if not cosines:
+        raise RuntimeError(
+            "cosine sanity: no per-layer cosines to evaluate; the harness "
+            "produced an empty result. This is a measurement failure, "
+            "not a pass — investigate the model build / forward pass."
+        )
     return all(c >= threshold for c in cosines.values())
 
 
@@ -225,8 +294,16 @@ def main():
     import yaml
     import transformers
 
-    from promix.eval.ptq import prepare_ptq_model
+    from promix.eval.ptq import (
+        init_distributed_for_ptq_main_if_needed,
+        prepare_ptq_model,
+    )
     from promix.utils import DEV
+
+    # `prepare_ptq_model()` reaches `fuse_basis_to_model()` which calls
+    # `torch.distributed.barrier()`. Initialize the same single-process
+    # nccl/env-init context PTQ uses before any model prep.
+    init_distributed_for_ptq_main_if_needed()
 
     with open(args.config) as f:
         primary_cfg = yaml.safe_load(f)
