@@ -1539,3 +1539,122 @@ def test_real_sdpa_attention_drops_R2_on_oproj_in_global_mode():
         "(final fuse applies U_oproj_g without composing R2; training must "
         "match). If True, the round-6 fix regressed in LlamaSdpaAttention.forward"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC-2 fake-FP config matrix schema regression. The plan requires fake-FP
+# PPL on 1B/3B/8B × W4A4/W4A4KV4 (six configs). Round 9 authored five new
+# yamls beside the round-4 1B W4A4 config; this test guards the matrix's
+# completeness and per-config schema (string FP identifiers, global o_proj
+# PCA, block-aligned high split, KV4 fields where applicable, distinct
+# artifact paths).
+# ---------------------------------------------------------------------------
+
+
+# Per-model architecture facts (HF Llama-3.2-1B / 3.2-3B / Llama-3-8B):
+# (hidden_size, intermediate_size, num_attention_heads, head_dim).
+_MODEL_DIMS = {
+    "llama-3.2-1b": (2048, 8192, 32, 64),
+    "llama-3.2-3b": (3072, 8192, 24, 128),
+    "llama-3-8b":   (4096, 14336, 32, 128),
+}
+
+_FP_CONFIGS = [
+    # (yaml_filename, model_key, expects_kv4)
+    ("llama-3.2-1b-mxfp8-nvfp4.yaml",      "llama-3.2-1b", False),
+    ("llama-3.2-1b-mxfp8-nvfp4-kv4.yaml",  "llama-3.2-1b", True),
+    ("llama-3.2-3b-mxfp8-nvfp4.yaml",      "llama-3.2-3b", False),
+    ("llama-3.2-3b-mxfp8-nvfp4-kv4.yaml",  "llama-3.2-3b", True),
+    ("llama-3-8b-mxfp8-nvfp4.yaml",        "llama-3-8b",   False),
+    ("llama-3-8b-mxfp8-nvfp4-kv4.yaml",    "llama-3-8b",   True),
+]
+
+
+def test_fp_config_matrix_is_complete_and_schema_valid():
+    """All six FP yamls (1B/3B/8B × W4A4/W4A4KV4) must exist and follow
+    the required schema: string FP identifiers, global o_proj PCA,
+    block-aligned high/low splits, distinct artifact paths.
+
+    Without all six configs, AC-2.2 (W4A4 PPL on 1B/3B/8B) and AC-2.3
+    (W4A4KV4 PPL on 1B/3B/8B) cannot be measured; this test guards
+    against silent regression of the matrix or per-config drift.
+    """
+    import os
+    import yaml
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_dir = os.path.join(repo_root, "promix", "configs")
+
+    seen_basis_paths = set()
+    seen_rotation_paths = set()
+    seen_output_dirs = set()
+
+    for fname, model_key, expects_kv4 in _FP_CONFIGS:
+        path = os.path.join(cfg_dir, fname)
+        assert os.path.isfile(path), f"missing FP config: {fname}"
+        with open(path, "r") as f:
+            cfg = yaml.safe_load(f)
+
+        q = cfg["quantize"]
+        # FP identifier schema
+        assert q["w_bits"] == "nvfp4", f"{fname}: w_bits must be 'nvfp4', got {q['w_bits']!r}"
+        assert q["a_bits"] == "nvfp4", f"{fname}: a_bits must be 'nvfp4', got {q['a_bits']!r}"
+        assert q["high_bits"] == "mxfp8", f"{fname}: high_bits must be 'mxfp8', got {q['high_bits']!r}"
+        assert q["o_proj_pca"] == "full_global", (
+            f"{fname}: o_proj_pca must be 'full_global', got {q['o_proj_pca']!r}"
+        )
+        assert q["w_groupsize"] == -1, f"{fname}: w_groupsize must be -1 (per-group FP GPTQ unsupported), got {q['w_groupsize']!r}"
+        assert q["high_fraction"] == 0.125, f"{fname}: high_fraction must be 0.125 for the planned matrix"
+
+        # Block-alignment for hidden_size and intermediate_size at high_fraction
+        hidden, intermediate, _heads, head_dim = _MODEL_DIMS[model_key]
+        for dim_name, dim in [("hidden", hidden), ("intermediate", intermediate)]:
+            high = int(q["high_fraction"] * dim)
+            main = dim - high
+            assert high % 32 == 0, (
+                f"{fname}: {dim_name} high segment {high} not divisible by 32 "
+                f"(MXFP8 block size); choose a high_fraction whose product is a "
+                f"multiple of 32 for {dim_name}_size={dim}"
+            )
+            assert main % 16 == 0, (
+                f"{fname}: {dim_name} main segment {main} not divisible by 16 "
+                f"(NVFP4 block size); high_fraction or {dim_name}_size violates alignment"
+            )
+
+        # KV4 vs W4A4
+        if expects_kv4:
+            assert q["k_bits"] == "nvfp4", f"{fname}: KV4 variant must set k_bits='nvfp4'"
+            assert q["v_bits"] == "nvfp4", f"{fname}: KV4 variant must set v_bits='nvfp4'"
+            assert q["k_groupsize"] == head_dim, (
+                f"{fname}: k_groupsize must equal head_dim ({head_dim}); got {q['k_groupsize']}"
+            )
+            assert q["v_groupsize"] == head_dim, (
+                f"{fname}: v_groupsize must equal head_dim ({head_dim}); got {q['v_groupsize']}"
+            )
+            # head_dim % 16 == 0 required for NVFP4
+            assert head_dim % 16 == 0, (
+                f"{fname}: KV4 needs head_dim divisible by 16; head_dim={head_dim}"
+            )
+        else:
+            assert q["k_bits"] == 16, f"{fname}: W4A4 variant must keep k_bits=16"
+            assert q["v_bits"] == 16, f"{fname}: W4A4 variant must keep v_bits=16"
+
+        # Path uniqueness across the matrix (output_dir at minimum; basis
+        # and rotation may share between W4A4 and KV4 variants of the same
+        # model since the basis bundle is the same — just assert
+        # output_dir is unique across all configs).
+        assert cfg["paths"]["output_dir"] not in seen_output_dirs, (
+            f"{fname}: output_dir collides with an earlier config"
+        )
+        seen_output_dirs.add(cfg["paths"]["output_dir"])
+        seen_basis_paths.add(cfg["paths"]["basis"])
+        seen_rotation_paths.add(cfg["paths"]["rotation"])
+
+    # Sanity: 6 distinct output_dirs, ≥3 distinct basis paths (one per
+    # model — W4A4 and KV4 share the basis bundle since basis depends on
+    # model architecture not on KV quantization).
+    assert len(seen_output_dirs) == 6
+    assert len(seen_basis_paths) >= 3, (
+        f"expected at least 3 distinct basis paths (one per model); got "
+        f"{len(seen_basis_paths)}: {seen_basis_paths}"
+    )

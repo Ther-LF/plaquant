@@ -1,0 +1,51 @@
+# ProMix Quantization Config: Llama-3-8B W4A4 mixed MXFP8 (high) + NVFP4 (main)
+#
+# 8B Llama (Meta-Llama-3-8B): hidden_size=4096 (high=512 % 32 ✓;
+# main=3584 % 16 ✓); intermediate_size=14336 (down_proj high=1792 % 32 ✓;
+# main=12544 % 16 ✓). 32 attention heads × 128 head_dim = 4096; 8 KV heads.
+
+model:
+  name: "unsloth/llama-3-8b"
+  type: "llama"
+
+quantize:
+  w_bits: "nvfp4"
+  a_bits: "nvfp4"
+  high_bits: "mxfp8"
+  low_bits: 2
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: 16
+  v_bits: 16
+  k_asym: true
+  v_asym: true
+  k_groupsize: 128
+  v_groupsize: 128
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  o_proj_pca: "full_global"
+
+paths:
+  basis: "./rotation/U-wikitext-512-mxfp8nvfp4-llama-3-8b.bin"
+  rotation: "./rotation/R-mxfp8nvfp4-high-0.125-low-0.0-sparse-0.0-llama-3-8b.bin"
+  output_dir: "/tmp/promix_ptq_8b_mxfp8_nvfp4"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 128
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 16
+  num_fewshot: 0
+  max_length: 2048

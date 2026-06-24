@@ -1,0 +1,51 @@
+# ProMix Quantization Config: Llama-3.2-3B W4A4KV4 mixed MXFP8 (high) + NVFP4 (main)
+#
+# 3B Llama: head_dim=128 (24 heads × 128 = 3072 hidden), 8 KV heads.
+# k_groupsize / v_groupsize match head_dim so per-head KV blocking is
+# preserved; 128 % 16 = 0 satisfies the NVFP4 block-alignment rule.
+
+model:
+  name: "unsloth/Llama-3.2-3B"
+  type: "llama"
+
+quantize:
+  w_bits: "nvfp4"
+  a_bits: "nvfp4"
+  high_bits: "mxfp8"
+  low_bits: 2
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: "nvfp4"
+  v_bits: "nvfp4"
+  k_asym: true
+  v_asym: true
+  k_groupsize: 128
+  v_groupsize: 128
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  o_proj_pca: "full_global"
+
+paths:
+  basis: "./rotation/U-wikitext-512-mxfp8nvfp4-Llama-3.2-3B.bin"
+  rotation: "./rotation/R-mxfp8nvfp4-high-0.125-low-0.0-sparse-0.0-Llama-3.2-3B.bin"
+  output_dir: "/tmp/promix_ptq_3b_mxfp8_nvfp4_kv4"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 128
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 16
+  num_fewshot: 0
+  max_length: 2048
