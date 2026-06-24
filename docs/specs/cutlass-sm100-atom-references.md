@@ -29,7 +29,7 @@ When an SM100 kernel is implemented (M2 / task17), the kernel writers should:
 | Constraint | Value | Source |
 |---|---|---|
 | M tile dimension | M = 128 for 1-CTA `_SS`; M ∈ {128, 256} for 2x1SM `_2x1SM_SS` (M = 256 reflects 128 per CTA × 2 CTAs); SPARSE `_SS_SPARSE` requires M = 128 | round-19 verification: at commit `cb37157d`, `mma_sm100_umma.hpp:1248` `static_assert(M == 128, ...)`. The error message text says "should be 64 or 128" but the actual assert pins M = 128. Round-1 memo's "M ∈ {64, 128}" claim is corrected here. |
-| N tile dimension | ∈ [8, 256], stride 8 if B is K-major, stride 16 if B is MN-major | atom traits |
+| N tile dimension | N % 8 == 0 ∧ 8 ≤ N ≤ 256 (atom-level static_assert) | round-19 verification: `mma_sm100_umma.hpp:1249` `static_assert((N % 8 == 0) && (8 <= N) && (N <= 256), "SM100_MMA_MXF8F6F4_SS N-mode size should be a multiple of 8 between 8 and 256.");`. Round-1 memo's "stride 16 if B is MN-major" subclause is caller-side B-major handling, not enforced at the atom static_assert level. |
 | K tile dimension | 256 / sizeof_bits<ValTypeA> = **32 elements for FP8** | atom traits derive K from element bit-width |
 | ValTypeA / ValTypeB | FP8 E4M3 (default) or FP8 E5M2 (alternative) | atom traits enumerate FP8 dtypes |
 | Accumulator dtype | FP32 (TMEM) | accumulator type fixed to FP32 for MXFP8 |
@@ -64,9 +64,9 @@ PRIMARY selects the NVFP4 variant (VS=16, FP8 E4M3 scale) because the higher-pre
 
 | Constraint | Value | Source |
 |---|---|---|
-| M tile dimension | ∈ {64, 128} | same as MXFP8 atom |
-| N tile dimension | ∈ [8, 256], stride 8 / 16 by B layout | same |
-| K tile dimension | 256 / sizeof_bits<ValTypeA> = **64 elements for FP4** | atom traits derive K from element bit-width |
+| M tile dimension | M = 128 for 1-CTA `SM100_MMA_MXF4_SS`; M ∈ {128, 256} for 2x1SM `SM100_MMA_MXF4_2x1SM_SS`; M = 128 for sparse `SM100_MMA_MXF4NVF4_SS_SPARSE` | round-19 verification: `mma_sm100_umma.hpp:1616` `static_assert(M == 128, ...)` for 1-CTA; `mma_sm100_umma.hpp:1758` `static_assert(M == 128 \|\| M == 256, ...)` for 2x1SM. Same family-by-family pattern as the MXFP8 atom. |
+| N tile dimension | N % 8 == 0 ∧ 8 ≤ N ≤ 256 (atom-level, same as MXFP8) | round-19 verification: `mma_sm100_umma.hpp:1249` (MXFP8) `static_assert((N % 8 == 0) && (8 <= N) && (N <= 256), ...)` and the parallel MXF4 family carries the same constraint. The "stride 16 if B is MN-major" subclause from the round-1 wording is caller-side B-major handling, not enforced at the atom static_assert level. |
+| K tile dimension | 256 / sizeof_bits<ValTypeA> = **64 elements for FP4** | round-19 verification: `mma_traits_sm100.hpp:4178` `constexpr static int K = 64;` inside `MMA_Traits<SM100_MMA_MXF4_SS<...>>` |
 | ValTypeA / ValTypeB | FP4 E2M1 | atom traits |
 | Accumulator dtype | FP32 (TMEM) | same as MXFP8 atom — both phases share a single TMEM C type |
 | Block scale dtype | **FP8 E4M3** for NVFP4 (VS=16); FP8 E8M0 for MXFP4 (VS=32) | trait struct's scale-vector-size template parameter |
