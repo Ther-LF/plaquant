@@ -38,6 +38,7 @@ def configure_quantizers(model, config):
     """Configure activation quantizers on all wrapped layers."""
     qcfg = config['quantize']
     model_dim = model.config.hidden_size
+    intermediate_size = getattr(model.config, 'intermediate_size', None)
     num_heads = model.config.num_attention_heads
     head_dim = model_dim // num_heads
     high_fraction = qcfg['high_fraction']
@@ -50,6 +51,22 @@ def configure_quantizers(model, config):
     # split, matching every other Linear (q/k/v/gate/up/down). Detect via
     # the same config knob basis.py / rotation.py read.
     o_proj_global = qcfg.get('o_proj_pca', 'per_head') == 'full_global'
+    # FP block-scaled formats (mxfp8 / nvfp4) extend high/low routing to
+    # `down_proj` per the plan: q/k/v/gate/up/down/o_proj all follow the
+    # same MXFP8 high + NVFP4 main split, with `down_proj`'s split taken
+    # on `intermediate_size` (the post-MLP-up dim) instead of
+    # `hidden_size`. The legacy INT W4A4 path intentionally zeroed out
+    # down_proj high channels (the ResQ baseline that produced
+    # PPL=14.72), so we keep that behavior for INT and switch to the
+    # plan-conformant split for FP.
+    is_fp = isinstance(qcfg.get('high_bits'), str) or isinstance(
+        qcfg.get('a_bits'), str
+    )
+    if is_fp and intermediate_size is None:
+        raise RuntimeError(
+            "FP mixed-precision config requires model.config.intermediate_size"
+            "; got None — cannot derive down_proj high/low split."
+        )
 
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     for name in qlayers:
@@ -91,8 +108,26 @@ def configure_quantizers(model, config):
             layer_low_length = 0
 
         if "down_proj" in name:
-            layer_high_length = 0
-            layer_low_length = 0
+            if is_fp:
+                # FP path: down_proj joins the q/k/v/gate/up/o_proj
+                # mixed-precision split. The split lengths come from
+                # `intermediate_size`, not `hidden_size`, because
+                # down_proj's input is the post-up-proj/gate-proj
+                # intermediate-dim activation. Block-alignment holds
+                # for all 1B/3B/8B intermediate dims at high_fraction
+                # ∈ {1/8, 1/4, 1/2}: e.g. 8192 × 0.125 = 1024
+                # (divisible by 32 for MXFP8, by 16 for NVFP4); 14336
+                # × 0.125 = 1792 (1792/32 = 56). Online Hadamard
+                # transform on down_proj input is unchanged; it
+                # composes cleanly with per-block FP scales.
+                layer_high_length = int(high_fraction * intermediate_size)
+                layer_low_length = int(low_fraction * intermediate_size)
+            else:
+                # Legacy INT W4A4: down_proj is single-precision
+                # (no high/low split). Preserves the ResQ baseline
+                # PPL=14.72.
+                layer_high_length = 0
+                layer_low_length = 0
 
         qlayers[name].quantizer.configure(
             bits=layer_bits,

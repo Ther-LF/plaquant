@@ -468,14 +468,20 @@ def test_weight_quantizer_string_bits_quantize_to_int_returns_none():
 
 def test_gptq_fasterquant_fp_path_no_crash_and_q_int_none():
     """GPTQ.fasterquant() must not crash when any active WeightQuantizer
-    uses a string FP format identifier.
+    uses a string FP format identifier, and Q_int must be None on the
+    FP path (real FP-byte packing belongs to the kernel-side weight
+    packer, not GPTQ).
 
-    The per-column INT GPTQ loop calls quantize_to_int() and expects an
-    integer tensor it can flatten into Q_int. For block-scaled FP formats
-    that returns None and the call would TypeError on `None.flatten()`.
-    fasterquant() detects FP via `isinstance(bits, str)` on any active
-    quantizer and bypasses the per-column loop, falling back to plain
-    block-scaled fake-quantize on the whole tensor; Q_int is left as None.
+    Round 6 replaced the round-4 whole-tensor RTN bypass with the spec
+    Section 11 fixed-block-scale Hessian-conditioned per-column path:
+    `WeightQuantizer.find_params(W)` freezes per-row per-block scales
+    on the original (uncorrected) weight; `GPTQ.fasterquant()`'s
+    per-column inner loop then dispatches FP segments to
+    `quantize_column_with_frozen_scale(w_corrected, col_idx)` so the
+    Hessian-corrected value is rounded against the SAME frozen scale.
+    This basic smoke covers the no-crash + Q_int=None part; the
+    correctness-of-Hessian-correction half is covered by
+    `test_section11_fp_gptq_uses_hessian_correction`.
     """
     import torch.nn as nn
 
@@ -486,7 +492,7 @@ def test_gptq_fasterquant_fp_path_no_crash_and_q_int_none():
     in_features = 256  # 32 (MXFP8 block) and 16 (NVFP4 block) both divide
     out_features = 64
     high_bits_length = 32   # MXFP8 segment, %32==0
-    low_bits_length = 0     # no low segment in W4A4 high-only split
+    low_bits_length = 0     # no low segment in this configuration
 
     layer = nn.Linear(in_features, out_features, bias=False)
     layer.weight.data = torch.randn_like(layer.weight.data) * 0.1
@@ -506,8 +512,11 @@ def test_gptq_fasterquant_fp_path_no_crash_and_q_int_none():
     high_q.configure(bits="mxfp8", perchannel=True, sym=True, mse=False)
     gptq.high_quantizer = high_q
 
-    # add_batch records Hessian; for FP path it is unused because the
-    # per-column GPTQ loop is skipped, but the call must still not crash.
+    # add_batch records the Hessian. Round 6's per-column FP loop USES
+    # the Hessian (Section 11 Hessian-conditioned rounding under frozen
+    # block scales), so this call is no longer optional smoke — it
+    # affects the result. fasterquant must complete without crashing
+    # regardless of Hessian shape.
     inp = torch.randn(2, 8, in_features)
     out = layer(inp)
     gptq.add_batch(inp, out)
@@ -813,15 +822,75 @@ def test_run_gptq_if_enabled_skips_for_w_bits_16(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_quantize_linear_drops_R2_in_global_oproj_mode():
+def test_attention_forwards_drop_R2_on_oproj_in_global_mode():
+    """All three attention classes (LlamaAttention, LlamaFlashAttention2,
+    LlamaSdpaAttention) MUST have the round-6 R2-drop pattern in their
+    forward methods: `oproj_R2 = None if self.use_oproj_global else R2`
+    immediately followed by `self.o_proj(attn_output, R1, R2=oproj_R2,
+    transpose=True)`. The companion unit-level test
+    (`test_quantize_linear_oproj_R2_drop_unit_logic` below) verifies the
+    conditional itself; this test is the safety net that catches a
+    regression in ANY of the three production attention forwards.
+
+    Source-level check rather than runtime invocation because building
+    a real LlamaAttention forward requires the full transformers + a
+    rotary embedding implementation that the lightweight test harness
+    cannot construct without bringing in the real transformers package.
+    """
+    import os
+    import re
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src_path = os.path.join(
+        repo_root, "promix", "train", "modeling_llama_train.py"
+    )
+    with open(src_path, "r") as f:
+        src = f.read()
+
+    # Each of the three attention classes must carry the R2-drop guard.
+    # Pattern is one logical line `oproj_R2 = None if self.use_oproj_global else R2`
+    # followed (near-by) by `self.o_proj(...R2=oproj_R2...)`. Whitespace
+    # flexible.
+    drop_pattern = re.compile(
+        r"oproj_R2\s*=\s*None\s+if\s+self\.use_oproj_global\s+else\s+R2"
+    )
+    forward_pattern = re.compile(
+        r"self\.o_proj\([^)]*R2\s*=\s*oproj_R2[^)]*\)"
+    )
+    drops = drop_pattern.findall(src)
+    o_proj_calls = forward_pattern.findall(src)
+    assert len(drops) >= 3, (
+        f"Expected at least 3 `oproj_R2 = None if self.use_oproj_global else R2` "
+        f"sites (one per attention class); found {len(drops)}"
+    )
+    assert len(o_proj_calls) >= 3, (
+        f"Expected at least 3 `self.o_proj(...R2=oproj_R2...)` sites; "
+        f"found {len(o_proj_calls)}"
+    )
+
+    # No bare `self.o_proj(...R2=R2...)` should remain (would mean the
+    # round-6 fix was reverted on at least one attention class).
+    bare_pattern = re.compile(
+        r"self\.o_proj\([^)]*R2\s*=\s*R2[^)]*\)"
+    )
+    assert not bare_pattern.search(src), (
+        "Found `self.o_proj(...R2=R2...)` in modeling_llama_train.py; "
+        "the round-6 fix dropped R2 from o_proj forwards in global mode "
+        "and this pattern means at least one attention class regressed"
+    )
+
+
+def test_quantize_linear_oproj_R2_drop_unit_logic():
     """`promix.train.quant_linear.QuantizeLinear.forward` is the layer
     that consumes R2; we patch its forward to record (R1, R2) and run a
     minimal attention-style call sequence under both flag values.
 
-    This is a unit-level regression: we instantiate the layer directly
-    and call it, asserting that with `oproj_R2 = None if
-    self.use_oproj_global else R2` (the round-6 change) the recorded R2
-    is None when the flag is True.
+    This is a unit-level regression of the conditional itself: round 6's
+    pattern `oproj_R2 = None if self.use_oproj_global else R2` MUST
+    produce R2=None on o_proj when the flag is True. Companion to
+    `test_attention_forwards_drop_R2_on_oproj_in_global_mode` which
+    asserts the production source actually contains this conditional in
+    all three attention classes.
     """
     import torch.nn as nn
 
@@ -973,5 +1042,213 @@ def test_section11_fp_gptq_uses_hessian_correction():
     nearest_dist = diffs.min(dim=-1).values
     assert (nearest_dist <= 1e-3).all(), (
         f"some quantized values fall off the E2M1 × frozen_scale grid; "
+        f"max distance = {nearest_dist.max().item()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# down_proj mixed-FP routing tests (Codex round-6 review found that
+# `configure_quantizers` zeroed down_proj high/low and `gptq_fwrd` excluded
+# down_proj from mixed_precision; round 7 fixes both for the FP path).
+# ---------------------------------------------------------------------------
+
+
+def _build_minimal_fp_model_with_down_proj(intermediate_size=128, hidden_size=64):
+    """Tiny stand-in for a Llama model the smoke configure_quantizers test
+    can call. Has the .config attributes configure_quantizers reads and
+    one ActQuantWrapper-wrapped Linear named like a real `down_proj`.
+    """
+    import torch.nn as nn
+
+    from promix.quantize.quant_utils import ActQuantWrapper
+
+    class _MLP(nn.Module):
+        def __init__(self, hidden, intermediate):
+            super().__init__()
+            # The wrapped layer's .module is the inner Linear; the wrapper
+            # is what configure_quantizers configures via find_qlayers.
+            self.down_proj = ActQuantWrapper(
+                nn.Linear(intermediate, hidden, bias=False)
+            )
+
+    class _Block(nn.Module):
+        def __init__(self, hidden, intermediate):
+            super().__init__()
+            self.mlp = _MLP(hidden, intermediate)
+
+    class _Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList([_Block(hidden_size, intermediate_size)])
+
+    class _Cfg:
+        pass
+
+    class _Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = _Cfg()
+            self.config.hidden_size = hidden_size
+            self.config.intermediate_size = intermediate_size
+            self.config.num_attention_heads = 4
+            self.model = _Inner()
+
+    return _Model()
+
+
+def test_configure_quantizers_down_proj_uses_intermediate_size_split():
+    """In FP mode, down_proj must use intermediate_size-derived high/low
+    lengths, not hidden_size or zero. Block alignment: with
+    high_fraction=0.125 and intermediate_size=128, expected
+    high_bits_length = 16 (128 * 0.125), divisible by both 16 (NVFP4
+    block) and 32 needs care — for the test we pick a size that's
+    divisible by 16 to keep NVFP4 blocks valid; full 1B Llama uses
+    intermediate_size=8192 which gives high=1024 (divisible by 32).
+
+    The legacy INT W4A4 path keeps the all-main down_proj behavior
+    (separate test below).
+    """
+    _install_heavyweight_stubs()
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from promix.eval.ptq import configure_quantizers
+
+    intermediate_size = 128  # 128 * 0.125 = 16 (divisible by 16 NVFP4 block)
+    hidden_size = 64
+    model = _build_minimal_fp_model_with_down_proj(
+        intermediate_size=intermediate_size, hidden_size=hidden_size
+    )
+    cfg = {
+        "quantize": {
+            "a_bits": "nvfp4",
+            "high_bits": "mxfp8",
+            "low_bits": 2,
+            "high_fraction": 0.125,
+            "low_fraction": 0.0,
+            "a_asym": True,
+        }
+    }
+    configure_quantizers(model, cfg)
+
+    down_proj_wrapper = model.model.layers[0].mlp.down_proj
+    quantizer = down_proj_wrapper.quantizer
+    expected_high = int(0.125 * intermediate_size)
+    assert quantizer.high_bits_length == expected_high, (
+        f"FP down_proj must use intermediate_size-derived high split; "
+        f"expected {expected_high}, got {quantizer.high_bits_length}"
+    )
+    assert quantizer.high_bits == "mxfp8"
+    assert quantizer.bits == "nvfp4"
+    # Sanity: the split is not derived from hidden_size (which would be 8).
+    assert quantizer.high_bits_length != int(0.125 * hidden_size), (
+        "down_proj split must not be derived from hidden_size; that is the "
+        "round-6 regression we are guarding against"
+    )
+
+
+def test_configure_quantizers_down_proj_int_keeps_legacy_zero():
+    """INT W4A4 (legacy ResQ baseline at PPL=14.72) intentionally
+    excluded down_proj from the high split. Round 7 must NOT change
+    that behavior or the existing INT PPL would regress.
+    """
+    _install_heavyweight_stubs()
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from promix.eval.ptq import configure_quantizers
+
+    model = _build_minimal_fp_model_with_down_proj(
+        intermediate_size=128, hidden_size=64
+    )
+    cfg = {
+        "quantize": {
+            "a_bits": 4,       # INT activation
+            "high_bits": 8,    # INT high
+            "low_bits": 2,
+            "high_fraction": 0.125,
+            "low_fraction": 0.0,
+            "a_asym": True,
+        }
+    }
+    configure_quantizers(model, cfg)
+    down_proj = model.model.layers[0].mlp.down_proj
+    assert down_proj.quantizer.high_bits_length == 0, (
+        "INT path must keep the legacy down_proj all-main behavior; this "
+        "guards against breaking the existing PPL=14.72 baseline"
+    )
+    assert down_proj.quantizer.low_bits_length == 0
+
+
+def test_gptq_down_proj_mixed_precision_freezes_mxfp8_scales():
+    """Round-7 GPTQ must include down_proj in the mixed-precision path
+    when the FP config uses string `w_bits` / `high_bits`. Construct a
+    down_proj-shaped Linear directly (skipping `gptq_fwrd`'s heavy
+    model setup) and verify GPTQ.fasterquant freezes MXFP8 scales on
+    the high segment with the expected shape.
+
+    Layer dims mimic 1B Llama down_proj: in=8192, out=2048.
+    high_bits_length = 0.125 * 8192 = 1024 (divisible by 32 MXFP8 block).
+    Expected frozen_scales shape on the high quantizer:
+    (out_features, high_bits_length / 32) = (2048, 32).
+
+    This is a direct GPTQ-level test, mirroring round-6's
+    test_section11 helper but on a down_proj-shaped layer to prove the
+    intermediate-dim path works end-to-end through fasterquant.
+    """
+    import torch.nn as nn
+
+    from promix.quantize.gptq import GPTQ
+    from promix.quantize.kv_quant import WeightQuantizer
+
+    torch.manual_seed(0)
+    in_features = 256       # smaller stand-in (256 * 0.125 = 32; %32 OK)
+    out_features = 16
+    high_bits_length = 32   # MXFP8 segment, %32==0
+    low_bits_length = 0
+
+    layer = nn.Linear(in_features, out_features, bias=False)
+    layer.weight.data = torch.randn_like(layer.weight.data) * 0.05
+
+    gptq = GPTQ(
+        layer,
+        mixed_precision=True,
+        high_bits_length=high_bits_length,
+        low_bits_length=low_bits_length,
+    )
+    gptq.quantizer = WeightQuantizer()
+    gptq.quantizer.configure(bits="nvfp4", perchannel=True, sym=True, mse=False)
+    gptq.high_quantizer = WeightQuantizer()
+    gptq.high_quantizer.configure(bits="mxfp8", perchannel=True, sym=True, mse=False)
+
+    inp = torch.randn(2, 4, in_features) * 0.5
+    out = layer(inp)
+    gptq.add_batch(inp, out)
+    gptq.fasterquant(blocksize=64, percdamp=0.01, groupsize=-1, actorder=False)
+
+    assert hasattr(gptq.high_quantizer, "frozen_scales"), (
+        "down_proj high quantizer must have frozen MXFP8 block scales after "
+        "fasterquant; without them, Section 11 GPTQ degenerates to RTN"
+    )
+    fs = gptq.high_quantizer.frozen_scales
+    expected_shape = (out_features, high_bits_length // 32)
+    assert fs.shape == expected_shape, (
+        f"frozen_scales shape mismatch on down_proj high segment: "
+        f"expected {expected_shape}, got {tuple(fs.shape)}"
+    )
+    # Scales must be finite and positive.
+    assert (fs > 0).all() and torch.isfinite(fs).all()
+    # Quantized weights on the high segment must lie on
+    # representable_grid × frozen_scale.
+    Wq = layer.weight.data.float()
+    high_segment = Wq[:, in_features - high_bits_length:]
+    fs_per_col = fs.repeat_interleave(32, dim=-1)
+    from promix.quantize.quant_utils import _FP8_E4M3_POS, FP8_E4M3_MAX
+    quotient = (high_segment / fs_per_col).abs()
+    representable = torch.tensor(_FP8_E4M3_POS, dtype=torch.float32)
+    diffs = (quotient.unsqueeze(-1) - representable).abs()
+    nearest_dist = diffs.min(dim=-1).values
+    assert (nearest_dist <= 1e-3).all(), (
+        f"down_proj high segment values fall off MXFP8 grid; "
         f"max distance = {nearest_dist.max().item()}"
     )

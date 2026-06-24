@@ -326,14 +326,30 @@ def gptq_fwrd(model, dataloader, dev, config):
                 if "lm_head" in name:
                     continue
 
+                # Mixed-precision routing for the FP path: every
+                # projection in attention+MLP follows the same MXFP8
+                # high + NVFP4 main split. The split lengths are
+                # derived from the layer's input dim
+                # (`subset[name].weight.shape[1]`), which is
+                # `hidden_size` for q/k/v/o/up/gate and
+                # `intermediate_size` for down_proj — no special
+                # casing needed. INT W4A4 keeps the legacy behavior
+                # of excluding down_proj from mixed-precision (the
+                # ResQ baseline at PPL=14.72).
                 mixed_precision = False
                 high_bits_length = 0
                 low_bits_length = 0
-                if "k_proj" in name or "q_proj" in name or "v_proj" in name \
-                        or "up_proj" in name or "gate_proj" in name or "o_proj" in name:
+                is_fp_w = isinstance(qcfg.get('high_bits'), str) or isinstance(
+                    qcfg.get('w_bits'), str
+                )
+                in_proj = "k_proj" in name or "q_proj" in name or "v_proj" in name \
+                        or "up_proj" in name or "gate_proj" in name or "o_proj" in name
+                in_down_proj_fp = "down_proj" in name and is_fp_w
+                if in_proj or in_down_proj_fp:
                     mixed_precision = True
-                    high_bits_length = int(high_fraction * model_dim)
-                    low_bits_length = int(low_fraction * model_dim)
+                    in_features = subset[name].weight.shape[1]
+                    high_bits_length = int(high_fraction * in_features)
+                    low_bits_length = int(low_fraction * in_features)
 
                 gptq[name] = GPTQ(
                     subset[name],
