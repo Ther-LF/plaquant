@@ -20,55 +20,84 @@ codifies the same audit.
 
 ### Scope
 
-**In scope** (derived docs subject to AC-9 cleanup):
+The audit and the regression test scan the same universe: every
+**tracked** file (per `git ls-files`) whose path ends in one of
+the AC-9-relevant extensions and whose path is not under an
+excluded prefix.
 
-- `docs/` and `docs/specs/` — all `*.md` files except the binary
-  `*.pdf` artifacts.
-- `docs/superpowers/` — historical design specs and plans.
-- `kernels/**/*.md`, `kernels/**/README*` — kernel-side docs.
-- `promix/**/*.py` — docstrings and inline comments.
-- `promix/configs/*.yaml` — config comments.
-- `tests/**/*.py` — test docstrings and inline comments.
-- Root-level `*.md` (`README.md`, `CLAUDE.md`).
+**In scope — extensions** (derived docs + code comments + configs
++ tests + kernel sources):
 
-**Out of scope** (plan source / idea draft, plan-immutability-blocked):
+- `.md`, `.txt` — derived docs, READMEs, design notes
+- `.py` — Python source / docstrings / inline comments
+- `.yaml`, `.yml` — yaml configs
+- `.cu`, `.cuh`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.inl` —
+  CUDA / C++ kernel sources and headers (covers current and
+  future M2 work in `kernels/mixed_gemm_sm100/`)
 
-- `.humanize/plans/plaquant-sm100-fp8-nvfp4.md`
-- `.humanize/ideas/resq-mixed-precis-20260621-154239.md`
-- All other `.humanize/` files.
+**Out of scope — path prefixes**:
 
-**Out of scope** (vendored third-party):
+- `.humanize/` — plan source + idea draft + RLCR loop state
+  (plan-immutability rule; tracked separately as a blocking
+  side issue requiring user-side action).
+- `third_party/` — vendored CUTLASS, DeepGEMM, flashinfer,
+  comet-25, ResComp, mixed_tensor, quack, LLM-Infra-Reference.
+- `project-resq/` — vendored ResQ submodule.
+- `sglang/` — vendored sglang submodule.
 
-- `third_party/`
-- `project-resq/`
-- `sglang/`
-- `.git/`
+**Out of scope — self-references** (excluded because they name
+the audit terms by definition, not as canonical or stale usage):
+
+- `docs/specs/ac9-derived-doc-audit.md` (this doc)
+- `tests/test_fake_quant_mxfp8_nvfp4.py` (the regression test)
+
+Untracked files — `__pycache__`, `build/`, `.venv/`, generated
+caches — are automatically excluded by `git ls-files`.
 
 ### Search Terms
 
-Three audit terms, one per AC-9 clause:
+Three audit terms, one per AC-9 clause. Each command uses
+`git ls-files` so the scan universe matches the regression test
+exactly.
+
+A reusable filter pipeline is defined once:
+
+```bash
+ac9_files() {
+    git ls-files \
+      | grep -E '\.(md|txt|py|yaml|yml|cu|cuh|cpp|cc|cxx|h|hpp|inl)$' \
+      | grep -vE '^(\.humanize|third_party|project-resq|sglang)/' \
+      | grep -vE '^(docs/specs/ac9-derived-doc-audit\.md|tests/test_fake_quant_mxfp8_nvfp4\.py)$'
+}
+```
 
 1. **MXFP8 scale = E4M3** (incorrect; should be E8M0):
    ```
-   grep -rinE 'MXFP[ -]?8.*E4M3|E4M3.*MXFP[ -]?8' \
-        docs/ kernels/ promix/ tests/ README.md CLAUDE.md
+   ac9_files | xargs grep -inE 'MXFP[ -]?8.*E4M3|E4M3.*MXFP[ -]?8'
    ```
 
 2. **Atom name `SM100_MMA_F8F6F4_*` without MX prefix**
    (incorrect in PRIMARY context; PRIMARY uses microscaled
    `SM100_MMA_MXF8F6F4_*`):
    ```
-   grep -rnE 'SM100_MMA_F8F6F4|\bF8F6F4_S?S?\b' \
-        docs/ kernels/ promix/ tests/ README.md CLAUDE.md \
-     | grep -v MXF8F6F4
+   ac9_files | xargs grep -nE 'SM100_MMA_F8F6F4|\bF8F6F4_S?S?\b'
    ```
+
+   Note: this command does **not** include a `grep -v MXF8F6F4`
+   filter. The corrective citation at
+   `docs/specs/cutlass-sm100-atom-references.md:105` legitimately
+   contains both `SM100_MMA_F8F6F4_*` and `SM100_MMA_MXF8F6F4_*`
+   on the same line (it explicitly contrasts the dense vs
+   microscaled atom families); filtering it out would suppress
+   the audit's primary corrective evidence. Classification
+   (a/b/c/d) is a separate step from the scan; the raw scan must
+   surface every match so the classifier can see all of them.
 
 3. **β-4 alignment example pair `(K_high=32, K_low=1984)`**
    (incorrect; sums to 2016 not 2048; correct minimum is
    `K_high=64`):
    ```
-   grep -rnE '\(32,\s*1984\)|32\s*\+\s*1984|K_high\s*=\s*32' \
-        docs/ kernels/ promix/ tests/ README.md CLAUDE.md
+   ac9_files | xargs grep -nE '\(32, ?1984\)|32 ?\+ ?1984|K_high ?= ?32\b'
    ```
 
 ### Classification Rules
@@ -129,7 +158,15 @@ Each hit is classified into one of four categories:
 | Atom name `SM100_MMA_MXF8F6F4_*` (not F8F6F4) | **MET** | 0 (c)-class hits; 1 (a)-class corrective citation contrasting the dense F8F6F4 vs the microscaled MXF8F6F4 family |
 | Corrected β-4 alignment example pairs | **MET** | 0 (c)-class hits; one (a)-class corrective citation in `cutlass-sm100-atom-references.md` |
 
-**AC-9 derived-doc clause: fully met.** Audit ran on commit `c8cde4d` and re-verified on the round-17 working tree.
+**AC-9 derived-doc clause: fully met** (zero (c)-class hits across
+the corrected scan universe). Audit method first authored in
+round 17; the documented commands and the regression test were
+unified onto a single tracked-files-only `git ls-files` pipeline
+in round 18 so the documented commands reproduce the documented
+results bit-for-bit (round-17 review found the original Term 2
+command included a `grep -v MXF8F6F4` filter that suppressed the
+corrective citation at line 105 and the audit-doc-vs-test scan
+universes diverged on `__pycache__`).
 
 ## Plan-Source Items (Out-of-Scope, Tracked Separately)
 
@@ -178,6 +215,8 @@ source of truth.
 ## Regression Prevention
 
 `tests/test_fake_quant_mxfp8_nvfp4.py::test_no_stale_ac9_terms_in_derived_docs`
-re-runs the three audit greps over the in-scope files and fails
+uses the same tracked-files-only `git ls-files` pipeline as the
+documented audit commands above (same extension list, same
+excluded path prefixes, same self-exclusion list) and fails
 if any new derived doc reintroduces a (c)-class stale instance.
 This catches regressions in future rounds.

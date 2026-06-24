@@ -2926,46 +2926,72 @@ def test_no_stale_ac9_terms_in_derived_docs():
       2. atom name `SM100_MMA_F8F6F4_*` (without MX prefix)
       3. β-4 alignment example pair `(K_high=32, K_low=1984)`
 
-    Scope: derived docs only — `docs/`, `kernels/`, `promix/`,
-    `tests/`, root-level `*.md`. EXCLUDES the plan source
-    (`.humanize/`) and vendored third-party (`third_party/`,
-    `project-resq/`, `sglang/`).
+    Scope: tracked files (`git ls-files`) only — guarantees the
+    same scan universe as the documented audit commands; ignores
+    untracked artifacts (e.g. `__pycache__`, build outputs, local
+    venvs).
+
+    Extension list (matches the documented commands exactly):
+      `.md`, `.txt`, `.py`, `.yaml`, `.yml`,
+      `.cu`, `.cuh`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.inl`.
+
+    Excluded path prefixes (matches the documented commands):
+      `.humanize/`, `third_party/`, `project-resq/`, `sglang/`.
+
+    The audit doc itself and this test file are also excluded
+    (their content names the audit terms by definition).
 
     Hits classified as (a) corrective citation or (b) correct
     canonical usage are ALLOWED via an explicit allowlist that
-    matches `(file, line)` against the round-17 audit baseline.
-    Any new hit not on the allowlist FAILS the test.
+    matches `(file, line, term_id)`. Any new hit not on the
+    allowlist FAILS the test.
     """
     import os
     import re
+    import subprocess
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # Files to scan (derived docs only).
-    scan_dirs = ["docs", "kernels", "promix", "tests"]
-    scan_root_files = ["README.md", "CLAUDE.md"]
-    skip_dirs = {".humanize", "third_party", "project-resq", "sglang",
-                 ".git", "__pycache__", "build", ".venv"}
+    # Universe = tracked files only (git ls-files), filtered by
+    # extension and excluded path prefixes. The same filter is
+    # documented in `docs/specs/ac9-derived-doc-audit.md` so the
+    # test and the audit commands scan identical sets.
+    scan_extensions = (
+        ".md", ".txt", ".py", ".yaml", ".yml",
+        ".cu", ".cuh", ".cpp", ".cc", ".cxx",
+        ".h", ".hpp", ".inl",
+    )
+    excluded_prefixes = (
+        ".humanize/", "third_party/", "project-resq/", "sglang/",
+    )
+    self_exclude = (
+        "docs/specs/ac9-derived-doc-audit.md",
+        os.path.relpath(os.path.abspath(__file__), repo_root),
+    )
+
+    try:
+        ls_out = subprocess.check_output(
+            ["git", "ls-files"], cwd=repo_root, text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        raise RuntimeError(
+            "AC-9 regression test requires `git ls-files` to enumerate "
+            "tracked files; the documented audit commands also use "
+            f"`git ls-files`. Underlying error: {exc!r}"
+        )
 
     file_paths = []
-    for root_file in scan_root_files:
-        p = os.path.join(repo_root, root_file)
-        if os.path.isfile(p):
-            file_paths.append(p)
-    for d in scan_dirs:
-        d_abs = os.path.join(repo_root, d)
-        if not os.path.isdir(d_abs):
+    for rel in ls_out.splitlines():
+        rel = rel.strip()
+        if not rel:
             continue
-        for dirpath, dirnames, filenames in os.walk(d_abs):
-            dirnames[:] = [x for x in dirnames if x not in skip_dirs]
-            for fn in filenames:
-                if fn.endswith((".md", ".py", ".yaml", ".yml", ".txt")):
-                    # Skip this test file itself (it contains the
-                    # search-term strings as test data).
-                    full = os.path.join(dirpath, fn)
-                    if os.path.abspath(full) == os.path.abspath(__file__):
-                        continue
-                    file_paths.append(full)
+        if not rel.endswith(scan_extensions):
+            continue
+        if any(rel.startswith(p) for p in excluded_prefixes):
+            continue
+        if rel in self_exclude:
+            continue
+        file_paths.append(os.path.join(repo_root, rel))
 
     # Audit terms (regex) for each AC-9 clause.
     term_patterns = [
@@ -3005,13 +3031,11 @@ def test_no_stale_ac9_terms_in_derived_docs():
     }
 
     # Scan and collect hits; allowlist-matched hits are pre-classified.
+    # Self-exclusion (audit doc + this test file) is already applied
+    # to file_paths above, so no per-iteration skip is needed.
     unexpected_hits = []
-    audit_doc_rel = "docs/specs/ac9-derived-doc-audit.md"
     for path in file_paths:
         rel = os.path.relpath(path, repo_root)
-        # The audit doc names the audit terms by definition; skip it.
-        if rel == audit_doc_rel:
-            continue
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
