@@ -188,11 +188,27 @@ def init_distributed_for_ptq_main_if_needed():
     must call this helper BEFORE `prepare_ptq_model()` to avoid the
     barrier crashing.
 
+    Works under both `torchrun` (which populates MASTER_ADDR /
+    MASTER_PORT / RANK / WORLD_SIZE) AND plain
+    `python -m promix.eval.cosine_sanity ...` (which does not). For
+    plain-Python single-rank execution the helper supplies safe
+    defaults for the four `env://` rendezvous variables ONLY if they
+    are not already set, so torchrun's injection always wins.
+
     Idempotent: no-op when distributed is already initialized.
     """
-    if not torch.distributed.is_initialized():
-        torch.distributed.init_process_group(
-            backend='nccl', init_method='env://', world_size=1, rank=0)
+    if torch.distributed.is_initialized():
+        return
+    # Populate env-vars torch.distributed.init_process_group(env://)
+    # reads, but never override values supplied by torchrun or by the
+    # caller. Single-rank defaults match the previous explicit
+    # `world_size=1, rank=0` arguments.
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    torch.distributed.init_process_group(
+        backend='nccl', init_method='env://')
 
 
 def prepare_ptq_model(config, dev, *, run_gptq=True):

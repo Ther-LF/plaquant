@@ -2257,3 +2257,134 @@ def test_evaluate_against_threshold_raises_on_empty():
     # Sanity: non-empty input still works.
     assert _evaluate_against_threshold({0: 0.99, 1: 0.995}, 0.99) is True
     assert _evaluate_against_threshold({0: 0.99, 1: 0.98}, 0.99) is False
+
+
+# ---------------------------------------------------------------------------
+# Round-13 init_distributed helper tests. Codex round-12 review found
+# the round-12 helper used `init_method='env://'` without ensuring the
+# four `env://` rendezvous vars existed; plain `python -m ...` does not
+# set them. Round 13 populates safe defaults only when the vars are
+# absent, preserving torchrun compatibility.
+# ---------------------------------------------------------------------------
+
+
+def test_init_distributed_helper_works_for_plain_python_command(monkeypatch):
+    """Plain `python -m promix.eval.cosine_sanity ...` does NOT set
+    MASTER_ADDR / MASTER_PORT / RANK / WORLD_SIZE. The helper must
+    populate them with safe single-rank defaults BEFORE calling
+    init_process_group(env://) so the env-rendezvous succeeds.
+
+    Round-12's helper crashed in this case (init_process_group asked
+    for the env vars; got KeyError on MASTER_ADDR).
+    """
+    import os
+
+    from promix.eval.ptq import init_distributed_for_ptq_main_if_needed
+
+    # Clear the four env vars so the helper has to populate them.
+    for var in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE"):
+        monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
+
+    captured = {"called": False, "kwargs": None, "env_at_call": None}
+
+    def fake_init(*args, **kwargs):
+        captured["called"] = True
+        captured["kwargs"] = kwargs
+        captured["env_at_call"] = {
+            v: os.environ.get(v)
+            for v in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE")
+        }
+
+    monkeypatch.setattr(torch.distributed, "init_process_group", fake_init)
+
+    init_distributed_for_ptq_main_if_needed()
+
+    assert captured["called"], (
+        "init_process_group must be called when distributed is not "
+        "yet initialized"
+    )
+    # The helper must use init_method='env://' (consistent with the
+    # round-0 ptq.py path) so torchrun-injected env vars continue to
+    # control the rendezvous.
+    assert captured["kwargs"].get("init_method") == "env://", (
+        f"init_method must remain 'env://'; got {captured['kwargs']}"
+    )
+    # All four env vars must be set BEFORE init_process_group is
+    # called, so the env:// rendezvous resolves under plain Python.
+    env = captured["env_at_call"]
+    assert env["MASTER_ADDR"] is not None, (
+        "MASTER_ADDR must be populated before init_process_group; "
+        "without it, env:// rendezvous fails on plain python -m"
+    )
+    assert env["MASTER_PORT"] is not None
+    assert env["RANK"] == "0", f"single-rank default RANK=0; got {env['RANK']!r}"
+    assert env["WORLD_SIZE"] == "1", (
+        f"single-rank default WORLD_SIZE=1; got {env['WORLD_SIZE']!r}"
+    )
+
+
+def test_init_distributed_helper_respects_existing_env(monkeypatch):
+    """When `torchrun` (or the user) has already set the rendezvous
+    env vars, the helper must NOT override them. Pre-set values must
+    survive the helper's call so multi-rank launches work correctly.
+    """
+    import os
+
+    from promix.eval.ptq import init_distributed_for_ptq_main_if_needed
+
+    monkeypatch.setenv("MASTER_ADDR", "test-host")
+    monkeypatch.setenv("MASTER_PORT", "12345")
+    monkeypatch.setenv("RANK", "3")
+    monkeypatch.setenv("WORLD_SIZE", "4")
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
+    monkeypatch.setattr(torch.distributed, "init_process_group",
+                        lambda *a, **kw: None)
+
+    init_distributed_for_ptq_main_if_needed()
+
+    # Pre-set env vars must be preserved exactly (torchrun-style
+    # injection wins; the helper only fills gaps).
+    assert os.environ.get("MASTER_ADDR") == "test-host"
+    assert os.environ.get("MASTER_PORT") == "12345"
+    assert os.environ.get("RANK") == "3"
+    assert os.environ.get("WORLD_SIZE") == "4"
+
+
+def test_init_distributed_helper_noop_when_initialized(monkeypatch):
+    """When `torch.distributed.is_initialized()` returns True (the
+    process group already exists, e.g. inside a torchrun launch that
+    initialized earlier), the helper must be a complete no-op:
+    `init_process_group` is NOT called, env vars are NOT modified.
+    """
+    import os
+
+    from promix.eval.ptq import init_distributed_for_ptq_main_if_needed
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    called = {"flag": False}
+
+    def fake_init(*_a, **_kw):
+        called["flag"] = True
+
+    monkeypatch.setattr(torch.distributed, "init_process_group", fake_init)
+
+    # Pre-clear so we can detect any setdefault side effect.
+    for var in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE"):
+        monkeypatch.delenv(var, raising=False)
+
+    init_distributed_for_ptq_main_if_needed()
+
+    assert called["flag"] is False, (
+        "init_process_group must not be called when distributed is "
+        "already initialized"
+    )
+    # Idempotence: env vars left untouched.
+    for var in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE"):
+        assert os.environ.get(var) is None, (
+            f"already-initialized branch should not modify {var}; "
+            f"got {os.environ.get(var)!r}"
+        )
