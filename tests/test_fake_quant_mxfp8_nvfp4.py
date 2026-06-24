@@ -160,28 +160,58 @@ def test_nvfp4_quantization_error_bounded(small_input_nvfp4):
     )
 
 
-@pytest.mark.skip(
-    reason=(
-        "Heuristic ratio-normalization is brittle: it assumes the smallest "
-        "observed non-zero output magnitude is always 0.5*scale, which only "
-        "holds when at least one element rounds there. With seed 42 the "
-        "smallest observed magnitude maps to a larger E2M1 multiple, the "
-        "ratios shift, and legitimate E2M1 values like 0.75 (ratio 1.5 vs "
-        "the new 'smallest') appear to fail. The test passes for some seeds "
-        "and fails for others; it is not a sound representable-set check. A "
-        "proper rewrite would recompute the same block scale the helper "
-        "uses (round-UP to FP8 E4M3 of block_max / FP4_E2M1_MAX) and verify "
-        "out / chosen_scale ∈ {±FP4_E2M1_POS} element-wise. That requires "
-        "exposing the scale-selection step from fake_quantize_nvfp4 as a "
-        "helper, which is round 6+ work; representable-set membership is "
-        "already covered by the no-clipping-after-block-scale invariant "
-        "test (fake_quantize_nvfp4 saturating + element rounding) and the "
-        "RNE midpoint tests."
-    )
-)
 def test_nvfp4_representable_set_membership():
-    """SKIP — see reason above."""
-    raise RuntimeError("skipped at decorator")
+    """Every NVFP4 output element must equal `representable × scale`
+    where `representable ∈ ±FP4_E2M1_POS` and `scale` is the block
+    scale `fake_quantize_nvfp4` actually picked.
+
+    Round 5 quarantined a brittle ratio-normalized version of this
+    test. Round 6 exposed `select_block_scales_nvfp4()` (the scale-
+    selection step extracted from `fake_quantize_nvfp4`); round 10
+    rewrites the test to use that helper directly: compute the same
+    block scale the fake quantizer used, divide each output element
+    by it, snap to the nearest E2M1 representable, and assert the
+    snap is exact (within fp tolerance).
+    """
+    from promix.quantize.quant_utils import (
+        select_block_scales_nvfp4,
+        _round_to_nearest_value,
+    )
+
+    torch.manual_seed(42)
+    block = torch.randn(1, 16, dtype=torch.float32) * 2.0
+    out = fake_quantize_nvfp4(block)
+
+    # Recompute the SAME scale the helper used (block_size=16; one block).
+    scale = select_block_scales_nvfp4(block, block_size=16).flatten()
+    assert scale.numel() == 1, "single block expected for this test"
+    s = scale.item()
+    assert s > 0, f"scale must be positive; got {s}"
+
+    representable = torch.tensor(
+        sorted({float(v) for v in FP4_E2M1_POS}
+               | {-float(v) for v in FP4_E2M1_POS}),
+        dtype=torch.float32,
+    )
+    quotient = (out.flatten().to(torch.float32) / s)
+    snapped = _round_to_nearest_value(
+        quotient,
+        torch.tensor(FP4_E2M1_POS, dtype=torch.float32),
+    )
+    assert torch.allclose(quotient, snapped, atol=1e-3, rtol=1e-3), (
+        f"NVFP4 output / chosen_scale ({s}) must lie on E2M1 grid; "
+        f"observed quotient={quotient.tolist()}, "
+        f"snapped={snapped.tolist()}"
+    )
+
+    # Reconstructing should round-trip back to `out` (modulo fp).
+    reconstructed = snapped * s
+    assert torch.allclose(
+        out.flatten().to(torch.float32), reconstructed, atol=1e-5
+    ), (
+        f"out != snapped × scale; this should hold by construction. "
+        f"out={out.flatten().tolist()}, reconstructed={reconstructed.tolist()}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1658,3 +1688,96 @@ def test_fp_config_matrix_is_complete_and_schema_valid():
         f"expected at least 3 distinct basis paths (one per model); got "
         f"{len(seen_basis_paths)}: {seen_basis_paths}"
     )
+
+
+# ---------------------------------------------------------------------------
+# o_proj cosine sanity harness unit test (round-10 / AC-2.4 code half).
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_sanity_per_layer_returns_dict():
+    """`compute_oproj_cosine_per_layer` must return a dict keyed by
+    layer index with cosine values in [-1, 1]. With identical model
+    and reference_model the cosines are 1.0 (degenerate identity).
+
+    Uses a tiny synthetic model whose `model.model.layers[i].self_attn`
+    each have an `o_proj` Linear; runs forward on a couple of batches;
+    asserts shape and value invariants.
+    """
+    import torch.nn as nn
+
+    from promix.eval.cosine_sanity import compute_oproj_cosine_per_layer
+
+    class _Attn(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.o_proj = nn.Linear(dim, dim, bias=False)
+
+        def forward(self, x):
+            # Synthetic: just call o_proj on the input directly. The
+            # harness only cares about hooking o_proj's output.
+            return self.o_proj(x)
+
+    class _Block(nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.self_attn = _Attn(dim)
+
+        def forward(self, x):
+            return self.self_attn(x)
+
+    class _Inner(nn.Module):
+        def __init__(self, dim, n_layers):
+            super().__init__()
+            self.layers = nn.ModuleList([_Block(dim) for _ in range(n_layers)])
+
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    class _Model(nn.Module):
+        def __init__(self, dim=8, n_layers=2):
+            super().__init__()
+            self.model = _Inner(dim, n_layers)
+
+        def forward(self, x):
+            return self.model(x)
+
+    torch.manual_seed(0)
+    n_layers = 2
+    dim = 8
+    model = _Model(dim=dim, n_layers=n_layers)
+
+    # Simulate a dataloader yielding (input_ids, _) tuples; for this
+    # synthetic test, input_ids is just a float tensor of shape (bsz, seq, dim).
+    inputs = [(torch.randn(1, 4, dim).float(), None) for _ in range(3)]
+
+    # No reference_model → degenerate self-similarity.
+    cosines = compute_oproj_cosine_per_layer(
+        model, inputs, max_batches=3, device=torch.device("cpu")
+    )
+    assert isinstance(cosines, dict)
+    assert sorted(cosines.keys()) == list(range(n_layers))
+    for idx, c in cosines.items():
+        assert isinstance(c, float)
+        assert -1.0 <= c <= 1.0
+        # Self-similarity is 1.0 (or extremely close due to fp).
+        assert c > 0.999, (
+            f"layer {idx}: degenerate self-similarity should be ~1.0; got {c}"
+        )
+
+    # With identical models as primary and reference, cosines should
+    # also be ~1.0 — the harness records both side's outputs from the
+    # SAME forward pass equivalently.
+    import copy
+    ref = copy.deepcopy(model)
+    cosines_ref = compute_oproj_cosine_per_layer(
+        model, inputs, reference_model=ref,
+        max_batches=3, device=torch.device("cpu"),
+    )
+    assert sorted(cosines_ref.keys()) == list(range(n_layers))
+    for idx, c in cosines_ref.items():
+        assert c > 0.999, (
+            f"layer {idx}: identical-model cosine should be ~1.0; got {c}"
+        )
