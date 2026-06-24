@@ -2914,3 +2914,123 @@ def test_pack_model_weights_skips_string_bits_layer():
         "FP-string layer must NOT have s_w_main; the INT packer "
         "skipped it before quantize_weight_per_channel_symmetric ran"
     )
+
+
+def test_no_stale_ac9_terms_in_derived_docs():
+    """AC-9 regression test: derived docs must not (re)introduce
+    stale instances of the three audit terms documented in
+    `docs/specs/ac9-derived-doc-audit.md`.
+
+    Search terms:
+      1. MXFP8 scale = E4M3 (incorrect; should be E8M0)
+      2. atom name `SM100_MMA_F8F6F4_*` (without MX prefix)
+      3. β-4 alignment example pair `(K_high=32, K_low=1984)`
+
+    Scope: derived docs only — `docs/`, `kernels/`, `promix/`,
+    `tests/`, root-level `*.md`. EXCLUDES the plan source
+    (`.humanize/`) and vendored third-party (`third_party/`,
+    `project-resq/`, `sglang/`).
+
+    Hits classified as (a) corrective citation or (b) correct
+    canonical usage are ALLOWED via an explicit allowlist that
+    matches `(file, line)` against the round-17 audit baseline.
+    Any new hit not on the allowlist FAILS the test.
+    """
+    import os
+    import re
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Files to scan (derived docs only).
+    scan_dirs = ["docs", "kernels", "promix", "tests"]
+    scan_root_files = ["README.md", "CLAUDE.md"]
+    skip_dirs = {".humanize", "third_party", "project-resq", "sglang",
+                 ".git", "__pycache__", "build", ".venv"}
+
+    file_paths = []
+    for root_file in scan_root_files:
+        p = os.path.join(repo_root, root_file)
+        if os.path.isfile(p):
+            file_paths.append(p)
+    for d in scan_dirs:
+        d_abs = os.path.join(repo_root, d)
+        if not os.path.isdir(d_abs):
+            continue
+        for dirpath, dirnames, filenames in os.walk(d_abs):
+            dirnames[:] = [x for x in dirnames if x not in skip_dirs]
+            for fn in filenames:
+                if fn.endswith((".md", ".py", ".yaml", ".yml", ".txt")):
+                    # Skip this test file itself (it contains the
+                    # search-term strings as test data).
+                    full = os.path.join(dirpath, fn)
+                    if os.path.abspath(full) == os.path.abspath(__file__):
+                        continue
+                    file_paths.append(full)
+
+    # Audit terms (regex) for each AC-9 clause.
+    term_patterns = [
+        ("mxfp8_scale_e4m3",
+         re.compile(r"MXFP[ -]?8.*E4M3|E4M3.*MXFP[ -]?8", re.IGNORECASE)),
+        ("atom_f8f6f4_no_mx",
+         re.compile(r"SM100_MMA_F8F6F4|\bF8F6F4_S?S?\b")),
+        ("beta4_alignment_pair",
+         re.compile(r"\(\s*32\s*,\s*1984\s*\)|32\s*\+\s*1984|K_high\s*=\s*32\b")),
+    ]
+
+    # Allowlist: (relpath, line_number, term_id) entries that are
+    # accepted (a)/(b)-class hits per round-17 audit. Any hit
+    # outside this set fails the test.
+    #
+    # The line numbers are stable for the round-17 commit. If the
+    # text moves, the test will fail and the allowlist must be
+    # updated together with a re-run of the audit.
+    allowlist = {
+        # docs/specs/cutlass-sm100-atom-references.md
+        ("docs/specs/cutlass-sm100-atom-references.md", 103, "mxfp8_scale_e4m3"),    # (a)
+        ("docs/specs/cutlass-sm100-atom-references.md", 105, "atom_f8f6f4_no_mx"),   # (a) corrective citation contrasting F8F6F4 vs MXF8F6F4 atoms
+        ("docs/specs/cutlass-sm100-atom-references.md", 107, "beta4_alignment_pair"),# (a)
+        # docs/specs/spec-mxfp8-nvfp4.md
+        ("docs/specs/spec-mxfp8-nvfp4.md", 50, "mxfp8_scale_e4m3"),   # (a)
+        ("docs/specs/spec-mxfp8-nvfp4.md", 103, "mxfp8_scale_e4m3"),  # (b)
+        ("docs/specs/spec-mxfp8-nvfp4.md", 120, "mxfp8_scale_e4m3"),  # (b)
+        ("docs/specs/spec-mxfp8-nvfp4.md", 136, "mxfp8_scale_e4m3"),  # (b)
+        ("docs/specs/spec-mxfp8-nvfp4.md", 143, "mxfp8_scale_e4m3"),  # (b)
+        ("docs/specs/spec-mxfp8-nvfp4.md", 215, "mxfp8_scale_e4m3"),  # (b)
+        # promix/quantize/quant_utils.py
+        ("promix/quantize/quant_utils.py", 635, "mxfp8_scale_e4m3"),  # (b)
+        ("promix/quantize/quant_utils.py", 665, "mxfp8_scale_e4m3"),  # (b)
+        ("promix/quantize/quant_utils.py", 684, "mxfp8_scale_e4m3"),  # (b)
+        # docs/specs/ac9-derived-doc-audit.md (the audit doc cites
+        # the audit terms by definition; excluded from scan above)
+    }
+
+    # Scan and collect hits; allowlist-matched hits are pre-classified.
+    unexpected_hits = []
+    audit_doc_rel = "docs/specs/ac9-derived-doc-audit.md"
+    for path in file_paths:
+        rel = os.path.relpath(path, repo_root)
+        # The audit doc names the audit terms by definition; skip it.
+        if rel == audit_doc_rel:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, start=1):
+            for term_id, pat in term_patterns:
+                if pat.search(line):
+                    key = (rel, lineno, term_id)
+                    if key not in allowlist:
+                        unexpected_hits.append((rel, lineno, term_id, line.rstrip()))
+
+    assert not unexpected_hits, (
+        "AC-9 regression: derived doc contains a stale instance of an audit term. "
+        "Either the line moved (update the allowlist in this test) or a new "
+        "(c)-class hit was introduced (fix it and re-run the audit at "
+        "docs/specs/ac9-derived-doc-audit.md). "
+        "Unexpected hits:\n" + "\n".join(
+            f"  {p}:{ln} [{tid}] {excerpt[:120]}"
+            for p, ln, tid, excerpt in unexpected_hits
+        )
+    )
