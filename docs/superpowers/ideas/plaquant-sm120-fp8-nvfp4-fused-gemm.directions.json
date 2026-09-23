@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "title": "In-Register Fused FP8 NVFP4 GEMM For SM120 Blackwell",
+  "original_idea": "Port PLAQuant single-kernel mixed-precision fused GEMM from SM80 (INT4+INT8) to SM120 (RTX Pro 6000 Blackwell). SM120 uses mma.sync.aligned (not tcgen05/TMEM) but natively supports MXFP8 block-scaled (m16n8k32, E4M3, UE8M0 scale per 32 K) and NVFP4 block-scaled (m16n8k64, E2M1, UE4M3 scale per 16 K). Both atoms share identical FP32[4] accumulator registers with SM80_16x8_Row CLayout — enabling direct in-register accumulation across phases (same pattern as existing SM80 fused kernel). Key differences from the original SM100 plan: no TMEM, no WGMMA, 99KB SMEM (not 228KB), no cluster multicast, GDDR7 1.8TB/s (not HBM3e 8TB/s). The algorithmic layer (ResQ PCA + variance split + Stiefel rotation) is unchanged. CUTLASS already provides SM120 CollectiveBuilder support (examples 79/87). Hardware: 8x RTX Pro 6000 Blackwell Server Edition (SM120, 96GB GDDR7 each, CUDA 13.0). Target: single-kernel FP8+FP4 fused GEMM beating both FP16 cuBLAS and 2-launch FP baseline on LLM shapes (Llama 1B/3B/8B).",
+  "synthesis_notes": "The primary direction (direct SM80→SM120 port) is the critical path, but the alternatives form a natural pipeline: once the kernel works, Alt-3 (algorithm co-design) provides the FP-aware quantization to feed it optimal data, Alt-1 (tile tuning) optimizes the kernel for GDDR7 bandwidth characteristics, and Alt-4 (end-to-end integration) wires everything into a real inference path. Alt-2 (CuTe DSL) could accelerate tile exploration if the Python DSL toolchain is confirmed available. The strongest synthesis is: port the kernel first (primary), immediately validate with the existing format spec and fake quantizers from Alt-3, tune tiles per Alt-1's bandwidth analysis, then integrate end-to-end per Alt-4. All alternatives contribute to the final deliverable rather than being mutually exclusive.",
+  "metadata": {
+    "n_requested": 6,
+    "n_returned": 5,
+    "timestamp": "20260628-150800",
+    "draft_path": "docs/superpowers/ideas/plaquant-sm120-fp8-nvfp4-fused-gemm.md"
+  },
+  "directions": [
+    {
+      "direction_id": "dir-00-direct-sm80-sm120-kernel-port",
+      "dir_slug": "direct-sm80-sm120-kernel-port",
+      "source_index": 0,
+      "display_order": 0,
+      "is_primary": true,
+      "name": "Direct SM80→SM120 Kernel Port",
+      "rationale": "The most natural path: mechanically translate the existing mixed_gemm_l20.cu dual-phase shared-accumulator architecture from INT MMA to FP block-scaled MMA, reusing the SMEM-union and two-phase loop pattern.",
+      "raw_phase3_response": "## APPROACH_SUMMARY\n\nPort the existing SM80 INT4+INT8 dual-phase fused GEMM kernel (`kernels/mixed_gemm_l20/mixed_gemm_l20.cu`) to SM120 by replacing:\n- **INT4 mma.sync.aligned.m16n8k64 → MXFP4 (NVFP4) mma.sync.aligned.m16n8k64** (E2M1 element, E4M3 block scale per 16 K)\n- **INT8 mma.sync.aligned.m16n8k32 → MXFP8 mma.sync.aligned.m16n8k32** (E4M3 element, E8M0 block scale per 32 K)\n- Keep the SM80-style architecture: SMEM union (not TMEM), two-phase sequential loop (low→high), shared FP32[4] accumulator registers, single epilogue\n\nCore mechanism: SM120 mma.sync atoms share identical CLayout (FP32[4] Row accumulator) with SM80_16x8_Row — enabling the exact same dual-phase in-register accumulation pattern.",
+      "approach_summary": "Port the existing SM80 INT4+INT8 dual-phase fused GEMM kernel to SM120 by replacing INT4 mma.sync.aligned.m16n8k64 with NVFP4 mma.sync.aligned.kind::mxf4nvf4.block_scale.m16n8k64 (E2M1 element, E4M3 block scale per 16 K) and INT8 mma.sync.aligned.m16n8k32 with MXFP8 mma.sync.aligned.kind::mxf8f6f4.block_scale.m16n8k32 (E4M3 element, E8M0 block scale per 32 K). Keep the SM80-style architecture: SMEM union, two-phase sequential loop, shared FP32[4] accumulator registers, single epilogue.",
+      "objective_evidence": [
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:177-181 — SMEM union pattern for dual-phase SMEM reuse",
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:204-230 — Phase 1 (low precision INT4) accumulates into shared accumulators fragment",
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:234-252 — Phase 2 (high precision INT8) accumulates into SAME accumulators fragment",
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:47-50 — INT8 InstructionShape<16,8,32> matches SM120 MXFP8 m16n8k32",
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:69-72 — INT4 InstructionShape<16,8,64> matches SM120 NVFP4 m16n8k64",
+        "kernels/mixed_gemm_l20/benchmark.py:66-70 — Cosine similarity correctness target",
+        "kernels/mixed_gemm_l20/benchmark.py:102-103 — Speedup vs baseline (SM80: 1.12-1.19x)",
+        "docs/specs/spec-mxfp8-nvfp4.md — Complete MXFP8/NVFP4 numerical specification",
+        "docs/specs/cutlass-sm100-atom-references.md — SM100/SM120 block-scaled MMA atom documentation"
+      ],
+      "known_risks": [
+        "CUTLASS SM120 CollectiveBuilder API surface not yet used in repo — may need manual MMA descriptor construction",
+        "Block scale epilogue fusion: SM80 INT path has no block scales; MXFP8/NVFP4 requires EVT with per-token/per-channel scale broadcasts",
+        "Register pressure with FP scales may push over SM120 register file limit",
+        "K alignment constraints: MXFP8 K_high%32=0, NVFP4 K_low%64=0",
+        "FP quantization NOT bit-exact vs INT — correctness target is cosine≥0.9999 vs FP32 reference"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "direction_id": "dir-02-bandwidth-optimized-tile-strategy",
+      "dir_slug": "bandwidth-optimized-tile-strategy",
+      "source_index": 2,
+      "display_order": 1,
+      "is_primary": false,
+      "name": "Bandwidth-Optimized Tile Strategy",
+      "rationale": "Focus on the GDDR7 1.8TB/s constraint (vs 8TB/s HBM3e); design tile shapes, software-pipelining depth, and SMEM staging specifically to maximize bandwidth utilization within the 99KB SMEM budget.",
+      "raw_phase3_response": "## APPROACH_SUMMARY\n\nTile FP8+FP4 dual-phase fused GEMM for SM120 Blackwell with 99KB SMEM budget. Core mechanism: union SharedStorage reuse like SM80 kernel, but tune tile/stages specifically for GDDR7 1.8TB/s bandwidth. Key findings: (1) Small M (≤128) is compute-bound on SM120, shallow pipeline sufficient; (2) Large M (≥512) becomes bandwidth-bound; (3) 128×128 tile + 5 stages = 48KB SMEM (48% utilization), leaves headroom for cross-phase prefetch.",
+      "approach_summary": "Tile FP8+FP4 dual-phase fused GEMM for SM120 Blackwell with 99KB SMEM budget. Tune tile/stages specifically for GDDR7 1.8TB/s bandwidth. 128×128 tile + 5 stages main/4 stages high = 48KB SMEM (48% utilization), leaves headroom for larger K tiles or cross-phase prefetch optimization.",
+      "objective_evidence": [
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:177-181 — union SharedStorage pattern (48KB total with epilogue)",
+        "kernels/mixed_gemm_l20/mixed_gemm_l20.cu:47-50, 70-73 — SM80 tile configs: 64×64, stages 4/5",
+        "docs/mixed-gemm-optimization-ideas.md:56-86 — Cross-phase prefetch analysis (8-13% gain, 60-80KB SMEM)",
+        "kernels/mixed_gemm_l20/benchmark.py:44-104 — M sweep 1→4096 benchmark harness"
+      ],
+      "known_risks": [
+        "No CUTLASS SM120 CollectiveBuilder example in repo",
+        "GDDR7 1.8TB/s = 4.4× slower than HBM3e; small-M regime is compute-bound so pipeline gains limited",
+        "Block-scaled MXFP8/NVFP4 require per-32K/per-16K scale tensors — unclear CUTLASS EVT support",
+        "99KB SMEM limit may forbid cross-phase prefetch without sacrificing tile size",
+        "SM120 mma.sync.aligned instruction availability unconfirmed in local toolchain"
+      ],
+      "confidence": "low"
+    },
+    {
+      "direction_id": "dir-03-cute-dsl-python-kernel",
+      "dir_slug": "cute-dsl-python-kernel",
+      "source_index": 3,
+      "display_order": 2,
+      "is_primary": false,
+      "name": "CuTe DSL Python Kernel",
+      "rationale": "CUTLASS provides a Python CuTe DSL path for SM120 block-scaled GEMM; use it for rapid prototyping and iteration before converting to C++.",
+      "raw_phase3_response": "## APPROACH_SUMMARY\n\nPort the SM80 fused mixed-precision GEMM to SM120 using CUTLASS Python CuTe DSL for rapid prototyping. Replace INT4/INT8 types with MXFP8+NVFP4, maintain dual-phase accumulator topology, use Python DSL for tile-shape experimentation.\n\n## OBJECTIVE_EVIDENCE\n\nexploratory, no concrete precedent\n\n## KNOWN_RISKS\n\n- Toolchain uncertainty: CUTLASS 4.5 may not include Python CuTe DSL\n- Zero Python kernel development experience in team\n- Conversion cost doubles implementation work\n- Hardware gap: no SM120 hardware documented\n- PTX instruction support needs CUDA 13.0+ verification\n\n## CONFIDENCE\n\nlow",
+      "approach_summary": "Port the SM80 fused mixed-precision GEMM to SM120 using CUTLASS Python CuTe DSL for rapid prototyping. Replace INT4/INT8 types with MXFP8+NVFP4, maintain dual-phase accumulator topology, use Python DSL for tile-shape experimentation.",
+      "objective_evidence": [
+        "exploratory, no concrete precedent"
+      ],
+      "known_risks": [
+        "Toolchain uncertainty: CUTLASS 4.5 may not include Python CuTe DSL path",
+        "Zero Python kernel development experience in team",
+        "Conversion cost to C++ doubles implementation work",
+        "PTX instruction support needs CUDA 13.0+ verification"
+      ],
+      "confidence": "low"
+    },
+    {
+      "direction_id": "dir-04-algorithm-kernel-co-design",
+      "dir_slug": "algorithm-kernel-co-design",
+      "source_index": 4,
+      "display_order": 3,
+      "is_primary": false,
+      "name": "Algorithm-Kernel Co-Design",
+      "rationale": "Exploit the FP format change to co-optimize the ResQ quantization pipeline: adjust high_fraction, block size alignment, and rotation training specifically for FP8/FP4 noise characteristics and SM120's per-block-scale granularity.",
+      "raw_phase3_response": "## APPROACH_SUMMARY\n\nExtend promix/quantize/basis.py to compute MXFP8/NVFP4 quantization noise metrics per variance segment during eigendecomposition; use these to guide adaptive high_fraction selection; tune optimize_rotation.py training to incorporate FP quantization noise (replace INT quantizers with MXFP8/NVFP4 variants in ActQuantWrapper during SGDG training).\n\n## OBJECTIVE_EVIDENCE\n\n- promix/quantize/quant_utils.py:29-90 — FP format infrastructure with stubs\n- promix/quantize/optimize_rotation.py:233-254 — Rotation training hook for FP quantizers\n- promix/quantize/basis.py:94-503 — Eigenvalue file for variance profile\n- docs/specs/spec-mxfp8-nvfp4.md — Block-scale alignment constraints\n- promix/configs/llama-3.2-1b-resq.yaml:11 — high_fraction global knob\n\n## KNOWN_RISKS\n\n- FP fake quantizer stubs not implemented\n- Block-size alignment constraints need validation\n- Rotation training cost amplification\n- No SM120 hardware for kernel validation\n- FP vs INT noise mismatch may not generalize\n\n## CONFIDENCE\n\nmedium",
+      "approach_summary": "Extend promix/quantize/basis.py to compute MXFP8/NVFP4 quantization noise metrics per variance segment during eigendecomposition; use these to guide adaptive high_fraction selection; tune optimize_rotation.py training to incorporate FP quantization noise (replace INT quantizers with MXFP8/NVFP4 variants in ActQuantWrapper during SGDG training).",
+      "objective_evidence": [
+        "promix/quantize/quant_utils.py:29-90 — FP format infrastructure: SUPPORTED_FP_FORMATS, stub functions declared",
+        "promix/quantize/optimize_rotation.py:233-254 — Rotation training hook for FP quantizers",
+        "promix/quantize/basis.py:94-503 — Eigenvalue file (variance profile) for FP-aware high_fraction tuning",
+        "docs/specs/spec-mxfp8-nvfp4.md — Block-scale alignment constraints documented",
+        "promix/configs/llama-3.2-1b-resq.yaml:11 — high_fraction: 0.125 global knob"
+      ],
+      "known_risks": [
+        "FP fake quantizer stubs (fake_quantize_mxfp8/nvfp4) not yet implemented",
+        "Block-size alignment constraints (K_high%32, K_low%64) need per-model validation",
+        "Rotation training cost amplification (~34 min per run, multiple runs needed for tuning)",
+        "FP vs INT quantization noise mismatch may not generalize across formats"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "direction_id": "dir-05-end-to-end-inference-integration",
+      "dir_slug": "end-to-end-inference-integration",
+      "source_index": 5,
+      "display_order": 4,
+      "is_primary": false,
+      "name": "End-to-End Inference Integration",
+      "rationale": "Focus on the full inference pipeline: weight packing, online activation quantization, kernel invocation, and epilogue dequant — building on the existing promix/inference/ infrastructure to deliver end-to-end speedup, not just kernel-level.",
+      "raw_phase3_response": "## APPROACH_SUMMARY\n\nBuild end-to-end inference pipeline on existing promix/inference/ infrastructure (~536 LOC). Implement SM120 kernel with PyBind11 interfaces, extend real_forward.py for FP8/FP4 dispatch, add MXFP8/NVFP4 block-scale computation to quant_ops.py, extend benchmark.py for latency measurement.\n\n## OBJECTIVE_EVIDENCE\n\n- promix/inference/weight_packer.py (77 LOC) — splits W main/high, quantizes, packs\n- promix/inference/real_forward.py (164 LOC) — activation quantize → split → pack → kernel call → epilogue dequant\n- promix/inference/quant_ops.py (94 LOC) — per-token/per-channel quantization ops\n- promix/inference/benchmark.py (200 LOC) — full latency harness\n- docs/specs/spec-mxfp8-nvfp4.md — scale composition formula\n- promix/eval/ptq.py — FP format detection branch exists\n\n## KNOWN_RISKS\n\n- CUTLASS SM120 support uncertain in third_party/cutlass/\n- MXFP8/NVFP4 numeric types not confirmed in CUTLASS headers\n- Block scale tensor management (2D arrays) has no precedent in SM80 codebase\n- Epilogue scale composition complexity\n- 99KB SMEM constraint\n\n## CONFIDENCE\n\nmedium",
+      "approach_summary": "Build end-to-end inference pipeline on existing promix/inference/ infrastructure (~536 LOC): SM120 CUTLASS kernel with PyBind11 interfaces, extend real_forward.py for FP8/FP4 dispatch, add MXFP8/NVFP4 block-scale computation to quant_ops.py, extend benchmark.py for full latency measurement across batch/seq configs.",
+      "objective_evidence": [
+        "promix/inference/weight_packer.py (77 LOC) — splits W main/high, quantizes, packs",
+        "promix/inference/real_forward.py (164 LOC) — activation quantize → split → pack → kernel call → epilogue dequant",
+        "promix/inference/quant_ops.py (94 LOC) — per-token/per-channel quantization ops",
+        "promix/inference/benchmark.py (200 LOC) — full latency harness (FP16 baseline vs real quant)",
+        "docs/specs/spec-mxfp8-nvfp4.md — scale composition formula (MMA consumes block scales, epilogue applies remaining)",
+        "promix/eval/ptq.py — FP format detection branch already exists"
+      ],
+      "known_risks": [
+        "CUTLASS SM120 support asserted in CLAUDE.md but not found in third_party/cutlass/ grep",
+        "MXFP8/NVFP4 numeric types not confirmed in local CUTLASS headers",
+        "Block scale tensor management (2D scale arrays) has no precedent in SM80 INT4/INT8 codebase",
+        "99KB SMEM constraint vs SM100's 228KB may limit tile designs"
+      ],
+      "confidence": "medium"
+    }
+  ]
+}
