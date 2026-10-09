@@ -7,6 +7,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 
 import torch
 import transformers
@@ -33,6 +34,38 @@ from promix.eval.data import get_wikitext2
 def load_config(config_path):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
+
+
+def layer_index_of(name):
+    """Extract the decoder layer index from a module name, or None.
+
+    E.g. "model.layers.3.self_attn.q_proj.module" -> 3; "lm_head" -> None.
+    """
+    m = re.search(r"\.layers\.(\d+)\.", name)
+    return int(m.group(1)) if m else None
+
+
+def main_path_khigh_map(eval_bundle, tau, n_layers, hidden_dim=2048, align=64):
+    """Per-layer K_high for the main path from the attn_mlp_var curves.
+
+    Reads the `layer.{i}.attn_mlp_var` per-layer variance curves that
+    Task 2 added to the eigenvalue (`E-*.bin`) bundle, and derives a
+    per-layer high-precision cut via `derive_khigh` (Task 1) so each
+    layer's K_high reflects its own variance tail instead of the single
+    global `high_fraction` knob.
+    """
+    from promix.quantize.adaptive import derive_khigh
+    out = {}
+    for i in range(n_layers):
+        key = f"layer.{i}.attn_mlp_var"
+        if key not in eval_bundle:
+            raise KeyError(
+                f"{key} missing from eval bundle; re-run Step 0 (basis.py) "
+                "with the adaptive-variance patch to use adaptive_high_fraction."
+            )
+        out[i] = derive_khigh(eval_bundle[key], tau, align=align,
+                              hidden_dim=hidden_dim)
+    return out
 
 
 def configure_quantizers(model, config):
@@ -84,6 +117,19 @@ def configure_quantizers(model, config):
             "FP mixed-precision config requires model.config.intermediate_size"
             "; got None — cannot derive down_proj high/low split."
         )
+
+    # Adaptive high-fraction (per-layer K_high on the main path, derived
+    # from the attn_mlp_var variance curves instead of a single global
+    # high_fraction). Build the per-layer map ONCE here, not inside the
+    # `for name in qlayers` loop below.
+    adaptive = qcfg.get('adaptive_high_fraction', False)
+    khigh_map = None
+    if adaptive:
+        tau = float(qcfg['energy_threshold'])
+        eval_path = config['paths']['basis'].replace('U-', 'E-')
+        eval_bundle = torch.load(eval_path, weights_only=False)
+        khigh_map = main_path_khigh_map(eval_bundle, tau, len(model.model.layers),
+                                        hidden_dim=model_dim)
 
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     for name in qlayers:
@@ -159,6 +205,21 @@ def configure_quantizers(model, config):
                 # PPL=14.72.
                 layer_high_length = 0
                 layer_low_length = 0
+
+        # Adaptive override: main-path layers (q/k/v/gate/up, excluding
+        # o_proj) get a per-layer K_high derived from this layer's own
+        # variance tail instead of the global high_fraction split. Must
+        # run AFTER all the per-layer defaults above and BEFORE the
+        # `.configure(...)` call below so it wins.
+        is_main = any(p in name for p in
+                      ("q_proj", "k_proj", "v_proj", "gate_proj", "up_proj")) \
+                  and "o_proj" not in name
+        if adaptive and is_main:
+            li = layer_index_of(name)
+            if li is not None and li in khigh_map:
+                layer_high_length = khigh_map[li]
+                layer_low_length = 0
+                layer_groupsize = -1
 
         qlayers[name].quantizer.configure(
             bits=layer_bits,
@@ -278,6 +339,7 @@ def prepare_ptq_model(config, dev, *, run_gptq=True):
         rotation_path=config['paths']['rotation'],
         high_fraction=config['quantize']['high_fraction'],
         low_fraction=config['quantize'].get('low_fraction', 0.0),
+        identity_main_rotation=config['quantize'].get('adaptive_high_fraction', False),
     )
     rearrange_columns(
         model,

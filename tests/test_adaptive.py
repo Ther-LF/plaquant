@@ -4,6 +4,7 @@ from promix.quantize.adaptive import (
     derive_khigh, derive_per_layer_khigh, main_path_avg_bits,
 )
 from promix.quantize.rotation import build_main_transform
+from promix.eval.ptq import layer_index_of
 
 def test_variance_in_basis_identity():
     H = torch.diag(torch.tensor([1., 2., 3., 4.]))
@@ -76,3 +77,8 @@ def test_build_main_transform_applies_R1_when_not_identity():
     T = build_main_transform(U, R_dict=R_dict, identity_main_rotation=False)
     expected = torch.block_diag(torch.eye(2) * 2, torch.eye(2) * 3).double()
     assert torch.allclose(T, expected)
+
+def test_layer_index_of():
+    assert layer_index_of("model.layers.3.self_attn.q_proj.module") == 3
+    assert layer_index_of("model.layers.11.mlp.gate_proj") == 11
+    assert layer_index_of("lm_head") is None
