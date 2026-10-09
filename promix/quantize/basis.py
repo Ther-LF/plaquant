@@ -423,6 +423,19 @@ def compute_basis(
         eval_dict["config"] = "full_shared_rotation"
         eval_dict["attn_mlp"] = eval_attn_mlp.cpu()
 
+        # Per-layer per-channel variance in the SHARED basis, for adaptive
+        # high-fraction (see adaptive.py / the adaptive-high-fraction spec).
+        # H_attn[i], H_mlp[i] are still resident here; no extra forward pass.
+        from promix.quantize.adaptive import per_channel_variance_in_basis
+        U_am = evec_attn_mlp.to(torch.float64).cuda()
+        for i in range(nlayers):
+            Hi = ((H_attn[i] + H_mlp[i]).to(torch.float64).cuda()
+                  / (2 * nbatches * seqlen))
+            var_i = per_channel_variance_in_basis(U_am, Hi)
+            eval_dict[f"layer.{i}.attn_mlp_var"] = var_i.cpu()
+        del U_am
+        torch.cuda.empty_cache()
+
         for i in tqdm(range(nlayers), desc="Computing per-layer basis"):
             eval_down, evec_down = eigen_decompose(
                 H_down_proj[i] / (nbatches * seqlen)

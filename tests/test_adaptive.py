@@ -50,3 +50,14 @@ def test_avg_bits():
     # layer0: (12*4 + 4*8)/16 = (48+32)/16 = 5.0
     # layer1: (8*4  + 8*8)/16 = (32+64)/16 = 6.0 → mean 5.5
     assert abs(main_path_avg_bits([4, 8], hidden_dim=16) - 5.5) < 1e-9
+
+def test_variance_matches_eigvals_when_U_is_eigenbasis():
+    # When U diagonalizes H, diag(U^T H U) == eigenvalues. This is the
+    # property basis.py relies on to store per-layer curves consistently
+    # with the shared eigenvalue ordering.
+    torch.manual_seed(0)
+    A = torch.randn(8, 8, dtype=torch.float64)
+    H = A @ A.T                          # SPD
+    evals, U = torch.linalg.eigh(H)      # ascending
+    v = per_channel_variance_in_basis(U, H)
+    assert torch.allclose(v, evals, atol=1e-8)
