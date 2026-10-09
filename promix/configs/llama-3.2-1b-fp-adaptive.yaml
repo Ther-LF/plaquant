@@ -1,0 +1,56 @@
+# ProMix Stage-3 adaptive: Llama-3.2-1B FP, per-layer main-path K_high from energy_threshold
+#
+# Purpose: FP-format baseline that mirrors Stage 1a (INT W4A4) as closely as
+# possible so PPL is directly comparable. Differences from
+# llama-3.2-1b-mxfp8-nvfp4.yaml:
+#   - o_proj_pca: per_head  (original ResQ path; avoids the unfixed
+#     full_global activation-side online-rotation gap)
+#   - model: -Instruct + nsamples 512  (match Stage 1a exactly)
+
+model:
+  name: "unsloth/Llama-3.2-1B-Instruct"
+  type: "llama"
+
+quantize:
+  w_bits: "nvfp4"        # main weight path = NVFP4 (block-scaled fake quant)
+  a_bits: "nvfp4"        # main activation path = NVFP4 (low/main channels)
+  high_bits: "mxfp8"     # high-variance channel path = MXFP8
+  low_bits: 2            # ignored under FP routing; kept for schema compat
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: 16
+  v_bits: 16
+  k_asym: true
+  v_asym: true
+  k_groupsize: 64
+  v_groupsize: 64
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  o_proj_pca: "per_head"
+  adaptive_high_fraction: true
+  energy_threshold: 0.70
+
+paths:
+  basis: "./rotation/U-wikitext-512-Llama-3.2-1B-Instruct.bin"
+  rotation: "./rotation/R-high-0.125-low-0.0-sparse-0.0-Llama-3.2-1B-Instruct.bin"
+  output_dir: "/tmp/promix_adaptive"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 512
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 16
+  num_fewshot: 0
+  max_length: 2048
