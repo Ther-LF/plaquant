@@ -345,6 +345,10 @@ class ActQuantWrapper(nn.Module):
         self.K = 1
         self.online_full_had = False
         self.fp32_had = False
+        # FP per-head o_proj: apply the column reorder BEFORE quantization so
+        # the quantizer sees the contiguous [low|main|high] layout whose
+        # segment lengths align to the FP block grid (NVFP4 16 / MXFP8 32).
+        self.reorder_before_quant = False
         # Cache which extra kwargs the inner module's forward accepts so we
         # can route training-time R1/R2 args through wrappers around
         # QuantizeLinear without erroring on plain nn.Linear (e.g. lm_head).
@@ -374,12 +378,18 @@ class ActQuantWrapper(nn.Module):
             else:
                 x = matmul_hadU_cuda(x, self.had_K, self.K)
 
+        order = col_order if col_order is not None else getattr(self, '_column_order', None)
+        if order is not None and self.reorder_before_quant:
+            # Reorder first so quantization segments ([low|main|high]) are
+            # contiguous and FP-block-aligned; order is consumed here.
+            x = x[..., order]
+            order = None
+
         if _quant_enabled(self.quantizer.bits):
             self.quantizer.find_params(x)
             x = self.quantizer(x).to(x_dtype)
             self.quantizer.free()
 
-        order = col_order if col_order is not None else getattr(self, '_column_order', None)
         if order is not None:
             x = x[..., order]
 

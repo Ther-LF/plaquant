@@ -114,6 +114,20 @@ def configure_quantizers(model, config):
                 layer_groupsize = -1
                 layer_high_length = high_bits_length
                 layer_low_length = low_bits_length
+            elif is_fp:
+                # FP per-head mode: keep the per-head PCA rotation and the
+                # column reorder, but quantize on the reordered contiguous
+                # [low | main | high] layout using the hardware block grid
+                # (NVFP4 block-16 / MXFP8 block-32). The per-head [56|8]
+                # software scale groups cannot align to FP block sizes
+                # (56 % 16 != 0), and block scales are consumed inside the
+                # block-scaled MMA anyway, so per-head scale granularity is
+                # unnecessary. Requires the activation reorder to happen
+                # BEFORE quantization (see ActQuantWrapper.reorder_before_quant).
+                layer_groupsize = -1
+                layer_high_length = high_bits_length
+                layer_low_length = low_bits_length
+                qlayers[name].reorder_before_quant = True
             else:
                 layer_groupsize = head_dim
                 layer_high_length = int(head_dim * high_fraction)
