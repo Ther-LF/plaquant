@@ -13,6 +13,21 @@ from promix.utils import cleanup_memory
 from promix.quantize.hadamard import matmul_hadU_cuda, get_hadK
 
 
+def build_main_transform(U_attn, R_dict, identity_main_rotation):
+    """Compose the main-path transform T. With identity_main_rotation,
+    T = U_attn (pure PCA, no trained R1 block boundary). Otherwise
+    T = U_attn @ block_diag(R1_0?, R1_1, R1_2)."""
+    if identity_main_rotation:
+        return U_attn
+    R1_1 = R_dict["R1_1"].to(U_attn.device, torch.float64)
+    R1_2 = R_dict["R1_2"].to(U_attn.device, torch.float64)
+    R1 = torch.block_diag(R1_1, R1_2)
+    R1_0 = R_dict.get("R1_0")
+    if R1_0 is not None:
+        R1 = torch.block_diag(R1_0.to(U_attn.device, torch.float64), R1)
+    return torch.matmul(U_attn, R1)
+
+
 def rotate_embeddings(model, R1):
     for W in [model.model.embed_tokens]:
         dtype = W.weight.data.dtype
@@ -179,7 +194,8 @@ def _rearrange_o_proj(layer, high_bits_length, low_bits_length, head_dim):
     layer.self_attn.new_column_order = new_column_order
 
 
-def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fraction=0.0):
+def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fraction=0.0,
+                         identity_main_rotation=False):
     """Fuse PCA basis + rotation into model weights (full_shared mode).
 
     After this call:
@@ -191,24 +207,13 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
     num_heads = config.num_attention_heads
     model_dim = config.hidden_size
     head_dim = model_dim // num_heads
-    high_bits_length = int(high_fraction * model_dim)
 
     # Load basis and rotation
     U_cpk = torch.load(basis_path, weights_only=False)
     U_attn = U_cpk["attn_mlp"].cuda()
 
     R_dict = torch.load(rotation_path, weights_only=False)
-    R1_1 = R_dict["R1_1"].cuda().to(torch.float64)
-    R1_2 = R_dict["R1_2"].cuda().to(torch.float64)
-    assert R1_2.shape[0] == high_bits_length
-
-    R1 = torch.block_diag(R1_1, R1_2)
-    R1_0 = R_dict["R1_0"]
-    if R1_0 is not None:
-        R1 = torch.block_diag(R1_0.cuda().to(torch.float64), R1)
-
-    # Combine: T = U × R
-    U_attn = torch.matmul(U_attn, R1)
+    U_attn = build_main_transform(U_attn, R_dict, identity_main_rotation)
 
     torch.distributed.barrier()
 

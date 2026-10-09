@@ -3,6 +3,7 @@ from promix.quantize.adaptive import (
     per_channel_variance_in_basis, tail_energy_fraction,
     derive_khigh, derive_per_layer_khigh, main_path_avg_bits,
 )
+from promix.quantize.rotation import build_main_transform
 
 def test_variance_in_basis_identity():
     H = torch.diag(torch.tensor([1., 2., 3., 4.]))
@@ -61,3 +62,17 @@ def test_variance_matches_eigvals_when_U_is_eigenbasis():
     evals, U = torch.linalg.eigh(H)      # ascending
     v = per_channel_variance_in_basis(U, H)
     assert torch.allclose(v, evals, atol=1e-8)
+
+def test_build_main_transform_identity_returns_U():
+    U = torch.randn(8, 8, dtype=torch.float64)
+    T = build_main_transform(U, R_dict=None, identity_main_rotation=True)
+    assert torch.allclose(T, U)
+
+def test_build_main_transform_applies_R1_when_not_identity():
+    U = torch.eye(4, dtype=torch.float64)
+    R_dict = {"R1_1": torch.eye(2, dtype=torch.float64) * 2,
+              "R1_2": torch.eye(2, dtype=torch.float64) * 3,
+              "R1_0": None}
+    T = build_main_transform(U, R_dict=R_dict, identity_main_rotation=False)
+    expected = torch.block_diag(torch.eye(2) * 2, torch.eye(2) * 3).double()
+    assert torch.allclose(T, expected)
