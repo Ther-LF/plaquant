@@ -14,11 +14,48 @@ Run inside luofan-plaquant on a free GPU.
 import os
 import csv
 import torch
+from torch.utils.cpp_extension import load
 
 import nvfp4_gemm as nv
 import mxfp8_gemm as mx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CUTLASS = "/home/luofan/plaquant/third_party/cutlass"
+os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
+
+_fused_ext = None
+
+
+def get_fused_ext():
+    """JIT-load the C2 fused single-host-launch mixed-precision GEMM extension."""
+    global _fused_ext
+    if _fused_ext is None:
+        _fused_ext = load(
+            name="fused_gemm_ext",
+            sources=[os.path.join(HERE, "fused_gemm_ext.cu")],
+            extra_include_paths=[
+                os.path.join(CUTLASS, "include"),
+                os.path.join(CUTLASS, "tools/util/include"),
+                os.path.join(CUTLASS, "examples/common"),
+            ],
+            extra_cuda_cflags=[
+                "-std=c++17",
+                "--expt-relaxed-constexpr",
+                "--expt-extended-lambda",
+                "-O3",
+            ],
+            verbose=True,
+        )
+    return _fused_ext
+
+
+def mixed_gemm_fused(p, M, N, K_low, K_high):
+    """C2 fused path: ONE host call (both GEMMs + combine + scale, single sync)."""
+    ext = get_fused_ext()
+    return ext.mixed_gemm_fused(
+        p["Al_packed"], p["SFAl"], p["Bl_packed"], p["SFBl"],
+        p["Ah_bytes"], p["SFAh"], p["Bh_bytes"], p["SFBh"],
+        p["s_x"], p["s_w"], M, N, K_low, K_high)
 
 
 def cosine(a, b):
@@ -87,7 +124,7 @@ M_LIST = [1, 16, 256, 2048]
 
 
 def validate():
-    print("=== C1.3 mixed 2-launch correctness ===")
+    print("=== C2 fused vs 2-launch correctness (both vs oracle) ===")
     ok = True
     results = {}
     val_shapes = {
@@ -96,18 +133,22 @@ def validate():
         "q_proj_3B": (3072, 2688, 384),
     }
     for name, (N, K_low, K_high) in val_shapes.items():
-        for M in [16, 2048]:
+        for M in [1, 16, 256, 2048]:
             p, oracle = prep_mixed(M, N, K_low, K_high, seed=M)
-            D = mixed_gemm_2launch(p, M, N, K_low, K_high).float()
-            cos = cosine(D, oracle)
-            rel = ((D - oracle).norm() / (oracle.norm() + 1e-12)).item()
+            D2 = mixed_gemm_2launch(p, M, N, K_low, K_high).float()
+            Df = mixed_gemm_fused(p, M, N, K_low, K_high).float()
+            cos2 = cosine(D2, oracle)
+            cosf = cosine(Df, oracle)
+            relf = ((Df - oracle).norm() / (oracle.norm() + 1e-12)).item()
+            cos_fused_vs_2l = cosine(Df, D2)
             tag = f"{name} M={M}"
-            results[tag] = cos
-            status = "PASS" if cos >= 0.999 else "FAIL"
-            if cos < 0.999:
+            results[tag] = cosf
+            status = "PASS" if cosf >= 0.999 else "FAIL"
+            if cosf < 0.999:
                 ok = False
             print(f"  {tag:22s} N={N} Klow={K_low} Khigh={K_high}: "
-                  f"cosine={cos:.6f} rel={rel:.3e} [{status}]")
+                  f"fused_vs_oracle={cosf:.6f} rel={relf:.3e}  "
+                  f"2launch_vs_oracle={cos2:.6f}  fused_vs_2launch={cos_fused_vs_2l:.6f} [{status}]")
     print("ALL PASS" if ok else "SOME FAILED")
     return ok
 
@@ -127,7 +168,7 @@ def _time_ms(fn, iters=50, warmup=10):
 
 
 def benchmark():
-    print("\n=== C1.3 benchmark: 2-launch vs fp16 cuBLAS ===")
+    print("\n=== C2 benchmark: fused vs 2-launch vs fp16 cuBLAS ===")
     rows = []
     all_shapes = {**SHAPES_1B, **SHAPES_3B}
     for name, (N, K_low, K_high) in all_shapes.items():
@@ -136,13 +177,16 @@ def benchmark():
             p, _ = prep_mixed(M, N, K_low, K_high, seed=1)
             # (a) 2-launch mixed path
             lat_mix = _time_ms(lambda: mixed_gemm_2launch(p, M, N, K_low, K_high))
-            # (b) fp16 cuBLAS
+            # (b) fused single-host-launch path
+            lat_fused = _time_ms(lambda: mixed_gemm_fused(p, M, N, K_low, K_high))
+            # (c) fp16 cuBLAS
             Xf = torch.randn(M, K_total, device="cuda", dtype=torch.float16)
             Wf = torch.randn(N, K_total, device="cuda", dtype=torch.float16)
             lat_fp16 = _time_ms(lambda: torch.matmul(Xf, Wf.t()))
             print(f"  {name:14s} M={M:5d} N={N:5d} K={K_total:5d}: "
-                  f"2launch={lat_mix:.4f}ms  fp16={lat_fp16:.4f}ms  "
-                  f"ratio={lat_mix/lat_fp16:.2f}x")
+                  f"fused={lat_fused:.4f}ms  2launch={lat_mix:.4f}ms  fp16={lat_fp16:.4f}ms  "
+                  f"f/2l={lat_fused/lat_mix:.2f}x  f/fp16={lat_fused/lat_fp16:.2f}x")
+            rows.append((name, M, "fused_mixed", f"{lat_fused:.5f}"))
             rows.append((name, M, "2launch_mixed", f"{lat_mix:.5f}"))
             rows.append((name, M, "fp16_cublas", f"{lat_fp16:.5f}"))
     csv_path = os.path.join(HERE, "benchmark.csv")
@@ -157,6 +201,7 @@ if __name__ == "__main__":
     print("Loading extensions...")
     nv.get_ext()
     mx.get_ext()
+    get_fused_ext()
     print("Extensions loaded.\n")
     ok = validate()
     benchmark()
