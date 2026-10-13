@@ -94,6 +94,58 @@ def mixed_gemm_fused_presf(p, M, N, K_low, K_high):
         p["s_x"], p["s_w"], M, N, K_low, K_high)
 
 
+# ----------------------------- T0: pure-format full-K bounds -----------------------------
+# Priority change (round-3, project lead): T1 (EVT fold) and T2 (M-adaptive tile) are
+# CANCELLED this round; no kernel-code (.cu) changes at all. T0 bounds use ONLY the
+# existing, unmodified nvfp4_gemm/mxfp8_gemm extensions (nvfp4_gemm_ext.cu /
+# mxfp8_gemm_ext.cu, round-1 code, untouched). Those entry points fill BOTH the A-side
+# and B-side (weight) SF INSIDE every timed call -- there is no presf split available
+# without adding a new kernel entry point, which is out of scope this round. This is a
+# deliberate, honestly-recorded methodology difference from rungB_presf (which excludes
+# the weight-SF fill from the timed region): the FP4/FP8 bounds below are therefore
+# slightly PESSIMISTIC (include extra weight-SF-scatter work the mixed path doesn't pay
+# every call), which if anything UNDERSTATES how good the band position of mixed/rungB_presf
+# looks. Noted in the round-3 report.
+def prep_pure_fp4(M, N, K_total, seed=0):
+    """UPPER bound inputs: pure NVFP4 over the full K. Benchmark-only data (random codes)."""
+    torch.manual_seed(seed)
+    dev = "cuda"
+    X = torch.randn(M, K_total, device=dev)
+    W = torch.randn(N, K_total, device=dev)
+    A_codes, SFA, A_deq = nv.quantize_nvfp4(X)
+    B_codes, SFB, B_deq = nv.quantize_nvfp4(W)
+    A_packed = nv.pack_fp4(A_codes)
+    B_packed = nv.pack_fp4(B_codes)
+    oracle = A_deq @ B_deq.t()
+    pack = dict(A_packed=A_packed, SFA=SFA, B_packed=B_packed, SFB=SFB)
+    return pack, oracle
+
+
+def prep_pure_fp8(M, N, K_total, seed=0):
+    """LOWER bound inputs: pure MXFP8 over the full K. Benchmark-only data (random codes)."""
+    torch.manual_seed(seed)
+    dev = "cuda"
+    X = torch.randn(M, K_total, device=dev)
+    W = torch.randn(N, K_total, device=dev)
+    A_bytes, SFA, A_deq = mx.quantize_mxfp8(X)
+    B_bytes, SFB, B_deq = mx.quantize_mxfp8(W)
+    oracle = A_deq @ B_deq.t()
+    pack = dict(A_bytes=A_bytes, SFA=SFA, B_bytes=B_bytes, SFB=SFB)
+    return pack, oracle
+
+
+def pure_fp4_fullK(p, M, N, K_total):
+    """Existing unmodified nvfp4_gemm_ext.cu entry point (round-1 code)."""
+    ext = nv.get_ext()
+    return ext.nvfp4_gemm(p["A_packed"], p["SFA"], p["B_packed"], p["SFB"], M, N, K_total)
+
+
+def pure_fp8_fullK(p, M, N, K_total):
+    """Existing unmodified mxfp8_gemm_ext.cu entry point (round-1 code)."""
+    ext = mx.get_ext()
+    return ext.mxfp8_gemm(p["A_bytes"], p["SFA"], p["B_bytes"], p["SFB"], M, N, K_total)
+
+
 def cosine(a, b):
     a = a.flatten().float()
     b = b.flatten().float()
@@ -193,7 +245,26 @@ def validate():
                   f"rungA={cosf:.6f} rungB={cosb:.6f} rungB_presf={cosbp:.6f} "
                   f"rungA_presf={cosap:.6f} rel={relb:.3e} 2launch={cos2:.6f} [{status}]")
     print("ALL PASS" if ok else "SOME FAILED")
-    return ok
+
+    # ---- T0: pure-format full-K bounds correctness (vs each format's own oracle) ----
+    print("\n=== T0 bounds correctness (pure NVFP4 / pure MXFP8 over full K) ===")
+    ok2 = True
+    for name, (N, K_low, K_high) in val_shapes.items():
+        K_total = K_low + K_high
+        for M in [1, 16, 2048]:
+            p4, o4 = prep_pure_fp4(M, N, K_total, seed=M)
+            D4 = pure_fp4_fullK(p4, M, N, K_total).float()
+            c4 = cosine(D4, o4)
+            p8, o8 = prep_pure_fp8(M, N, K_total, seed=M)
+            D8 = pure_fp8_fullK(p8, M, N, K_total).float()
+            c8 = cosine(D8, o8)
+            status = "PASS" if min(c4, c8) >= 0.999 else "FAIL"
+            if min(c4, c8) < 0.999:
+                ok2 = False
+            print(f"  {name:14s} M={M:5d} K_total={K_total:5d}: "
+                  f"pure_fp4={c4:.6f} pure_fp8={c8:.6f} [{status}]")
+    print("ALL PASS" if ok2 else "SOME FAILED")
+    return ok and ok2
 
 
 def _time_ms(fn, iters=50, warmup=10):
@@ -210,9 +281,41 @@ def _time_ms(fn, iters=50, warmup=10):
     return start.elapsed_time(end) / iters
 
 
+def _time_ms_median(fn, iters=50, warmup=10):
+    """Per-call timing (not amortized mean) -> median. Robust to outliers from a
+    noisy/shared GPU; used for the T0 re-measure of down_proj_1B M=2048."""
+    for _ in range(warmup):
+        fn()
+    torch.cuda.synchronize()
+    samples = []
+    for _ in range(iters):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        fn()
+        end.record()
+        torch.cuda.synchronize()
+        samples.append(start.elapsed_time(end))
+    samples.sort()
+    n = len(samples)
+    med = samples[n // 2] if n % 2 else (samples[n // 2 - 1] + samples[n // 2]) / 2
+    return med, samples
+
+
+def band_position(t_mixed, t_fp4, t_fp8):
+    """0% = at the FP4 (upper/fastest) bound, 100% = at the FP8 (lower/slowest) bound.
+    >100% means mixed is slower than even pure MXFP8 full-K (fusion overhead ate the
+    format advantage); <0% means mixed beat pure NVFP4 full-K (should not happen)."""
+    span = t_fp8 - t_fp4
+    if abs(span) < 1e-9:
+        return float("nan")
+    return (t_mixed - t_fp4) / span * 100.0
+
+
 def benchmark():
-    print("\n=== C2 benchmark: fused vs 2-launch vs fp16 cuBLAS ===")
+    print("\n=== C2 benchmark: fused vs 2-launch vs fp16 cuBLAS vs [FP4,FP8] bounds ===")
     rows = []
+    band_rows = []
     all_shapes = {**SHAPES_1B, **SHAPES_3B}
     for name, (N, K_low, K_high) in all_shapes.items():
         K_total = K_low + K_high
@@ -233,9 +336,16 @@ def benchmark():
             Xf = torch.randn(M, K_total, device="cuda", dtype=torch.float16)
             Wf = torch.randn(N, K_total, device="cuda", dtype=torch.float16)
             lat_fp16 = _time_ms(lambda: torch.matmul(Xf, Wf.t()))
+            # (d) T0 bounds: pure NVFP4 full-K (UPPER/fastest) and pure MXFP8 full-K (LOWER/slowest)
+            p4, _ = prep_pure_fp4(M, N, K_total, seed=1)
+            lat_fp4 = _time_ms(lambda: pure_fp4_fullK(p4, M, N, K_total))
+            p8, _ = prep_pure_fp8(M, N, K_total, seed=1)
+            lat_fp8 = _time_ms(lambda: pure_fp8_fullK(p8, M, N, K_total))
+            band = band_position(lat_bp, lat_fp4, lat_fp8)
             print(f"  {name:14s} M={M:5d} N={N:5d} K={K_total:5d}: "
                   f"rungB_presf={lat_bp:.4f}  rungB={lat_b:.4f}  rungA={lat_fused:.4f}  "
                   f"2launch={lat_mix:.4f}  fp16={lat_fp16:.4f}ms  "
+                  f"pure_fp4={lat_fp4:.4f}  pure_fp8={lat_fp8:.4f}  band={band:.1f}%  "
                   f"Bpresf/B={lat_bp/lat_b:.2f}x  Bpresf/fp16={lat_bp/lat_fp16:.2f}x")
             rows.append((name, M, "rungB_presf", f"{lat_bp:.5f}"))
             rows.append((name, M, "rungA_presf", f"{lat_ap:.5f}"))
@@ -243,12 +353,59 @@ def benchmark():
             rows.append((name, M, "fused_mixed", f"{lat_fused:.5f}"))
             rows.append((name, M, "2launch_mixed", f"{lat_mix:.5f}"))
             rows.append((name, M, "fp16_cublas", f"{lat_fp16:.5f}"))
+            rows.append((name, M, "pure_fp4_fullK", f"{lat_fp4:.5f}"))
+            rows.append((name, M, "pure_fp8_fullK", f"{lat_fp8:.5f}"))
+            band_rows.append((name, M, K_total, lat_fp4, lat_bp, lat_fp8, band))
     csv_path = os.path.join(HERE, "benchmark.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["shape", "M", "path", "latency_ms"])
         w.writerows(rows)
     print(f"\nWrote {csv_path} ({len(rows)} rows)")
+
+    band_csv = os.path.join(HERE, "band_position.csv")
+    with open(band_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["shape", "M", "K_total", "fp4_ms", "mixed_rungB_presf_ms", "fp8_ms", "band_pct"])
+        for r in band_rows:
+            w.writerow([r[0], r[1], r[2], f"{r[3]:.5f}", f"{r[4]:.5f}", f"{r[5]:.5f}", f"{r[6]:.1f}"])
+    print(f"Wrote {band_csv} ({len(band_rows)} rows)")
+    return band_rows
+
+
+def remeasure_down_proj_1B(M=2048, iters=60, warmup=15):
+    """T0 re-measure: round-2 saw down_proj_1B M=2048 spike to ~1.1ms (vs round-1
+    0.25ms), suspected transient GPU contention. Median of >=50 reps, run on a
+    GPU verified quiet (0% util, ~0 MiB used) immediately before this call."""
+    name = "down_proj_1B"
+    N, K_low, K_high = SHAPES_1B[name]
+    K_total = K_low + K_high
+    print(f"\n=== T0 re-measure: {name} M={M} N={N} K={K_total} (iters={iters}, median) ===")
+    p, _ = prep_mixed(M, N, K_low, K_high, seed=1)
+    prepack_weight_sf(p, N, K_low, K_high)
+    p4, _ = prep_pure_fp4(M, N, K_total, seed=1)
+    p8, _ = prep_pure_fp8(M, N, K_total, seed=1)
+    Xf = torch.randn(M, K_total, device="cuda", dtype=torch.float16)
+    Wf = torch.randn(N, K_total, device="cuda", dtype=torch.float16)
+
+    results = {}
+    paths = {
+        "rungB_presf": lambda: mixed_gemm_fused_b_presf(p, M, N, K_low, K_high),
+        "rungA_presf": lambda: mixed_gemm_fused_presf(p, M, N, K_low, K_high),
+        "rungB_mixed": lambda: mixed_gemm_fused_b(p, M, N, K_low, K_high),
+        "fused_mixed(rungA)": lambda: mixed_gemm_fused(p, M, N, K_low, K_high),
+        "2launch_mixed": lambda: mixed_gemm_2launch(p, M, N, K_low, K_high),
+        "fp16_cublas": lambda: torch.matmul(Xf, Wf.t()),
+        "pure_fp4_fullK": lambda: pure_fp4_fullK(p4, M, N, K_total),
+        "pure_fp8_fullK": lambda: pure_fp8_fullK(p8, M, N, K_total),
+    }
+    for pname, fn in paths.items():
+        med, samples = _time_ms_median(fn, iters=iters, warmup=warmup)
+        results[pname] = (med, min(samples), max(samples))
+        print(f"  {pname:20s} median={med:.4f}ms  min={min(samples):.4f}  max={max(samples):.4f}  n={len(samples)}")
+    band = band_position(results["rungB_presf"][0], results["pure_fp4_fullK"][0], results["pure_fp8_fullK"][0])
+    print(f"  band position (rungB_presf in [fp4,fp8]) = {band:.1f}%")
+    return results, band
 
 
 if __name__ == "__main__":
@@ -259,4 +416,5 @@ if __name__ == "__main__":
     print("Extensions loaded.\n")
     ok = validate()
     benchmark()
+    remeasure_down_proj_1B(M=2048, iters=60, warmup=15)
     print("\nDONE" if ok else "\nVALIDATION FAILED")
