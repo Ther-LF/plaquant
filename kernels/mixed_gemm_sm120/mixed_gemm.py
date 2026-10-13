@@ -58,6 +58,15 @@ def mixed_gemm_fused(p, M, N, K_low, K_high):
         p["s_x"], p["s_w"], M, N, K_low, K_high)
 
 
+def mixed_gemm_fused_b(p, M, N, K_low, K_high):
+    """Rung-B-fallback: merged SF-fill + GEMM2 beta=1 accumulate + scale (4 launches)."""
+    ext = get_fused_ext()
+    return ext.mixed_gemm_fused_b(
+        p["Al_packed"], p["SFAl"], p["Bl_packed"], p["SFBl"],
+        p["Ah_bytes"], p["SFAh"], p["Bh_bytes"], p["SFBh"],
+        p["s_x"], p["s_w"], M, N, K_low, K_high)
+
+
 def cosine(a, b):
     a = a.flatten().float()
     b = b.flatten().float()
@@ -137,18 +146,19 @@ def validate():
             p, oracle = prep_mixed(M, N, K_low, K_high, seed=M)
             D2 = mixed_gemm_2launch(p, M, N, K_low, K_high).float()
             Df = mixed_gemm_fused(p, M, N, K_low, K_high).float()
+            Db = mixed_gemm_fused_b(p, M, N, K_low, K_high).float()
             cos2 = cosine(D2, oracle)
             cosf = cosine(Df, oracle)
-            relf = ((Df - oracle).norm() / (oracle.norm() + 1e-12)).item()
-            cos_fused_vs_2l = cosine(Df, D2)
+            cosb = cosine(Db, oracle)
+            relb = ((Db - oracle).norm() / (oracle.norm() + 1e-12)).item()
             tag = f"{name} M={M}"
-            results[tag] = cosf
-            status = "PASS" if cosf >= 0.999 else "FAIL"
-            if cosf < 0.999:
+            results[tag] = cosb
+            status = "PASS" if (cosf >= 0.999 and cosb >= 0.999) else "FAIL"
+            if cosf < 0.999 or cosb < 0.999:
                 ok = False
             print(f"  {tag:22s} N={N} Klow={K_low} Khigh={K_high}: "
-                  f"fused_vs_oracle={cosf:.6f} rel={relf:.3e}  "
-                  f"2launch_vs_oracle={cos2:.6f}  fused_vs_2launch={cos_fused_vs_2l:.6f} [{status}]")
+                  f"rungA_vs_oracle={cosf:.6f}  rungB_vs_oracle={cosb:.6f} rel={relb:.3e}  "
+                  f"2launch_vs_oracle={cos2:.6f} [{status}]")
     print("ALL PASS" if ok else "SOME FAILED")
     return ok
 
@@ -177,15 +187,18 @@ def benchmark():
             p, _ = prep_mixed(M, N, K_low, K_high, seed=1)
             # (a) 2-launch mixed path
             lat_mix = _time_ms(lambda: mixed_gemm_2launch(p, M, N, K_low, K_high))
-            # (b) fused single-host-launch path
+            # (b) fused single-host-launch path (Rung A)
             lat_fused = _time_ms(lambda: mixed_gemm_fused(p, M, N, K_low, K_high))
+            # (b2) Rung-B-fallback (merged fill + beta accumulate, 4 launches)
+            lat_b = _time_ms(lambda: mixed_gemm_fused_b(p, M, N, K_low, K_high))
             # (c) fp16 cuBLAS
             Xf = torch.randn(M, K_total, device="cuda", dtype=torch.float16)
             Wf = torch.randn(N, K_total, device="cuda", dtype=torch.float16)
             lat_fp16 = _time_ms(lambda: torch.matmul(Xf, Wf.t()))
             print(f"  {name:14s} M={M:5d} N={N:5d} K={K_total:5d}: "
-                  f"fused={lat_fused:.4f}ms  2launch={lat_mix:.4f}ms  fp16={lat_fp16:.4f}ms  "
-                  f"f/2l={lat_fused/lat_mix:.2f}x  f/fp16={lat_fused/lat_fp16:.2f}x")
+                  f"rungB={lat_b:.4f}  rungA={lat_fused:.4f}  2launch={lat_mix:.4f}  fp16={lat_fp16:.4f}ms  "
+                  f"B/A={lat_b/lat_fused:.2f}x  B/fp16={lat_b/lat_fp16:.2f}x")
+            rows.append((name, M, "rungB_mixed", f"{lat_b:.5f}"))
             rows.append((name, M, "fused_mixed", f"{lat_fused:.5f}"))
             rows.append((name, M, "2launch_mixed", f"{lat_mix:.5f}"))
             rows.append((name, M, "fp16_cublas", f"{lat_fp16:.5f}"))

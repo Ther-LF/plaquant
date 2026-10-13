@@ -26,6 +26,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <algorithm>
 
 #include "cutlass/cutlass.h"
 #include "cute/tensor.hpp"
@@ -177,6 +178,43 @@ static inline void check_cuda(cudaError_t e, const char* what) {
   TORCH_CHECK(e == cudaSuccess, what, ": ", cudaGetErrorString(e));
 }
 
+// ----------------------------- Rung-B-fallback kernels -----------------------------
+// Merged SF-fill: one launch fills all 4 interleaved SF buffers (NVFP4 A/B + MXFP8
+// A/B) via a flat cumulative index space, so exactly (w0+w1+w2+w3) threads run with
+// no idle oversizing. Removes 3 of the 4 fill launches of Rung A.
+template <class L0, class L1, class L2, class L3>
+__global__ void fill_sf_merged(
+    uint8_t* p0, const uint8_t* l0, L0 lay0, int K0, int V0, int w0,
+    uint8_t* p1, const uint8_t* l1, L1 lay1, int K1, int V1, int w1,
+    uint8_t* p2, const uint8_t* l2, L2 lay2, int K2, int V2, int w2,
+    uint8_t* p3, const uint8_t* l3, L3 lay3, int K3, int V3, int total) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= total) return;
+  if (idx < w0) { int r = idx / K0, k = idx % K0;
+    p0[lay0(make_coord(r, k, 0))] = l0[r * (K0 / V0) + (k / V0)]; return; }
+  idx -= w0;
+  if (idx < w1) { int r = idx / K1, k = idx % K1;
+    p1[lay1(make_coord(r, k, 0))] = l1[r * (K1 / V1) + (k / V1)]; return; }
+  idx -= w1;
+  if (idx < w2) { int r = idx / K2, k = idx % K2;
+    p2[lay2(make_coord(r, k, 0))] = l2[r * (K2 / V2) + (k / V2)]; return; }
+  idx -= w2;
+  { int r = idx / K3, k = idx % K3;
+    p3[lay3(make_coord(r, k, 0))] = l3[r * (K3 / V3) + (k / V3)]; }
+}
+
+// out[m,n] = D[m,n] * s_x[m] * s_w[n]  -> fp16  (combine-add already done in GEMM2)
+__global__ void scale_only_kernel(const __nv_bfloat16* __restrict__ D,
+                                  const float* __restrict__ s_x,
+                                  const float* __restrict__ s_w,
+                                  __half* __restrict__ out, int M, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= M * N) return;
+  int m = idx / N, n = idx % N;
+  float v = __bfloat162float(D[idx]) * s_x[m] * s_w[n];
+  out[idx] = __float2half(v);
+}
+
 // ----------------------------- entry point -----------------------------
 torch::Tensor mixed_gemm_fused(torch::Tensor A_low, torch::Tensor SFA_low,
                                torch::Tensor B_low, torch::Tensor SFB_low,
@@ -317,7 +355,148 @@ torch::Tensor mixed_gemm_fused(torch::Tensor A_low, torch::Tensor SFA_low,
   return out;
 }
 
+// ----------------------------- Rung-B-fallback entry point -----------------------------
+// Reuses the proven nvcfg/mxcfg CUTLASS configs. Reduces Rung A's 7 device launches
+// (4 SF-fill + 2 GEMM + 1 combine) to 4 (1 merged SF-fill + 2 GEMM + 1 scale):
+//   D_low  = nvfp4_gemm(A_low,B_low)                 -> bf16 D_low
+//   D_comb = mxfp8_gemm(A_high,B_high) + 1.0*D_low   -> bf16 (beta=1 accumulate in epilogue)
+//   out[m,n] = D_comb[m,n] * s_x[m] * s_w[n]         -> fp16
+// The combine-add is folded into GEMM2's epilogue (beta=1), so no separate combine pass.
+torch::Tensor mixed_gemm_fused_b(torch::Tensor A_low, torch::Tensor SFA_low,
+                                 torch::Tensor B_low, torch::Tensor SFB_low,
+                                 torch::Tensor A_high, torch::Tensor SFA_high,
+                                 torch::Tensor B_high, torch::Tensor SFB_high,
+                                 torch::Tensor s_x, torch::Tensor s_w,
+                                 int64_t M, int64_t N, int64_t Klow, int64_t Khigh) {
+  TORCH_CHECK(A_low.is_cuda() && A_high.is_cuda(), "inputs must be CUDA tensors");
+  TORCH_CHECK(Klow % 16 == 0, "Klow must be divisible by 16");
+  TORCH_CHECK(Khigh % 32 == 0, "Khigh must be divisible by 32");
+  A_low = A_low.contiguous();   SFA_low = SFA_low.contiguous();
+  B_low = B_low.contiguous();   SFB_low = SFB_low.contiguous();
+  A_high = A_high.contiguous(); SFA_high = SFA_high.contiguous();
+  B_high = B_high.contiguous(); SFB_high = SFB_high.contiguous();
+  s_x = s_x.contiguous();       s_w = s_w.contiguous();
+
+  auto dev = A_low.device();
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream(dev.index());
+  auto u8opts = torch::TensorOptions().dtype(torch::kUInt8).device(dev);
+  auto bf16opts = torch::TensorOptions().dtype(torch::kBFloat16).device(dev);
+
+  int Mi = (int)M, Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh;
+
+  auto D_low  = torch::empty({M, N}, bf16opts);   // GEMM1 output
+  auto D_comb = torch::empty({M, N}, bf16opts);   // GEMM2 output (= acc_high + D_low)
+
+  // ---- strides + SF layouts for both GEMMs (needed before the merged fill) ----
+  nvcfg::StrideA nv_sA = cutlass::make_cute_packed_stride(nvcfg::StrideA{}, {Mi, Kl, 1});
+  nvcfg::StrideB nv_sB = cutlass::make_cute_packed_stride(nvcfg::StrideB{}, {Ni, Kl, 1});
+  nvcfg::StrideC nv_sC = cutlass::make_cute_packed_stride(nvcfg::StrideC{}, {Mi, Ni, 1});
+  nvcfg::StrideD nv_sD = cutlass::make_cute_packed_stride(nvcfg::StrideD{}, {Mi, Ni, 1});
+  auto nv_lSFA = nvcfg::Sm1xxBlkScaledConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Kl, 1));
+  auto nv_lSFB = nvcfg::Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(make_shape(Mi, Ni, Kl, 1));
+
+  mxcfg::StrideA mx_sA = cutlass::make_cute_packed_stride(mxcfg::StrideA{}, {Mi, Kh, 1});
+  mxcfg::StrideB mx_sB = cutlass::make_cute_packed_stride(mxcfg::StrideB{}, {Ni, Kh, 1});
+  mxcfg::StrideC mx_sC = cutlass::make_cute_packed_stride(mxcfg::StrideC{}, {Mi, Ni, 1});
+  mxcfg::StrideD mx_sD = cutlass::make_cute_packed_stride(mxcfg::StrideD{}, {Mi, Ni, 1});
+  auto mx_lSFA = mxcfg::Sm1xxBlkScaledConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Kh, 1));
+  auto mx_lSFB = mxcfg::Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(make_shape(Mi, Ni, Kh, 1));
+
+  auto nv_phys_SFA = torch::empty({(int64_t)size(filter_zeros(nv_lSFA))}, u8opts);
+  auto nv_phys_SFB = torch::empty({(int64_t)size(filter_zeros(nv_lSFB))}, u8opts);
+  auto mx_phys_SFA = torch::empty({(int64_t)size(filter_zeros(mx_lSFA))}, u8opts);
+  auto mx_phys_SFB = torch::empty({(int64_t)size(filter_zeros(mx_lSFB))}, u8opts);
+
+  // ================= ONE merged SF-fill launch (4 regions) =================
+  {
+    int w0 = Mi * Kl, w1 = Ni * Kl, w2 = Mi * Kh, w3 = Ni * Kh;
+    int total = w0 + w1 + w2 + w3;
+    int tpb = 256;
+    dim3 grid((total + tpb - 1) / tpb, 1, 1);
+    fill_sf_merged<<<grid, tpb, 0, stream>>>(
+        nv_phys_SFA.data_ptr<uint8_t>(), SFA_low.data_ptr<uint8_t>(), nv_lSFA, Kl, 16, w0,
+        nv_phys_SFB.data_ptr<uint8_t>(), SFB_low.data_ptr<uint8_t>(), nv_lSFB, Kl, 16, w1,
+        mx_phys_SFA.data_ptr<uint8_t>(), SFA_high.data_ptr<uint8_t>(), mx_lSFA, Kh, 32, w2,
+        mx_phys_SFB.data_ptr<uint8_t>(), SFB_high.data_ptr<uint8_t>(), mx_lSFB, Kh, 32, total);
+    check_cuda(cudaGetLastError(), "fill_sf_merged launch");
+  }
+
+  // ================= GEMM1: NVFP4 low segment -> bf16 D_low =================
+  {
+    using namespace nvcfg;
+    typename Gemm::Arguments args{
+      cutlass::gemm::GemmUniversalMode::kGemm,
+      {Mi, Ni, Kl, 1},
+      {
+        reinterpret_cast<ElementA::DataType const*>(A_low.data_ptr<uint8_t>()), nv_sA,
+        reinterpret_cast<ElementB::DataType const*>(B_low.data_ptr<uint8_t>()), nv_sB,
+        reinterpret_cast<ElementA::ScaleFactorType const*>(nv_phys_SFA.data_ptr<uint8_t>()), nv_lSFA,
+        reinterpret_cast<ElementB::ScaleFactorType const*>(nv_phys_SFB.data_ptr<uint8_t>()), nv_lSFB
+      },
+      {
+        {1.0f, 0.0f},
+        reinterpret_cast<ElementC const*>(D_low.data_ptr()), nv_sC,
+        reinterpret_cast<ElementD*>(D_low.data_ptr()), nv_sD
+      }
+    };
+    Gemm gemm;
+    size_t ws = Gemm::get_workspace_size(args);
+    auto workspace = torch::empty({(int64_t)ws}, u8opts);
+    cutlass::Status st = gemm.can_implement(args);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "nvfp4(b) can_implement: ", cutlassGetStatusString(st));
+    st = gemm.initialize(args, workspace.data_ptr(), stream);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "nvfp4(b) initialize: ", cutlassGetStatusString(st));
+    st = gemm.run(stream);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "nvfp4(b) run: ", cutlassGetStatusString(st));
+  }
+
+  // ========= GEMM2: MXFP8 high segment + beta*D_low -> bf16 D_comb =========
+  {
+    using namespace mxcfg;
+    typename Gemm::Arguments args{
+      cutlass::gemm::GemmUniversalMode::kGemm,
+      {Mi, Ni, Kh, 1},
+      {
+        reinterpret_cast<ElementA::DataType const*>(A_high.data_ptr<uint8_t>()), mx_sA,
+        reinterpret_cast<ElementB::DataType const*>(B_high.data_ptr<uint8_t>()), mx_sB,
+        reinterpret_cast<ElementA::ScaleFactorType const*>(mx_phys_SFA.data_ptr<uint8_t>()), mx_lSFA,
+        reinterpret_cast<ElementB::ScaleFactorType const*>(mx_phys_SFB.data_ptr<uint8_t>()), mx_lSFB
+      },
+      {
+        {1.0f, 1.0f},  // alpha=1, beta=1: D_comb = acc_high + 1.0 * D_low
+        reinterpret_cast<ElementC const*>(D_low.data_ptr()), mx_sC,
+        reinterpret_cast<ElementD*>(D_comb.data_ptr()), mx_sD
+      }
+    };
+    Gemm gemm;
+    size_t ws = Gemm::get_workspace_size(args);
+    auto workspace = torch::empty({(int64_t)ws}, u8opts);
+    cutlass::Status st = gemm.can_implement(args);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "mxfp8(b) can_implement: ", cutlassGetStatusString(st));
+    st = gemm.initialize(args, workspace.data_ptr(), stream);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "mxfp8(b) initialize: ", cutlassGetStatusString(st));
+    st = gemm.run(stream);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, "mxfp8(b) run: ", cutlassGetStatusString(st));
+  }
+
+  // ================= scale -> fp16 =================
+  auto out = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
+  {
+    int total = Mi * Ni, tpb = 256;
+    scale_only_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat16*>(D_comb.data_ptr()),
+        s_x.data_ptr<float>(), s_w.data_ptr<float>(),
+        reinterpret_cast<__half*>(out.data_ptr()), Mi, Ni);
+    check_cuda(cudaGetLastError(), "scale_only launch");
+  }
+
+  check_cuda(cudaStreamSynchronize(stream), "fused_b sync");
+  return out;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("mixed_gemm_fused", &mixed_gemm_fused,
         "Fused mixed-precision NVFP4+MXFP8 block-scaled GEMM -> fp16 (SM120)");
+  m.def("mixed_gemm_fused_b", &mixed_gemm_fused_b,
+        "Rung-B-fallback: merged SF-fill + GEMM2 beta=1 accumulate + scale (SM120)");
 }
