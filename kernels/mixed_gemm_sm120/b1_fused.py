@@ -155,8 +155,9 @@ def validate_step1():
 # ---- Full B1: dual-phase fused kernel vs mixed oracle ----
 def b1_single(p, M, N, K_low, K_high, stages=0, cfg=0):
     """stages: 0=auto, 1=sync staging, 2/3=cp.async pipeline depth (cfg10: 3/4-deep).
-    cfg: 0=auto by (M,N), 1=16x64x4w, 2=16x32x2w, 3=32x64x4w, 4=128x128x8w,
-    5=128x128x8w+KMUL2, 6=64x128x8w+KMUL2, 10=warp-specialized 128x128+KMUL2."""
+    cfg: 0=auto by (M,N,K), 1=16x64x4w, 2=16x32x2w, 3=32x64x4w, 4=128x128x8w,
+    5=128x128x8w+KMUL2, 6=64x128x8w+KMUL2, 7=64x64x4w+KMUL2 (mid-M short-K),
+    10=warp-specialized 128x128+KMUL2."""
     ext = get_ext()
     return ext.b1_fused(
         p["Al_packed"], p["SFAl"], p["Bl_packed"], p["SFBl"],
@@ -173,6 +174,9 @@ def validate_fused(stages=0):
         "q_proj_1B": (2048, 1792, 256),
         "down_proj_1B": (2048, 7168, 1024),
         "q_proj_3B": (3072, 2688, 384),
+        # ratio-curve endpoints: Phase 2 / Phase 1 skipped via loop bounds
+        "fp4_only_ep": (2048, 2048, 0),
+        "fp8_only_ep": (2048, 0, 2048),
     }
     for name, (N, K_low, K_high) in val_shapes.items():
         for M in [1, 16, 256, 2048]:
@@ -196,9 +200,9 @@ def validate_all_cfgs():
     print("\n=== B1 per-config gate (cfg x stages) ===")
     ok = True
     cases = [
-        ("q_proj_1B", 2048, 1792, 256, 256, [1, 2, 3, 4, 5, 6, 10]),
-        ("down_proj_1B", 2048, 7168, 1024, 49, [1, 2, 3, 4, 5, 6, 10]),
-        ("q_proj_3B", 3072, 2688, 384, 49, [10]),
+        ("q_proj_1B", 2048, 1792, 256, 256, [1, 2, 3, 4, 5, 6, 7, 10]),
+        ("down_proj_1B", 2048, 7168, 1024, 49, [1, 2, 3, 4, 5, 6, 7, 10]),
+        ("q_proj_3B", 3072, 2688, 384, 49, [7, 10]),
     ]
     for name, N, K_low, K_high, M, cfgs in cases:
         p, oracle = mg.prep_mixed(M, N, K_low, K_high, seed=M)

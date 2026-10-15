@@ -13,9 +13,10 @@
 // degenerates to synchronous staging), and an optional KMUL=2 (two MMA-K atoms
 // per staged chunk). Config menu (cfg):
 //   1: 16x64, 4 warps   (decode, large N)      2: 16x32, 2 warps (decode, N<=4096)
-//   3: 32x64, 4 warps   (mid-M / small-N prefill grid filler)
+//   3: 32x64, 4 warps   (mid-M small-N grid filler)
 //   4: 128x128, 8 warps (prefill)              5: cfg4 + KMUL=2  (big-N prefill)
-//   6: 64x128, 8 warps + KMUL=2 (occupancy probe)
+//   6: 64x128, 8 warps + KMUL=2 (occupancy probe; mid-M long-K best)
+//   7: 64x64, 4 warps + KMUL=2 (round-2 T3: mid-M short-K best)
 //   10: warp-specialized 128x128 + KMUL=2 (8 MMA warps + 2 cp.async producer
 //       warps, mbarrier stage hand-off, 3/4-deep; prefill best). Probed and
 //       rejected (see candidates.jsonl): KMUL=4/3 chunks, 128x256 fat tile,
@@ -588,6 +589,11 @@ b1_ws_kernel(const uint8_t* __restrict__ Al,   const uint8_t* __restrict__ SFAl,
          tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA));
     copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sSFB),
          tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB));
+    // T2a early stage release: all smem reads for this stage are issued above
+    // (frags live in registers); the mbarrier arrive's .release.cta semantics
+    // order them before any producer overwrite, so hand the stage back BEFORE
+    // the MMAs instead of after — producers refill one MMA-chunk earlier.
+    b1_mbar_arrive(&mbar[STAGES + s]);
     CUTE_UNROLL
     for (int kb = 0; kb < KMUL; ++kb)
       cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
@@ -621,6 +627,7 @@ b1_ws_kernel(const uint8_t* __restrict__ Al,   const uint8_t* __restrict__ SFAl,
          tcopy_SFA8.get_thread_slice(tid).retile_D(tCrSFA));
     copy(tcopy_SFB8.get_thread_slice(tid).partition_S(sSFB),
          tcopy_SFB8.get_thread_slice(tid).retile_D(tCrSFB));
+    b1_mbar_arrive(&mbar[STAGES + s]);  // T2a early stage release (see consume4)
     CUTE_UNROLL
     for (int kb = 0; kb < KMUL; ++kb)
       cute::gemm(mma_mx, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
@@ -631,23 +638,67 @@ b1_ws_kernel(const uint8_t* __restrict__ Al,   const uint8_t* __restrict__ SFAl,
     const int s = g % STAGES;
     b1_mbar_wait(&mbar[s], (g / STAGES) & 1);
     if (g < n1) consume4(s); else consume8(s);
-    b1_mbar_arrive(&mbar[STAGES + s]);
   }
 
-  // Epilogue (consumers only) — same vectorized form as b1_mw_kernel.
+  // Epilogue (consumers only) — T2c round-2: smem-staged VECTORIZED stores.
+  // The old direct half2 path stored 4B/thread scattered over 8-row stripes:
+  // ncu measured 16/32 bytes-per-sector on global stores (2x write
+  // amplification = ~2x the 32MB gate/up output). Stage scaled fp16 tiles in
+  // smem (reusing sA_b, mainloop done), then issue coalesced 16B stg.128.
+  // Row pad 8 halfs (16B) keeps the half2 scatter bank-conflict-free
+  // (272B row stride => +4 banks/row) and 16B-aligns every staged row.
   Tensor cD = thr_nv.partition_C(make_identity_tensor(Shape<Int<BM>, Int<BN>>{}));
-  CUTE_UNROLL
-  for (int i = 0; i < size(accum); i += 2) {
-    int mg = m0 + get<0>(cD(i));
-    int ng = n0 + get<1>(cD(i));
-    if (mg >= M) continue;
-    float sx = s_x[mg];
-    if (ng + 1 < N) {
-      __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
-                                    accum(i + 1) * sx * s_w[ng + 1]);
-      *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
-    } else if (ng < N) {
-      D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+  if (N % 8 == 0) {
+    constexpr int EROW = BN + 8;              // halfs per staged row
+    constexpr int RBLK = BM / 2;              // rows per smem round (fits sA_b)
+    static_assert(RBLK * EROW * 2 <= STAGES * A_ST, "epilogue stage must fit sA_b");
+    __half* sEp = reinterpret_cast<__half*>(sA_b);
+    CUTE_UNROLL
+    for (int blk = 0; blk < 2; ++blk) {
+      const int row_lo = blk * RBLK;
+      __syncthreads();                        // smem reads of prior round done
+      CUTE_UNROLL
+      for (int i = 0; i < size(accum); i += 2) {
+        int rm = get<0>(cD(i));
+        if (rm < row_lo || rm >= row_lo + RBLK) continue;
+        int rn = get<1>(cD(i));
+        int mg = m0 + rm;
+        int ng = n0 + rn;
+        float sx = s_x[min(mg, M - 1)];
+        __half2 h = __floats2half2_rn(accum(i) * sx * s_w[min(ng, N - 1)],
+                                      accum(i + 1) * sx * s_w[min(ng + 1, N - 1)]);
+        *reinterpret_cast<__half2*>(&sEp[(rm - row_lo) * EROW + rn]) = h;
+      }
+      __syncthreads();
+      constexpr int CH = BN / 8;              // 16B chunks per row
+      for (int i = tid; i < RBLK * CH; i += NT_C) {
+        int r = i / CH, c = i % CH;
+        int mg = m0 + row_lo + r;
+        int ng = n0 + c * 8;
+        if (mg >= M) continue;
+        if (ng + 8 <= N) {
+          *reinterpret_cast<uint4*>(&D[(size_t)mg * N + ng]) =
+              *reinterpret_cast<const uint4*>(&sEp[r * EROW + c * 8]);
+        } else {
+          for (int j = 0; j < 8 && ng + j < N; ++j)
+            D[(size_t)mg * N + ng + j] = sEp[r * EROW + c * 8 + j];
+        }
+      }
+    }
+  } else {  // generic fallback: direct predicated half2/scalar stores
+    CUTE_UNROLL
+    for (int i = 0; i < size(accum); i += 2) {
+      int mg = m0 + get<0>(cD(i));
+      int ng = n0 + get<1>(cD(i));
+      if (mg >= M) continue;
+      float sx = s_x[mg];
+      if (ng + 1 < N) {
+        __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
+                                      accum(i + 1) * sx * s_w[ng + 1]);
+        *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
+      } else if (ng < N) {
+        D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+      }
     }
   }
 }
@@ -876,7 +927,18 @@ torch::Tensor b1_fused(torch::Tensor Al, torch::Tensor SFAl,
                                                   // N=8192 the 16x64 grid is enough
                                                   // (q 0.0199 vs 0.0214, down 0.0338
                                                   // vs 0.0393; gate prefers cfg1)
-    else if (M <= 256) cf = (N >= 4096) ? 4 : 3;
+    else if (M <= 256) {
+      // Round-2 T3 fix (t3_sweep.csv, M=256): the old rule (N>=4096 -> 4, else 3)
+      // left q_3B at band 147% / down_3B at 239%. Measured best per class:
+      //   N>=4096: WS kernel (gate M=256 cfg10 0.0443 vs cfg4 0.0526)
+      //   2048<=N<4096, long K: 64x128 (down_3B cfg6 0.0659 vs cfg3 0.128)
+      //   2048<=N<4096, short K: 64x64 (q_1B cfg7 0.0315 vs cfg3 0.038; q_3B tie w/ 6)
+      //   N<2048 (k/v): grid count first -> keep 32x64
+      if (!kmul2_ok)      cf = (N >= 4096) ? 4 : 3;
+      else if (N >= 4096) cf = 10;
+      else if (N >= 2048) cf = (K_low + K_high >= 4096) ? 6 : 7;
+      else                cf = 3;
+    }
     else if (ctas128 < 160) cf = kmul2_ok ? 6 : 3; // small-N prefill (k/v: 64 CTAs
                                                    // at 128x128 underfill 188 SMs;
                                                    // 64x128+KMUL2 0.032 vs 0.048)
@@ -884,15 +946,19 @@ torch::Tensor b1_fused(torch::Tensor Al, torch::Tensor SFAl,
                                                    // (gate 0.135 vs cfg5 0.137,
                                                    // down3B 0.215 vs 0.231)
   }
-  TORCH_CHECK((cf >= 1 && cf <= 6) || cf == 10, "cfg must be 0..6 or 10");
-  if (cf == 5 || cf == 6 || cf == 10)
-    TORCH_CHECK(kmul2_ok, "cfg 5/6/10 (KMUL=2) needs K_low%128==0 and K_high%64==0");
+  TORCH_CHECK((cf >= 1 && cf <= 7) || cf == 10, "cfg must be 0..7 or 10");
+  if (cf == 5 || cf == 6 || cf == 7 || cf == 10)
+    TORCH_CHECK(kmul2_ok, "cfg 5/6/7/10 (KMUL=2) needs K_low%128==0 and K_high%64==0");
 
   int st = (int)stages;
   // Auto stages (measured): pipeline (3) wins when the grid underfills the SMs
   // (M<=256); at M=2048 a 2-stage pipeline wins for the homogeneous KMUL=2
   // kernels and the 4-deep variant (st=3) wins for the WS kernel (cfg 10).
-  if (st == 0) st = (M <= 256) ? 3 : ((cf == 10) ? 3 : ((cf >= 5) ? 2 : 1));
+  // M<=256 + cfg10: 3-deep (st=2) measured best (gate M=256 0.0443 vs 0.0452).
+  if (st == 0) {
+    if (M <= 256) st = (cf == 10) ? 2 : 3;
+    else st = (cf == 10) ? 3 : ((cf >= 5) ? 2 : 1);
+  }
   TORCH_CHECK(st >= 1 && st <= 3, "stages must be 0..3");
 
   const int Mi = (int)M, Ni = (int)N, Kl = (int)K_low, Kh = (int)K_high;
@@ -910,6 +976,8 @@ torch::Tensor b1_fused(torch::Tensor Al, torch::Tensor SFAl,
     case 5: B1_CFG(128, 128, 2, 4, 2); break;  // prefill, 2 MMA-K per chunk
     case 6: B1_CFG(64, 128, 2, 4, 2); break;   // prefill probe: halve accum regs
                                                // (occupancy 2->3 CTA/SM target)
+    case 7: B1_CFG(64, 64, 2, 2, 2); break;    // mid-M tile (M~256): grid ~1 full
+                                               // wave at N=3072, 34KB smem/3st
     case 10:  // warp-specialized: stages arg 3 -> 4-deep (90KB), else 3-deep (68KB)
       { if (st == 3) launch_b1_ws<128, 128, 2, 4, 4, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh,
                                                         Bh, SFBh, s_x, s_w, D, Mi, Ni,
