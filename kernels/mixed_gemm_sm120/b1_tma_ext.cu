@@ -122,6 +122,22 @@ using ElemFP8   = uint8_t;
 static constexpr int K_MX  = 32;
 static constexpr int VEC_MX = 32;
 
+// NVFP4 (Phase-1) atom + constants — RECIPE B dual-phase TMA (round-5 T1).
+using AtomNV = SM120::BLOCKSCALED::SM120_16x8x64_TN_VS<
+    cutlass::float_e2m1_t, cutlass::float_e2m1_t, float, cutlass::float_ue4m3_t, 16>;
+using ElemSF_NV = cutlass::float_ue4m3_t;    // 8-bit
+using ElemFP4   = cute::uint4_t;              // raw 4-bit code (bit-copied)
+static constexpr int K_NV  = 64;
+static constexpr int VEC_NV = 16;
+
+// Compact, UNSWIZZLED (SW_NONE) ring stage: (ROWS, CHB bytes, STAGES), row-major.
+// TMA writes this box directly (no swizzle -> no SU4 vectorization constraint);
+// the proven consume4/consume8 ldmatrix paths read it with a plain compact stride.
+template <int ROWS, int CHB, int STAGES>
+using SmemLayoutFlat = decltype(make_layout(
+    make_shape(Int<ROWS>{}, Int<CHB>{}, Int<STAGES>{}),
+    make_stride(Int<CHB>{}, Int<1>{}, Int<ROWS * CHB>{})));
+
 static inline void check_cuda(cudaError_t e, const char* what) {
   TORCH_CHECK(e == cudaSuccess, what, ": ", cudaGetErrorString(e));
 }
@@ -329,6 +345,314 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 }
 
 // ============================================================================
+// Dual-phase (NVFP4 + MXFP8) TMA kernel — RECIPE B (round-5 T1).
+// Both phases TMA-load A/B DATA into a COMPACT (SW_NONE, unswizzled) smem ring
+// (CHB = 32*KMUL bytes/row/chunk, identical for both phases), consumed by the
+// PROVEN non-TMA ldmatrix paths: consume4 (uint4_t view + SM75_U32x4_LDSM_N) for
+// NVFP4, consume8 (uint8 view + SM75) for MXFP8. SW_NONE sidesteps the
+// SM100_SU4_DU8x16 swizzle-vectorization blocker that killed round-4's swizzled
+// fp4 TMA. One elected producer thread issues both TMAs/stage; the mbarrier ring
+// serializes the phase boundary (stage s consumed by the same g that loaded it,
+// phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
+// ============================================================================
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL,
+          class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+__global__ void __launch_bounds__(WM * WN * 32 + 32)
+b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
+                   CUTE_GRID_CONSTANT TmaBl const tma_bl,
+                   CUTE_GRID_CONSTANT TmaAh const tma_ah,
+                   CUTE_GRID_CONSTANT TmaBh const tma_bh,
+                   const uint8_t* __restrict__ SFAl, const uint8_t* __restrict__ SFBl,
+                   const uint8_t* __restrict__ SFAh, const uint8_t* __restrict__ SFBh,
+                   const float* __restrict__ s_x, const float* __restrict__ s_w,
+                   __half* __restrict__ D, int M, int N, int K_low, int K_high) {
+  constexpr int NT_C  = WM * WN * 32;
+  constexpr int NT_P  = 32;                 // one producer warp
+  constexpr int CHB   = K_MX * KMUL;        // bytes/row/chunk (both phases)
+  constexpr int KCH4  = K_NV * KMUL;        // fp4 codes/chunk  (= 2*CHB)
+  constexpr int KCH8  = K_MX * KMUL;        // fp8 bytes/chunk  (= CHB)
+  constexpr int NBLK4 = 4 * KMUL;           // fp4 SF bytes/row/chunk
+  constexpr int NBLK8 = KMUL;               // fp8 SF bytes/row/chunk
+  constexpr int A_ST   = BM * CHB;          // ring stage stride (bytes)
+  constexpr int B_ST   = BN * CHB;
+  constexpr int SFA_ST = BM * NBLK4;        // union SF buffer sized for fp4
+  constexpr int SFB_ST = BN * NBLK4;
+
+  using LA = SmemLayoutFlat<BM, CHB, STAGES>;
+  using LB = SmemLayoutFlat<BN, CHB, STAGES>;
+  __shared__ alignas(1024) uint8_t sA_b[cosize_v<LA>];
+  __shared__ alignas(1024) uint8_t sB_b[cosize_v<LB>];
+  __shared__ alignas(4) uint8_t sSFA_b[STAGES * SFA_ST];
+  __shared__ alignas(4) uint8_t sSFB_b[STAGES * SFB_ST];
+  __shared__ alignas(8) uint64_t mbar[2 * STAGES];
+
+  const int tid = threadIdx.x;
+  const int pm = blockIdx.x, pn = blockIdx.y;
+  const int m0 = pm * BM, n0 = pn * BN;
+  const int n1 = K_low / KCH4;              // fp4 chunks
+  const int n2 = K_high / KCH8;             // fp8 chunks
+  const int ntot = n1 + n2;
+
+  Tensor sA = make_tensor(make_smem_ptr(sA_b), LA{});   // (BM,CHB,STAGES) compact
+  Tensor sB = make_tensor(make_smem_ptr(sB_b), LB{});
+  Tensor mAl = tma_al.get_tma_tensor(make_shape(M, K_low / 2));
+  Tensor mBl = tma_bl.get_tma_tensor(make_shape(N, K_low / 2));
+  Tensor mAh = tma_ah.get_tma_tensor(make_shape(M, K_high));
+  Tensor mBh = tma_bh.get_tma_tensor(make_shape(N, K_high));
+  auto cta_al = tma_al.get_slice(Int<0>{});
+  auto cta_bl = tma_bl.get_slice(Int<0>{});
+  auto cta_ah = tma_ah.get_slice(Int<0>{});
+  auto cta_bh = tma_bh.get_slice(Int<0>{});
+  constexpr uint32_t TX = (uint32_t)(BM * CHB + BN * CHB);
+
+  if (tid == 0) {
+    CUTE_UNROLL
+    for (int s = 0; s < STAGES; ++s) {
+      mbar_init(&mbar[s], NT_P);
+      mbar_init(&mbar[STAGES + s], NT_C);
+    }
+  }
+  __syncthreads();
+
+  if (tid >= NT_C) {
+    const int ptid = tid - NT_C;
+    for (int g = 0; g < ntot; ++g) {
+      const int s = g % STAGES;
+      if (g >= STAGES) mbar_wait(&mbar[STAGES + s], ((g / STAGES) - 1) & 1);
+      const bool f4 = (g < n1);
+      const int c = f4 ? g : (g - n1);
+      uint8_t* dSFA = sSFA_b + s * SFA_ST;
+      uint8_t* dSFB = sSFB_b + s * SFB_ST;
+      if (f4) {
+        const int Knb = K_low / VEC_NV;
+        const int kb0 = c * NBLK4;
+        for (int i = ptid; i < BM * NBLK4; i += NT_P) {
+          int row = i / NBLK4, b = i % NBLK4; int mg = m0 + row;
+          dSFA[i] = (mg < M) ? SFAl[(size_t)mg * Knb + kb0 + b] : 0;
+        }
+        for (int i = ptid; i < BN * NBLK4; i += NT_P) {
+          int row = i / NBLK4, b = i % NBLK4; int ng = n0 + row;
+          dSFB[i] = (ng < N) ? SFBl[(size_t)ng * Knb + kb0 + b] : 0;
+        }
+      } else {
+        const int Knb = K_high / VEC_MX;
+        const int kb0 = c * NBLK8;
+        for (int i = ptid; i < BM * NBLK8; i += NT_P) {
+          int row = i / NBLK8, b = i % NBLK8; int mg = m0 + row;
+          dSFA[i] = (mg < M) ? SFAh[(size_t)mg * Knb + kb0 + b] : 0;
+        }
+        for (int i = ptid; i < BN * NBLK8; i += NT_P) {
+          int row = i / NBLK8, b = i % NBLK8; int ng = n0 + row;
+          dSFB[i] = (ng < N) ? SFBh[(size_t)ng * Knb + kb0 + b] : 0;
+        }
+      }
+      if (ptid == 0) {
+        mbar_expect(&mbar[s], TX);
+        if (f4) {
+          Tensor gA = local_tile(mAl, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(pm, c));
+          Tensor gB = local_tile(mBl, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(pn, c));
+          copy(tma_al.with(mbar[s]), cta_al.partition_S(gA), cta_al.partition_D(sA(_, _, s)));
+          copy(tma_bl.with(mbar[s]), cta_bl.partition_S(gB), cta_bl.partition_D(sB(_, _, s)));
+        } else {
+          Tensor gA = local_tile(mAh, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(pm, c));
+          Tensor gB = local_tile(mBh, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(pn, c));
+          copy(tma_ah.with(mbar[s]), cta_ah.partition_S(gA), cta_ah.partition_D(sA(_, _, s)));
+          copy(tma_bh.with(mbar[s]), cta_bh.partition_S(gB), cta_bh.partition_D(sB(_, _, s)));
+        }
+      } else {
+        mbar_arrive(&mbar[s]);
+      }
+    }
+    return;
+  }
+
+  // ---------------- consumers ----------------
+  using TiledNV = decltype(make_tiled_mma(AtomNV{}, Layout<Shape<Int<WM>, Int<WN>, _1>>{}));
+  using TiledMX = decltype(make_tiled_mma(AtomMX{}, Layout<Shape<Int<WM>, Int<WN>, _1>>{}));
+  TiledNV mma_nv; TiledMX mma_mx;
+  Tensor accum = partition_fragment_C(mma_nv, Shape<Int<BM>, Int<BN>>{});
+  static_assert(cute::is_same_v<
+      decltype(partition_fragment_C(TiledNV{}, Shape<Int<BM>, Int<BN>>{}).layout()),
+      decltype(partition_fragment_C(TiledMX{}, Shape<Int<BM>, Int<BN>>{}).layout())>,
+      "NV/MX tiled MMAs must partition C identically to share the accumulator");
+  clear(accum);
+  auto thr_nv = mma_nv.get_thread_slice(tid);
+  auto thr_mx = mma_mx.get_thread_slice(tid);
+  auto tile_nv = tile_shape(mma_nv);
+  auto tile_mx = tile_shape(mma_mx);
+  auto tcopy_SFA4 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_NV>{},
+      tt_get_layoutSFA_TV(mma_nv), make_shape(size<0>(tile_nv), size<2>(tile_nv)));
+  auto tcopy_SFB4 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_NV>{},
+      tt_get_layoutSFB_TV(mma_nv), make_shape(size<1>(tile_nv), size<2>(tile_nv)));
+  auto tcopy_SFA8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
+      tt_get_layoutSFA_TV(mma_mx), make_shape(size<0>(tile_mx), size<2>(tile_mx)));
+  auto tcopy_SFB8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
+      tt_get_layoutSFB_TV(mma_mx), make_shape(size<1>(tile_mx), size<2>(tile_mx)));
+  auto tcopy_A4 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP4>{}, mma_nv);
+  auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP4>{}, mma_nv);
+  auto tcopy_A8 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP8>{}, mma_mx);
+  auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP8>{}, mma_mx);
+
+  auto consume4 = [&](int s) {
+    Tensor sAv = make_tensor(recast_ptr<ElemFP4>(make_smem_ptr(sA_b + s * A_ST)),
+        make_layout(make_shape(Int<BM>{}, Int<KCH4>{}), make_stride(Int<KCH4>{}, Int<1>{})));
+    Tensor sBv = make_tensor(recast_ptr<ElemFP4>(make_smem_ptr(sB_b + s * B_ST)),
+        make_layout(make_shape(Int<BN>{}, Int<KCH4>{}), make_stride(Int<KCH4>{}, Int<1>{})));
+    Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+        make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                    make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+    Tensor sSFB = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+        make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                    make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+    Tensor tCrA = thr_nv.partition_fragment_A(sAv);
+    Tensor tCrB = thr_nv.partition_fragment_B(sBv);
+    copy(tcopy_A4, tcopy_A4.get_thread_slice(tid).partition_S(sAv),
+         tcopy_A4.get_thread_slice(tid).retile_D(tCrA));
+    copy(tcopy_B4, tcopy_B4.get_thread_slice(tid).partition_S(sBv),
+         tcopy_B4.get_thread_slice(tid).retile_D(tCrB));
+    fp4_shift_A(typename TiledNV::MMA_Op{}, tCrA);
+    fp4_shift_B(typename TiledNV::MMA_Op{}, tCrB);
+    Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_nv);
+    Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_nv);
+    copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sSFA),
+         tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA));
+    copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sSFB),
+         tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB));
+    mbar_arrive(&mbar[STAGES + s]);     // T2a early stage release (frags in regs)
+    CUTE_UNROLL
+    for (int kb = 0; kb < KMUL; ++kb)
+      cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                 make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+  };
+  auto consume8 = [&](int s) {
+    Tensor sAv = make_tensor(recast_ptr<ElemFP8>(make_smem_ptr(sA_b + s * A_ST)),
+        make_layout(make_shape(Int<BM>{}, Int<KCH8>{}), make_stride(Int<KCH8>{}, Int<1>{})));
+    Tensor sBv = make_tensor(recast_ptr<ElemFP8>(make_smem_ptr(sB_b + s * B_ST)),
+        make_layout(make_shape(Int<BN>{}, Int<KCH8>{}), make_stride(Int<KCH8>{}, Int<1>{})));
+    Tensor sSFA = make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+        make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                    make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{}))));
+    Tensor sSFB = make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+        make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                    make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{}))));
+    Tensor tCrA = thr_mx.partition_fragment_A(sAv);
+    Tensor tCrB = thr_mx.partition_fragment_B(sBv);
+    copy(tcopy_A8, tcopy_A8.get_thread_slice(tid).partition_S(sAv),
+         tcopy_A8.get_thread_slice(tid).retile_D(tCrA));
+    copy(tcopy_B8, tcopy_B8.get_thread_slice(tid).partition_S(sBv),
+         tcopy_B8.get_thread_slice(tid).retile_D(tCrB));
+    fp4_shift_A(typename TiledMX::MMA_Op{}, tCrA);
+    fp4_shift_B(typename TiledMX::MMA_Op{}, tCrB);
+    Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_mx);
+    Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_mx);
+    copy(tcopy_SFA8.get_thread_slice(tid).partition_S(sSFA),
+         tcopy_SFA8.get_thread_slice(tid).retile_D(tCrSFA));
+    copy(tcopy_SFB8.get_thread_slice(tid).partition_S(sSFB),
+         tcopy_SFB8.get_thread_slice(tid).retile_D(tCrSFB));
+    mbar_arrive(&mbar[STAGES + s]);
+    CUTE_UNROLL
+    for (int kb = 0; kb < KMUL; ++kb)
+      cute::gemm(mma_mx, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                 make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+  };
+
+  for (int g = 0; g < ntot; ++g) {
+    const int s = g % STAGES;
+    mbar_wait(&mbar[s], (g / STAGES) & 1);
+    if (g < n1) consume4(s); else consume8(s);
+  }
+
+  // Epilogue: accum * s_x[m] * s_w[n] -> fp16 (direct half2 store).
+  Tensor cD = thr_nv.partition_C(make_identity_tensor(Shape<Int<BM>, Int<BN>>{}));
+  CUTE_UNROLL
+  for (int i = 0; i < size(accum); i += 2) {
+    int mg = m0 + get<0>(cD(i));
+    int ng = n0 + get<1>(cD(i));
+    if (mg >= M) continue;
+    float sx = s_x[mg];
+    if (ng + 1 < N) {
+      __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
+                                    accum(i + 1) * sx * s_w[ng + 1]);
+      *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
+    } else if (ng < N) {
+      D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+    }
+  }
+}
+
+// ============================================================================
+// Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
+// ============================================================================
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL>
+static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
+                            const torch::Tensor& Bl, const torch::Tensor& SFBl,
+                            const torch::Tensor& Ah, const torch::Tensor& SFAh,
+                            const torch::Tensor& Bh, const torch::Tensor& SFBh,
+                            const torch::Tensor& s_x, const torch::Tensor& s_w,
+                            torch::Tensor& D, int M, int N, int K_low, int K_high,
+                            cudaStream_t stream) {
+  constexpr int CHB = K_MX * KMUL;
+  using LA = SmemLayoutFlat<BM, CHB, STAGES>;
+  using LB = SmemLayoutFlat<BN, CHB, STAGES>;
+  // fp4 gmem is packed [M, K_low/2] bytes; fp8 gmem is [M, K_high] bytes.
+  // When a phase is empty (K_low==0 or K_high==0) build a never-read placeholder
+  // descriptor off the other phase's pointer so make_tma_copy stays valid.
+  const int Kl2 = (K_low > 0) ? K_low / 2 : CHB;
+  const int Khb = (K_high > 0) ? K_high : CHB;
+  const uint8_t* pAl = (K_low  > 0) ? Al.data_ptr<uint8_t>() : Ah.data_ptr<uint8_t>();
+  const uint8_t* pBl = (K_low  > 0) ? Bl.data_ptr<uint8_t>() : Bh.data_ptr<uint8_t>();
+  const uint8_t* pAh = (K_high > 0) ? Ah.data_ptr<uint8_t>() : Al.data_ptr<uint8_t>();
+  const uint8_t* pBh = (K_high > 0) ? Bh.data_ptr<uint8_t>() : Bl.data_ptr<uint8_t>();
+  Tensor mAl = make_tensor(make_gmem_ptr(pAl), make_shape(M, Kl2), make_stride(Kl2, _1{}));
+  Tensor mBl = make_tensor(make_gmem_ptr(pBl), make_shape(N, Kl2), make_stride(Kl2, _1{}));
+  Tensor mAh = make_tensor(make_gmem_ptr(pAh), make_shape(M, Khb), make_stride(Khb, _1{}));
+  Tensor mBh = make_tensor(make_gmem_ptr(pBh), make_shape(N, Khb), make_stride(Khb, _1{}));
+  auto tma_al = make_tma_copy(SM90_TMA_LOAD{}, mAl, LA{}(_, _, Int<0>{}),
+                              make_shape(Int<BM>{}, Int<CHB>{}), _1{});
+  auto tma_bl = make_tma_copy(SM90_TMA_LOAD{}, mBl, LB{}(_, _, Int<0>{}),
+                              make_shape(Int<BN>{}, Int<CHB>{}), _1{});
+  auto tma_ah = make_tma_copy(SM90_TMA_LOAD{}, mAh, LA{}(_, _, Int<0>{}),
+                              make_shape(Int<BM>{}, Int<CHB>{}), _1{});
+  auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
+                              make_shape(Int<BN>{}, Int<CHB>{}), _1{});
+  dim3 grid((M + BM - 1) / BM, (N + BN - 1) / BN);
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL,
+                     decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
+      <<<grid, WM * WN * 32 + 32, 0, stream>>>(
+          tma_al, tma_bl, tma_ah, tma_bh,
+          SFAl.data_ptr<uint8_t>(), SFBl.data_ptr<uint8_t>(),
+          SFAh.data_ptr<uint8_t>(), SFBh.data_ptr<uint8_t>(),
+          s_x.data_ptr<float>(), s_w.data_ptr<float>(),
+          reinterpret_cast<__half*>(D.data_ptr<at::Half>()), M, N, K_low, K_high);
+}
+
+torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
+                                torch::Tensor Bl, torch::Tensor SFBl,
+                                torch::Tensor Ah, torch::Tensor SFAh,
+                                torch::Tensor Bh, torch::Tensor SFBh,
+                                torch::Tensor s_x, torch::Tensor s_w,
+                                int64_t M, int64_t N, int64_t K_low, int64_t K_high,
+                                int64_t stages) {
+  TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
+  TORCH_CHECK(K_low % (2 * K_NV) == 0, "K_low must be divisible by 128 (KMUL=2)");
+  TORCH_CHECK(K_high % (2 * K_MX) == 0, "K_high must be divisible by 64 (KMUL=2)");
+  Al = Al.contiguous(); Bl = Bl.contiguous(); SFAl = SFAl.contiguous(); SFBl = SFBl.contiguous();
+  Ah = Ah.contiguous(); Bh = Bh.contiguous(); SFAh = SFAh.contiguous(); SFBh = SFBh.contiguous();
+  s_x = s_x.contiguous(); s_w = s_w.contiguous();
+  auto dev = Al.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
+  int st = (int)stages; if (st == 0) st = 4;
+  const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+  if (st == 3)      launch_tma_dual<128, 128, 2, 4, 3, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  else if (st == 5) launch_tma_dual<128, 128, 2, 4, 5, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  else              launch_tma_dual<128, 128, 2, 4, 4, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  check_cuda(cudaGetLastError(), "b1_tma_dual launch");
+  check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual sync");
+  return D;
+}
+
+// ============================================================================
 // Host entry — pure MXFP8 (Phase-2 only) TMA kernel.
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0>
@@ -429,4 +753,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("s_x"), py::arg("s_w"),
         py::arg("M"), py::arg("N"), py::arg("K_high"), py::arg("stages") = 0,
         py::arg("minb") = 1, py::arg("tile") = 0, py::arg("swz") = 0);
+  m.def("b1_fused_tma_dual", &b1_fused_tma_dual,
+        "B1 dual-phase (NVFP4+MXFP8) TMA fused GEMM * s_x * s_w -> fp16 (SM120, RECIPE B)",
+        py::arg("Al"), py::arg("SFAl"), py::arg("Bl"), py::arg("SFBl"),
+        py::arg("Ah"), py::arg("SFAh"), py::arg("Bh"), py::arg("SFBh"),
+        py::arg("s_x"), py::arg("s_w"),
+        py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
+        py::arg("stages") = 0);
 }
