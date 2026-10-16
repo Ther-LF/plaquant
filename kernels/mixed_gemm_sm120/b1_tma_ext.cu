@@ -162,8 +162,8 @@ using SmemLayoutB_t = decltype(tile_to_shape(
 // ============================================================================
 // Phase-2 (MXFP8) warp-specialized kernel with TMA data loads.
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, class TmaA, class TmaB>
-__global__ void __launch_bounds__(WM * WN * 32 + 32)
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ, class TmaA, class TmaB>
+__global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
                  CUTE_GRID_CONSTANT TmaB const tma_b,
                  const uint8_t* __restrict__ SFAh, const uint8_t* __restrict__ SFBh,
@@ -185,8 +185,26 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
   __shared__ alignas(8) uint64_t mbar[2 * STAGES];
 
   const int tid = threadIdx.x;
-  const int m0 = blockIdx.x * BM;
-  const int n0 = blockIdx.y * BN;
+  // CTA rasterization for L2 reuse (T3). swz_group<=0: native 2D grid.
+  // swz_group=G>0: 1D grid, Triton-style group-M ordering — within a panel of G
+  // consecutive M-tiles, sweep all N-tiles (keeps G A-tiles hot across N; shrinks
+  // the per-wave working set vs the native all-M sweep on large N).
+  int pm, pn;
+  if constexpr (SWZ <= 0) {
+    pm = blockIdx.x; pn = blockIdx.y;
+  } else {
+    const int num_m = (M + BM - 1) / BM;
+    const int num_n = (N + BN - 1) / BN;
+    const int pid = blockIdx.x;
+    const int in_group = SWZ * num_n;
+    const int gid = pid / in_group;
+    const int first_m = gid * SWZ;
+    const int gsize = min(num_m - first_m, SWZ);
+    pm = first_m + (pid % gsize);
+    pn = (pid % in_group) / gsize;
+  }
+  const int m0 = pm * BM;
+  const int n0 = pn * BN;
   const int n2 = K_high / KCH;             // chunks
   const int Knb = K_high / VEC_MX;         // gmem SF blocks/row
 
@@ -228,8 +246,8 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
         dSFB[i] = (ng < N) ? SFBh[(size_t)ng * Knb + kb0 + b] : 0;
       }
       if (ptid == 0) {
-        Tensor gA_g = local_tile(mA, make_shape(Int<BM>{}, Int<KCH>{}), make_coord(blockIdx.x, g)); // (BM,KCH)
-        Tensor gB_g = local_tile(mB, make_shape(Int<BN>{}, Int<KCH>{}), make_coord(blockIdx.y, g));
+        Tensor gA_g = local_tile(mA, make_shape(Int<BM>{}, Int<KCH>{}), make_coord(pm, g)); // (BM,KCH)
+        Tensor gB_g = local_tile(mB, make_shape(Int<BN>{}, Int<KCH>{}), make_coord(pn, g));
         Tensor tAgA = cta_a.partition_S(gA_g);
         Tensor tAsA = cta_a.partition_D(sA(_, _, s));
         Tensor tBgB = cta_b.partition_S(gB_g);
@@ -313,7 +331,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // ============================================================================
 // Host entry — pure MXFP8 (Phase-2 only) TMA kernel.
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0>
 static void launch_tma_mx(const torch::Tensor& Ah, const torch::Tensor& SFAh,
                           const torch::Tensor& Bh, const torch::Tensor& SFBh,
                           const torch::Tensor& s_x, const torch::Tensor& s_w,
@@ -329,8 +347,27 @@ static void launch_tma_mx(const torch::Tensor& Ah, const torch::Tensor& SFAh,
                              make_shape(Int<BM>{}, Int<K_MX * KMUL>{}), _1{});
   auto tma_b = make_tma_copy(SM90_TMA_LOAD{}, mB, LB{}(_, _, Int<0>{}),
                              make_shape(Int<BN>{}, Int<K_MX * KMUL>{}), _1{});
-  dim3 grid((M + BM - 1) / BM, (N + BN - 1) / BN);
-  b1_tma_mx_kernel<BM, BN, WM, WN, STAGES, KMUL, decltype(tma_a), decltype(tma_b)>
+  const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
+  // SWZ>0 -> flat 1D grid (grouped decode inside the kernel).
+  dim3 grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
+  auto kptr = &b1_tma_mx_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, decltype(tma_a), decltype(tma_b)>;
+  if (getenv("TMA_ATTRS")) {
+    static bool once = false;
+    if (!once) {
+      int dev = 0; cudaGetDevice(&dev);
+      int smem_sm = 0, regs_sm = 0;
+      cudaDeviceGetAttribute(&smem_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, dev);
+      cudaDeviceGetAttribute(&regs_sm, cudaDevAttrMaxRegistersPerMultiprocessor, dev);
+      printf("[dev] smemPerSM=%d regsPerSM=%d\n", smem_sm, regs_sm);
+      once = true;
+    }
+    cudaFuncAttributes fa; cudaFuncGetAttributes(&fa, kptr);
+    int nb = 0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, kptr, WM * WN * 32 + 32, 0);
+    printf("[attrs] BM=%d BN=%d st=%d KMUL=%d MINB=%d SWZ=%d  smem=%zu regs=%d localB=%zu maxBlocks/SM=%d\n",
+           BM, BN, STAGES, KMUL, MINB, SWZ, fa.sharedSizeBytes, fa.numRegs, fa.localSizeBytes, nb);
+    fflush(stdout);
+  }
+  b1_tma_mx_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, decltype(tma_a), decltype(tma_b)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_a, tma_b, SFAh.data_ptr<uint8_t>(), SFBh.data_ptr<uint8_t>(),
           s_x.data_ptr<float>(), s_w.data_ptr<float>(),
@@ -341,7 +378,7 @@ torch::Tensor b1_fused_tma_mx(torch::Tensor Ah, torch::Tensor SFAh,
                               torch::Tensor Bh, torch::Tensor SFBh,
                               torch::Tensor s_x, torch::Tensor s_w,
                               int64_t M, int64_t N, int64_t K_high,
-                              int64_t stages) {
+                              int64_t stages, int64_t minb, int64_t tile, int64_t swz) {
   TORCH_CHECK(Ah.is_cuda() && Bh.is_cuda(), "cuda");
   TORCH_CHECK(K_high % (2 * K_MX) == 0, "K_high must be divisible by 64 (KMUL=2)");
   Ah = Ah.contiguous(); Bh = Bh.contiguous();
@@ -352,9 +389,34 @@ torch::Tensor b1_fused_tma_mx(torch::Tensor Ah, torch::Tensor SFAh,
   auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
   int st = (int)stages; if (st == 0) st = 4;
   const int Mi = M, Ni = N, Kh = K_high;
-  if (st == 3)      launch_tma_mx<128, 128, 2, 4, 3, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
-  else if (st == 5) launch_tma_mx<128, 128, 2, 4, 5, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
-  else              launch_tma_mx<128, 128, 2, 4, 4, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  const int sw = (int)swz;
+  // tile: 0 = 128x128 (default), 1 = 128x64 (half-B / half-accum -> 2 CTA/SM).
+  if (tile == 1) {
+    // 128x64, 8 warps (WM=2,WN=4): BN=64 halves B-smem + accumulator regs.
+    if (st == 3)      launch_tma_mx<128, 64, 2, 4, 3, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else if (st == 5) launch_tma_mx<128, 64, 2, 4, 5, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else              launch_tma_mx<128, 64, 2, 4, 4, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (st == 3 && minb == 2) {
+    launch_tma_mx<128, 128, 2, 4, 3, 2, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (sw == 4) {
+    if (st == 3)      launch_tma_mx<128, 128, 2, 4, 3, 2, 1, 4>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else if (st == 5) launch_tma_mx<128, 128, 2, 4, 5, 2, 1, 4>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else              launch_tma_mx<128, 128, 2, 4, 4, 2, 1, 4>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (sw == 8) {
+    if (st == 3)      launch_tma_mx<128, 128, 2, 4, 3, 2, 1, 8>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else if (st == 5) launch_tma_mx<128, 128, 2, 4, 5, 2, 1, 8>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else              launch_tma_mx<128, 128, 2, 4, 4, 2, 1, 8>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (sw == 2) {
+    if (st == 3)      launch_tma_mx<128, 128, 2, 4, 3, 2, 1, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else if (st == 5) launch_tma_mx<128, 128, 2, 4, 5, 2, 1, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+    else              launch_tma_mx<128, 128, 2, 4, 4, 2, 1, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (st == 3) {
+    launch_tma_mx<128, 128, 2, 4, 3, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else if (st == 5) {
+    launch_tma_mx<128, 128, 2, 4, 5, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  } else {
+    launch_tma_mx<128, 128, 2, 4, 4, 2>(Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kh, stream);
+  }
   check_cuda(cudaGetLastError(), "b1_tma_mx launch");
   check_cuda(cudaStreamSynchronize(stream), "b1_tma_mx sync");
   return D;
@@ -365,5 +427,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "B1 Phase-2 (MXFP8) TMA fused GEMM * s_x * s_w -> fp16 (SM120)",
         py::arg("Ah"), py::arg("SFAh"), py::arg("Bh"), py::arg("SFBh"),
         py::arg("s_x"), py::arg("s_w"),
-        py::arg("M"), py::arg("N"), py::arg("K_high"), py::arg("stages") = 0);
+        py::arg("M"), py::arg("N"), py::arg("K_high"), py::arg("stages") = 0,
+        py::arg("minb") = 1, py::arg("tile") = 0, py::arg("swz") = 0);
 }
