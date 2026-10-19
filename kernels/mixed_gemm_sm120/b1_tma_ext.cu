@@ -378,12 +378,16 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   constexpr int SFA_ST = BM * NBLK4;        // union SF buffer sized for fp4
   constexpr int SFB_ST = BN * NBLK4;
 
-  using LA = SmemLayoutFlat<BM, CHB, STAGES>;
-  using LB = SmemLayoutFlat<BN, CHB, STAGES>;
+  // SW64-swizzled ring (same layout the zero-bank-conflict Phase-2 TMA kernel
+  // uses). CHB = K_MX*KMUL = 64 bytes/row/chunk is identical for fp4 and fp8, so
+  // ONE SW64 atom serves both phases; consumers read it via recast (fp4) / direct
+  // (fp8). Round-5 T1 fix: SW_NONE flat ring caused 18-38M ldmatrix bank conflicts.
+  using LA = SmemLayoutA_t<BM, BN, STAGES, KMUL>;
+  using LB = SmemLayoutB_t<BM, BN, STAGES, KMUL>;
   __shared__ alignas(1024) uint8_t sA_b[cosize_v<LA>];
   __shared__ alignas(1024) uint8_t sB_b[cosize_v<LB>];
-  __shared__ alignas(4) uint8_t sSFA_b[STAGES * SFA_ST];
-  __shared__ alignas(4) uint8_t sSFB_b[STAGES * SFB_ST];
+  __shared__ alignas(16) uint8_t sSFA_b[STAGES * SFA_ST];
+  __shared__ alignas(16) uint8_t sSFB_b[STAGES * SFB_ST];
   __shared__ alignas(8) uint64_t mbar[2 * STAGES];
 
   const int tid = threadIdx.x;
@@ -424,26 +428,34 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
       uint8_t* dSFA = sSFA_b + s * SFA_ST;
       uint8_t* dSFB = sSFB_b + s * SFB_ST;
       if (f4) {
+        // Vectorized SF load (round-5 T1): NBLK4=8 contiguous SF bytes/row ->
+        // one coalesced uint64/row (vs 8x 1-byte scalar). Separate gmem->reg and
+        // reg->smem across the unrolled rows gives memory-level parallelism,
+        // cutting the long-scoreboard stall that dominated the fp4 phase.
         const int Knb = K_low / VEC_NV;
-        const int kb0 = c * NBLK4;
-        for (int i = ptid; i < BM * NBLK4; i += NT_P) {
-          int row = i / NBLK4, b = i % NBLK4; int mg = m0 + row;
-          dSFA[i] = (mg < M) ? SFAl[(size_t)mg * Knb + kb0 + b] : 0;
+        const size_t off = (size_t)c * NBLK4;
+        for (int row = ptid; row < BM; row += NT_P) {
+          int mg = m0 + row;
+          uint64_t v = (mg < M) ? *reinterpret_cast<const uint64_t*>(SFAl + (size_t)mg * Knb + off) : 0ull;
+          *reinterpret_cast<uint64_t*>(dSFA + (size_t)row * NBLK4) = v;
         }
-        for (int i = ptid; i < BN * NBLK4; i += NT_P) {
-          int row = i / NBLK4, b = i % NBLK4; int ng = n0 + row;
-          dSFB[i] = (ng < N) ? SFBl[(size_t)ng * Knb + kb0 + b] : 0;
+        for (int row = ptid; row < BN; row += NT_P) {
+          int ng = n0 + row;
+          uint64_t v = (ng < N) ? *reinterpret_cast<const uint64_t*>(SFBl + (size_t)ng * Knb + off) : 0ull;
+          *reinterpret_cast<uint64_t*>(dSFB + (size_t)row * NBLK4) = v;
         }
       } else {
         const int Knb = K_high / VEC_MX;
-        const int kb0 = c * NBLK8;
-        for (int i = ptid; i < BM * NBLK8; i += NT_P) {
-          int row = i / NBLK8, b = i % NBLK8; int mg = m0 + row;
-          dSFA[i] = (mg < M) ? SFAh[(size_t)mg * Knb + kb0 + b] : 0;
+        const size_t off = (size_t)c * NBLK8;
+        for (int row = ptid; row < BM; row += NT_P) {
+          int mg = m0 + row;
+          uint16_t v = (mg < M) ? *reinterpret_cast<const uint16_t*>(SFAh + (size_t)mg * Knb + off) : (uint16_t)0;
+          *reinterpret_cast<uint16_t*>(dSFA + (size_t)row * NBLK8) = v;
         }
-        for (int i = ptid; i < BN * NBLK8; i += NT_P) {
-          int row = i / NBLK8, b = i % NBLK8; int ng = n0 + row;
-          dSFB[i] = (ng < N) ? SFBh[(size_t)ng * Knb + kb0 + b] : 0;
+        for (int row = ptid; row < BN; row += NT_P) {
+          int ng = n0 + row;
+          uint16_t v = (ng < N) ? *reinterpret_cast<const uint16_t*>(SFBh + (size_t)ng * Knb + off) : (uint16_t)0;
+          *reinterpret_cast<uint16_t*>(dSFB + (size_t)row * NBLK8) = v;
         }
       }
       if (ptid == 0) {
@@ -494,10 +506,8 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP8>{}, mma_mx);
 
   auto consume4 = [&](int s) {
-    Tensor sAv = make_tensor(recast_ptr<ElemFP4>(make_smem_ptr(sA_b + s * A_ST)),
-        make_layout(make_shape(Int<BM>{}, Int<KCH4>{}), make_stride(Int<KCH4>{}, Int<1>{})));
-    Tensor sBv = make_tensor(recast_ptr<ElemFP4>(make_smem_ptr(sB_b + s * B_ST)),
-        make_layout(make_shape(Int<BN>{}, Int<KCH4>{}), make_stride(Int<KCH4>{}, Int<1>{})));
+    Tensor sAv = recast<ElemFP4>(sA(_, _, s));   // SW64-swizzled uint8 ring -> fp4 view
+    Tensor sBv = recast<ElemFP4>(sB(_, _, s));
     Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
         make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
                     make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
@@ -525,10 +535,8 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                  make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
   };
   auto consume8 = [&](int s) {
-    Tensor sAv = make_tensor(recast_ptr<ElemFP8>(make_smem_ptr(sA_b + s * A_ST)),
-        make_layout(make_shape(Int<BM>{}, Int<KCH8>{}), make_stride(Int<KCH8>{}, Int<1>{})));
-    Tensor sBv = make_tensor(recast_ptr<ElemFP8>(make_smem_ptr(sB_b + s * B_ST)),
-        make_layout(make_shape(Int<BN>{}, Int<KCH8>{}), make_stride(Int<KCH8>{}, Int<1>{})));
+    Tensor sAv = sA(_, _, s);   // SW64-swizzled uint8 ring (fp8 = uint8, direct)
+    Tensor sBv = sB(_, _, s);
     Tensor sSFA = make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFA_b + s * SFA_ST)),
         make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
                     make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{}))));
@@ -592,8 +600,8 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             torch::Tensor& D, int M, int N, int K_low, int K_high,
                             cudaStream_t stream) {
   constexpr int CHB = K_MX * KMUL;
-  using LA = SmemLayoutFlat<BM, CHB, STAGES>;
-  using LB = SmemLayoutFlat<BN, CHB, STAGES>;
+  using LA = SmemLayoutA_t<BM, BN, STAGES, KMUL>;   // SW64-swizzled (round-5 T1 fix)
+  using LB = SmemLayoutB_t<BM, BN, STAGES, KMUL>;
   // fp4 gmem is packed [M, K_low/2] bytes; fp8 gmem is [M, K_high] bytes.
   // When a phase is empty (K_low==0 or K_high==0) build a never-read placeholder
   // descriptor off the other phase's pointer so make_tma_copy stays valid.
