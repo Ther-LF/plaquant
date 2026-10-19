@@ -640,7 +640,7 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 torch::Tensor Bh, torch::Tensor SFBh,
                                 torch::Tensor s_x, torch::Tensor s_w,
                                 int64_t M, int64_t N, int64_t K_low, int64_t K_high,
-                                int64_t stages) {
+                                int64_t stages, int64_t tile) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   TORCH_CHECK(K_low % (2 * K_NV) == 0, "K_low must be divisible by 128 (KMUL=2)");
   TORCH_CHECK(K_high % (2 * K_MX) == 0, "K_high must be divisible by 64 (KMUL=2)");
@@ -652,9 +652,18 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
   int st = (int)stages; if (st == 0) st = 4;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
-  if (st == 3)      launch_tma_dual<128, 128, 2, 4, 3, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
-  else if (st == 5) launch_tma_dual<128, 128, 2, 4, 5, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
-  else              launch_tma_dual<128, 128, 2, 4, 4, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  // tile: 0=128x128 (default), 1=128x256 (BN=256,WN=8 -> half the N-tiles at
+  // large N; same per-thread accumulator since the extra warps absorb the tile),
+  // 2=256x128 (BM=256,WM=4 -> half the M-tiles). Round-5 T3 grid sweep.
+  if (tile == 1) {
+    TORCH_CHECK(N % 256 == 0, "tile=1 (BN=256) needs N%256==0");
+    launch_tma_dual<128, 256, 2, 8, 3, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);  // st3 only (st4/5 > 99KB smem)
+  } else if (tile == 2) {
+    TORCH_CHECK(M % 256 == 0, "tile=2 (BM=256) needs M%256==0");
+    launch_tma_dual<256, 128, 4, 4, 3, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);  // st3 only (st4/5 > 99KB smem)
+  } else if (st == 3) launch_tma_dual<128, 128, 2, 4, 3, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  else if (st == 5)   launch_tma_dual<128, 128, 2, 4, 5, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
+  else                launch_tma_dual<128, 128, 2, 4, 4, 2>(Al, SFAl, Bl, SFBl, Ah, SFAh, Bh, SFBh, s_x, s_w, D, Mi, Ni, Kl, Kh, stream);
   check_cuda(cudaGetLastError(), "b1_tma_dual launch");
   check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual sync");
   return D;
@@ -767,5 +776,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("Ah"), py::arg("SFAh"), py::arg("Bh"), py::arg("SFBh"),
         py::arg("s_x"), py::arg("s_w"),
         py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
-        py::arg("stages") = 0);
+        py::arg("stages") = 0, py::arg("tile") = 0);
 }
