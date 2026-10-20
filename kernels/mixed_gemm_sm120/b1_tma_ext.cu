@@ -138,6 +138,27 @@ using SmemLayoutFlat = decltype(make_layout(
     make_shape(Int<ROWS>{}, Int<CHB>{}, Int<STAGES>{}),
     make_stride(Int<CHB>{}, Int<1>{}, Int<ROWS * CHB>{})));
 
+// ---- SFILV (round-12): interleaved NV SF smem layout — the CUTLASS Sm1xx
+// block-scaled SF atom (sm120_blockscaled_mma_builder.inl SmemLayoutAtomSFA,
+// mnBasicBlockShape=<32,4>, Blk_SF=4, Blk_Elems=512), ported for the fp4 phase.
+// Attacks round-11's ALU root cause: the flat SF smem (BM,(VEC,NBLK)):(NBLK,(0,1))
+// + DefaultCopy forces the consumer's per-element SF LDS + address math; the
+// interleaved atom + UniversalCopy is a vectorizable TV with near-zero address math.
+// Bit-exact by construction: the (row,block)->scale VALUES are unchanged; only the
+// physical byte order within the per-stage SF buffer changes. Both producer (fill)
+// and consumer (read) index the SAME offset function below, so they stay consistent.
+//   M (128 rows)        : (32,4):(16,4)                [mn basic block 32x4, Blk_Elems=512]
+//   K-elem (128=16vec*8blk): (16,(4,2)):(0,(1,512))    [vec16 bcast; 4 SF/MMA contig; 2 MMA @512]
+// cosize = 1024 bytes == flat SFA_ST(BM*NBLK4) -> no smem-budget change.
+// Guarded to BM=BN=128, KMUL=2 (NBLK4=8). fp8/MX stays flat: its 2-block chunk
+// (NBLK8=KMUL=2) is smaller than CUTLASS Blk_SF=4, so the atom does not tile it
+// (round-12 honest blocker; see report Part 3).
+using SFILV_M   = Layout<Shape<Int<32>,Int<4>>, Stride<Int<16>,Int<4>>>;
+using SFILV_Kw  = Layout<Shape<Int<4>,Int<2>>, Stride<Int<1>,Int<512>>>;            // (row,block) write view
+using SFILV_NVw = decltype(make_layout(SFILV_M{}, SFILV_Kw{}));                     // (128,8)   producer dst
+using SFILV_Kr  = Layout<Shape<Int<16>,Shape<Int<4>,Int<2>>>, Stride<Int<0>,Stride<Int<1>,Int<512>>>>; // vec-bcast
+using SFILV_NVr = decltype(make_layout(SFILV_M{}, SFILV_Kr{}));                     // (128,128) consumer src
+
 static inline void check_cuda(cudaError_t e, const char* what) {
   TORCH_CHECK(e == cudaSuccess, what, ": ", cudaGetErrorString(e));
 }
@@ -405,7 +426,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          int PERSIST, int KPIPE, int SFASYNC, int PINGPONG, int LDBW, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, int KPIPE, int SFASYNC, int PINGPONG, int LDBW, int SFILV, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -514,7 +535,25 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
         // cutting the long-scoreboard stall that dominated the fp4 phase.
         const int Knb = K_low / VEC_NV;
         const size_t off = (size_t)c * NBLK4;
-        if constexpr (SFASYNC) {
+        if constexpr (SFILV) {
+          // round-12: scatter fp4 SF into the interleaved CUTLASS atom layout
+          // (producer side; one warp — not the ALU-bound consumer). Same (row,block)
+          // VALUES as flat -> bit-exact; the consumer reads the identical offsets.
+          Tensor dA = make_tensor(make_smem_ptr(dSFA), SFILV_NVw{});
+          Tensor dB = make_tensor(make_smem_ptr(dSFB), SFILV_NVw{});
+          for (int row = ptid; row < BM; row += NT_P) {
+            int mg = pm0 + row;
+            const uint8_t* src = SFAl + (size_t)mg * Knb + off;
+            CUTE_UNROLL
+            for (int b = 0; b < NBLK4; ++b) dA(row, b) = (mg < M) ? src[b] : (uint8_t)0;
+          }
+          for (int row = ptid; row < BN; row += NT_P) {
+            int ng = pn0 + row;
+            const uint8_t* src = SFBl + (size_t)ng * Knb + off;
+            CUTE_UNROLL
+            for (int b = 0; b < NBLK4; ++b) dB(row, b) = (ng < N) ? src[b] : (uint8_t)0;
+          }
+        } else if constexpr (SFASYNC) {
           // Lever 1: async SF prefetch. 8B cp.async/row (NBLK4=8), no ld.global
           // occupying the producer -> no long_scoreboard; completion gates the
           // SAME mbarrier via cp.async.mbarrier.arrive.noinc. A/B stay TMA.
@@ -535,14 +574,15 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
           }
           cp_async_mbar_arrive(&mbar[s]);  // all 32 threads (noinc); gated on own cp.async
           return;
-        }
-        for (int row = ptid; row < BM; row += NT_P) {
-          int mg = pm0 + row;
-          sf_copy_row<NBLK4>(dSFA + (size_t)row * NBLK4, SFAl + (size_t)mg * Knb + off, mg < M);
-        }
-        for (int row = ptid; row < BN; row += NT_P) {
-          int ng = pn0 + row;
-          sf_copy_row<NBLK4>(dSFB + (size_t)row * NBLK4, SFBl + (size_t)ng * Knb + off, ng < N);
+        } else {
+          for (int row = ptid; row < BM; row += NT_P) {
+            int mg = pm0 + row;
+            sf_copy_row<NBLK4>(dSFA + (size_t)row * NBLK4, SFAl + (size_t)mg * Knb + off, mg < M);
+          }
+          for (int row = ptid; row < BN; row += NT_P) {
+            int ng = pn0 + row;
+            sf_copy_row<NBLK4>(dSFB + (size_t)row * NBLK4, SFBl + (size_t)ng * Knb + off, ng < N);
+          }
         }
       } else {
         const int Knb = K_high / VEC_MX;
@@ -764,16 +804,17 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP4>{}, mma_nv);
   auto tcopy_A8 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP8>{}, mma_mx);
   auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP8>{}, mma_mx);
+  // round-12 SFILV: interleaved-atom SF copy for fp4 uses UniversalCopy (vectorizable
+  // LDS over the contiguous TV partition) in place of DefaultCopy (per-element LDS +
+  // address math). Same TV layout; only the smem source layout + copy atom change.
+  auto tcopy_SFA4i = make_tiled_copy_impl(Copy_Atom<UniversalCopy<ElemSF_NV>, ElemSF_NV>{},
+      tt_get_layoutSFA_TV(mma_nv), make_shape(size<0>(tile_nv), size<2>(tile_nv)));
+  auto tcopy_SFB4i = make_tiled_copy_impl(Copy_Atom<UniversalCopy<ElemSF_NV>, ElemSF_NV>{},
+      tt_get_layoutSFB_TV(mma_nv), make_shape(size<1>(tile_nv), size<2>(tile_nv)));
 
   auto consume4 = [&](int s) {
     Tensor sAv = recast<ElemFP4>(sA(_, _, s));   // SW64-swizzled uint8 ring -> fp4 view
     Tensor sBv = recast<ElemFP4>(sB(_, _, s));
-    Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
-        make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
-                    make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
-    Tensor sSFB = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
-        make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
-                    make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
     Tensor tCrA = thr_nv.partition_fragment_A(sAv);
     Tensor tCrB = thr_nv.partition_fragment_B(sBv);
     copy(tcopy_A4, tcopy_A4.get_thread_slice(tid).partition_S(sAv),
@@ -782,17 +823,39 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
          tcopy_B4.get_thread_slice(tid).retile_D(tCrB));
     fp4_shift_A(typename TiledNV::MMA_Op{}, tCrA);
     fp4_shift_B(typename TiledNV::MMA_Op{}, tCrB);
-    Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_nv);
-    Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_nv);
-    copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sSFA),
-         tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA));
-    copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sSFB),
-         tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB));
-    mbar_arrive(&mbar[STAGES + s]);     // T2a early stage release (frags in regs)
-    CUTE_UNROLL
-    for (int kb = 0; kb < KMUL; ++kb)
-      cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
-                 make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+    if constexpr (SFILV) {
+      Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)), SFILV_NVr{});
+      Tensor sSFB = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)), SFILV_NVr{});
+      Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_nv);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_nv);
+      copy(tcopy_SFA4i.get_thread_slice(tid).partition_S(sSFA),
+           tcopy_SFA4i.get_thread_slice(tid).retile_D(tCrSFA));
+      copy(tcopy_SFB4i.get_thread_slice(tid).partition_S(sSFB),
+           tcopy_SFB4i.get_thread_slice(tid).retile_D(tCrSFB));
+      mbar_arrive(&mbar[STAGES + s]);
+      CUTE_UNROLL
+      for (int kb = 0; kb < KMUL; ++kb)
+        cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                   make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+    } else {
+      Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+          make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor sSFB = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+          make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_nv);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_nv);
+      copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sSFA),
+           tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA));
+      copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sSFB),
+           tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB));
+      mbar_arrive(&mbar[STAGES + s]);     // T2a early stage release (frags in regs)
+      CUTE_UNROLL
+      for (int kb = 0; kb < KMUL; ++kb)
+        cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                   make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+    }
   };
   auto consume8 = [&](int s) {
     Tensor sAv = sA(_, _, s);   // SW64-swizzled uint8 ring (fp8 = uint8, direct)
@@ -862,16 +925,22 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
       Tensor tCrB = thr_nv.partition_fragment_B(sBv0);
       auto rA = tcopy_A4.get_thread_slice(tid).retile_D(tCrA);
       auto rB = tcopy_B4.get_thread_slice(tid).retile_D(tCrB);
-      auto sfA = [&](int s) { return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+      auto sfA = [&](int s) {
+        if constexpr (SFILV) return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)), SFILV_NVr{});
+        else return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
           make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
                       make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{})))); };
-      auto sfB = [&](int s) { return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+      auto sfB = [&](int s) {
+        if constexpr (SFILV) return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)), SFILV_NVr{});
+        else return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
           make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
                       make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{})))); };
       Tensor tCrSFA = tt_partition_fragment_SFA(sfA(0), thr_nv);
       Tensor tCrSFB = tt_partition_fragment_SFB(sfB(0), thr_nv);
-      auto rSFA = tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA);
-      auto rSFB = tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB);
+      auto rSFA = [&]{ if constexpr (SFILV) return tcopy_SFA4i.get_thread_slice(tid).retile_D(tCrSFA);
+                       else return tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA); }();
+      auto rSFB = [&]{ if constexpr (SFILV) return tcopy_SFB4i.get_thread_slice(tid).retile_D(tCrSFB);
+                       else return tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB); }();
       auto load = [&](int s, int kb) {
         Tensor sAv = recast<ElemFP4>(sA(_, _, s));
         Tensor sBv = recast<ElemFP4>(sB(_, _, s));
@@ -879,8 +948,13 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
         copy(tcopy_B4, tcopy_B4.get_thread_slice(tid).partition_S(sBv)(_, _, kb), rB(_, _, kb));
         fp4_shift_A(typename TiledNV::MMA_Op{}, rA(_, _, kb));
         fp4_shift_B(typename TiledNV::MMA_Op{}, rB(_, _, kb));
-        copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sfA(s))(_, _, kb), rSFA(_, _, kb));
-        copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sfB(s))(_, _, kb), rSFB(_, _, kb));
+        if constexpr (SFILV) {
+          copy(tcopy_SFA4i.get_thread_slice(tid).partition_S(sfA(s))(_, _, kb), rSFA(_, _, kb));
+          copy(tcopy_SFB4i.get_thread_slice(tid).partition_S(sfB(s))(_, _, kb), rSFB(_, _, kb));
+        } else {
+          copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sfA(s))(_, _, kb), rSFA(_, _, kb));
+          copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sfB(s))(_, _, kb), rSFB(_, _, kb));
+        }
       };
       auto mma = [&](int kb) {
         cute::gemm(mma_nv, make_zip_tensor(tCrA(_, _, kb), tCrSFA(_, _, kb)),
@@ -994,7 +1068,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0, int PINGPONG = 0, int LDBW = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0, int PINGPONG = 0, int LDBW = 0, int SFILV = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -1027,7 +1101,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW, SFILV,
                                   decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
   dim3 grid;
   if constexpr (PERSIST) {
@@ -1047,7 +1121,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   } else {
     grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
   }
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW,
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW, SFILV,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -1066,7 +1140,7 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 int64_t stages, int64_t tile,
                                 int64_t swz, int64_t kmul, int64_t minb,
                                 int64_t persist, int64_t kpipe, int64_t sfasync,
-                                int64_t pingpong, int64_t ldbw) {
+                                int64_t pingpong, int64_t ldbw, int64_t sfilv) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -1082,6 +1156,25 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   const int sw = (int)swz, mb = (int)minb, pst = (int)persist, kp = (int)kpipe;
   const int sfa = (int)sfasync;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-12 SFILV: interleaved CUTLASS block-scaled SF atom + UniversalCopy
+  // for the fp4 phase (attacks round-11's ALU root cause). Curated km2/st3/tile0
+  // (128x128, NBLK4=8). fp8/MX chunks stay flat (2-block chunk < CUTLASS Blk_SF=4).
+  // Step-1 wiring: non-KPIPE consume4 only (kp0); KPIPE handled below once gated.
+  const int sfi = (int)sfilv;
+  if (sfi == 1) {
+    TORCH_CHECK(km == 2 && st == 3 && tile == 0, "sfilv curated to km2/st3/tile0 (128x128)");
+    TORCH_CHECK(sfa == 0, "sfilv uses the plain scatter producer (not composable with sfasync)");
+#define LDI(SW,PS,KPP) do { \
+    launch_tma_dual<128,128,2,4,3,2,1,SW,PS,KPP,0,0,0,1>(Al,SFAl,Bl,SFBl,Ah,SFAh,Bh,SFBh,s_x,s_w,D,Mi,Ni,Kl,Kh,stream); \
+    check_cuda(cudaGetLastError(), "b1_tma_dual(sfilv) launch"); \
+    check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual(sfilv) sync"); \
+    return D; } while(0)
+    if (sw == 0) { if (pst == 0) { if (kp==0) LDI(0,0,0); else LDI(0,0,1); } else { if (kp==0) LDI(0,1,0); else LDI(0,1,1); } }
+    if (sw == 8) { if (pst == 0) { if (kp==0) LDI(8,0,0); else LDI(8,0,1); } else { if (kp==0) LDI(8,1,0); else LDI(8,1,1); } }
+    TORCH_CHECK(false, "unsupported sfilv config: sw=", sw, " persist=", pst, " kpipe=", kp);
+#undef LDI
+  }
 
   // ----- round-11 LDBW: attempted to widen operand-B smem->reg ldmatrix from
   // SM75_U32x2_LDSM_N (64-bit, round-10 default) to SM75_U32x4_LDSM_N (128-bit),
@@ -1369,5 +1462,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("stages") = 0, py::arg("tile") = 0,
         py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
         py::arg("persist") = 0, py::arg("kpipe") = 0, py::arg("sfasync") = 0,
-        py::arg("pingpong") = 0, py::arg("ldbw") = 0);
+        py::arg("pingpong") = 0, py::arg("ldbw") = 0, py::arg("sfilv") = 0);
 }
