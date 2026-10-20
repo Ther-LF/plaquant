@@ -377,7 +377,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          int PERSIST, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, int KPIPE, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -649,7 +649,132 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
     }
   };
 
-  if constexpr (PERSIST) {
+  // ---- T1 (round-8): register K-block pipelined consumer (KPIPE=1). ----
+  // Faithful port of CUTLASS sm120_blockscaled_mma_tma.hpp mma(): a persistent
+  // register fragment with K_BLOCK_MAX(=KMUL) slots; prologue loads kb0, then the
+  // steady loop issues copy_kblock(kb+1) (ldmatrix smem->rmem) BEFORE gemm_kblock(kb)
+  // (MMA on the current slot), and at the chunk boundary (kb==KMUL-1) releases the
+  // smem stage and prefetches kb0 of the NEXT chunk (which lives in the next ring
+  // stage, already TMA-filled) — hiding smem->reg latency inside the math. Phases are
+  // pipelined separately (uniform atom within a phase); the one phase-seam ldmatrix is
+  // non-overlapped (round-7: seam<=0, negligible). Continuous giter keeps the mbar
+  // ring parity identical to the non-pipelined path (producer unchanged).
+  auto run_tile_kpipe = [&](int giter0) {
+    // FP4 phase: local chunks c in [0, n1).
+    if (n1 > 0) {
+      Tensor sAv0 = recast<ElemFP4>(sA(_, _, 0));
+      Tensor sBv0 = recast<ElemFP4>(sB(_, _, 0));
+      Tensor tCrA = thr_nv.partition_fragment_A(sAv0);
+      Tensor tCrB = thr_nv.partition_fragment_B(sBv0);
+      auto rA = tcopy_A4.get_thread_slice(tid).retile_D(tCrA);
+      auto rB = tcopy_B4.get_thread_slice(tid).retile_D(tCrB);
+      auto sfA = [&](int s) { return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+          make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{})))); };
+      auto sfB = [&](int s) { return make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+          make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{})))); };
+      Tensor tCrSFA = tt_partition_fragment_SFA(sfA(0), thr_nv);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sfB(0), thr_nv);
+      auto rSFA = tcopy_SFA4.get_thread_slice(tid).retile_D(tCrSFA);
+      auto rSFB = tcopy_SFB4.get_thread_slice(tid).retile_D(tCrSFB);
+      auto load = [&](int s, int kb) {
+        Tensor sAv = recast<ElemFP4>(sA(_, _, s));
+        Tensor sBv = recast<ElemFP4>(sB(_, _, s));
+        copy(tcopy_A4, tcopy_A4.get_thread_slice(tid).partition_S(sAv)(_, _, kb), rA(_, _, kb));
+        copy(tcopy_B4, tcopy_B4.get_thread_slice(tid).partition_S(sBv)(_, _, kb), rB(_, _, kb));
+        fp4_shift_A(typename TiledNV::MMA_Op{}, rA(_, _, kb));
+        fp4_shift_B(typename TiledNV::MMA_Op{}, rB(_, _, kb));
+        copy(tcopy_SFA4.get_thread_slice(tid).partition_S(sfA(s))(_, _, kb), rSFA(_, _, kb));
+        copy(tcopy_SFB4.get_thread_slice(tid).partition_S(sfB(s))(_, _, kb), rSFB(_, _, kb));
+      };
+      auto mma = [&](int kb) {
+        cute::gemm(mma_nv, make_zip_tensor(tCrA(_, _, kb), tCrSFA(_, _, kb)),
+                   make_zip_tensor(tCrB(_, _, kb), tCrSFB(_, _, kb)), accum);
+      };
+      int s0 = giter0 % STAGES;
+      mbar_wait(&mbar[s0], (giter0 / STAGES) & 1);
+      load(s0, 0);
+      for (int c = 0; c < n1; ++c) {
+        int g = giter0 + c, sc = g % STAGES;
+        CUTE_UNROLL
+        for (int kb = 0; kb < KMUL; ++kb) {
+          int kbn = (kb + 1 == KMUL) ? 0 : kb + 1;
+          if (kb == KMUL - 1) {
+            mbar_arrive(&mbar[STAGES + sc]);
+            if (c + 1 < n1) { int gn = g + 1, sn = gn % STAGES;
+              mbar_wait(&mbar[sn], (gn / STAGES) & 1); load(sn, 0); }
+            mma(kb);
+          } else { load(sc, kbn); mma(kb); }
+        }
+      }
+    }
+    // FP8 phase: local chunks c in [n1, ntot).
+    if (n2 > 0) {
+      Tensor sAv0 = sA(_, _, 0);
+      Tensor sBv0 = sB(_, _, 0);
+      Tensor tCrA = thr_mx.partition_fragment_A(sAv0);
+      Tensor tCrB = thr_mx.partition_fragment_B(sBv0);
+      auto rA = tcopy_A8.get_thread_slice(tid).retile_D(tCrA);
+      auto rB = tcopy_B8.get_thread_slice(tid).retile_D(tCrB);
+      auto sfA = [&](int s) { return make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFA_b + s * SFA_ST)),
+          make_layout(make_shape(Int<BM>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                      make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{})))); };
+      auto sfB = [&](int s) { return make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+          make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                      make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{})))); };
+      Tensor tCrSFA = tt_partition_fragment_SFA(sfA(0), thr_mx);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sfB(0), thr_mx);
+      auto rSFA = tcopy_SFA8.get_thread_slice(tid).retile_D(tCrSFA);
+      auto rSFB = tcopy_SFB8.get_thread_slice(tid).retile_D(tCrSFB);
+      auto load = [&](int s, int kb) {
+        Tensor sAv = sA(_, _, s);
+        Tensor sBv = sB(_, _, s);
+        copy(tcopy_A8, tcopy_A8.get_thread_slice(tid).partition_S(sAv)(_, _, kb), rA(_, _, kb));
+        copy(tcopy_B8, tcopy_B8.get_thread_slice(tid).partition_S(sBv)(_, _, kb), rB(_, _, kb));
+        fp4_shift_A(typename TiledMX::MMA_Op{}, rA(_, _, kb));
+        fp4_shift_B(typename TiledMX::MMA_Op{}, rB(_, _, kb));
+        copy(tcopy_SFA8.get_thread_slice(tid).partition_S(sfA(s))(_, _, kb), rSFA(_, _, kb));
+        copy(tcopy_SFB8.get_thread_slice(tid).partition_S(sfB(s))(_, _, kb), rSFB(_, _, kb));
+      };
+      auto mma = [&](int kb) {
+        cute::gemm(mma_mx, make_zip_tensor(tCrA(_, _, kb), tCrSFA(_, _, kb)),
+                   make_zip_tensor(tCrB(_, _, kb), tCrSFB(_, _, kb)), accum);
+      };
+      int g0 = giter0 + n1, s0 = g0 % STAGES;
+      mbar_wait(&mbar[s0], (g0 / STAGES) & 1);
+      load(s0, 0);
+      for (int c = n1; c < ntot; ++c) {
+        int g = giter0 + c, sc = g % STAGES;
+        CUTE_UNROLL
+        for (int kb = 0; kb < KMUL; ++kb) {
+          int kbn = (kb + 1 == KMUL) ? 0 : kb + 1;
+          if (kb == KMUL - 1) {
+            mbar_arrive(&mbar[STAGES + sc]);
+            if (c + 1 < ntot) { int gn = g + 1, sn = gn % STAGES;
+              mbar_wait(&mbar[sn], (gn / STAGES) & 1); load(sn, 0); }
+            mma(kb);
+          } else { load(sc, kbn); mma(kb); }
+        }
+      }
+    }
+  };
+
+  if constexpr (KPIPE) {
+    if constexpr (PERSIST) {
+      int giter = 0;
+      for (int tix = blockIdx.x; tix < num_tiles; tix += gridDim.x) {
+        int ppm, ppn; DECODE_TILE(tix, ppm, ppn);
+        clear(accum);
+        run_tile_kpipe(giter);
+        giter += ntot;
+        epi(ppm * BM, ppn * BN);
+      }
+    } else {
+      run_tile_kpipe(0);
+      epi(m0, n0);
+    }
+  } else if constexpr (PERSIST) {
     int giter = 0;
     for (int tix = blockIdx.x; tix < num_tiles; tix += gridDim.x) {
       int ppm, ppn; DECODE_TILE(tix, ppm, ppn);
@@ -675,7 +800,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -708,7 +833,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE,
                                   decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
   dim3 grid;
   if constexpr (PERSIST) {
@@ -728,7 +853,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   } else {
     grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
   }
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST,
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -746,7 +871,7 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 int64_t M, int64_t N, int64_t K_low, int64_t K_high,
                                 int64_t stages, int64_t tile,
                                 int64_t swz, int64_t kmul, int64_t minb,
-                                int64_t persist) {
+                                int64_t persist, int64_t kpipe) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -759,8 +884,29 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   auto stream = at::cuda::getCurrentCUDAStream(dev.index());
   auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
   int st = (int)stages; if (st == 0) st = 4;
-  const int sw = (int)swz, mb = (int)minb, pst = (int)persist;
+  const int sw = (int)swz, mb = (int)minb, pst = (int)persist, kp = (int)kpipe;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-8 KPIPE=1 (register K-block pipelined consumer). Curated instantiations
+  // (km2 mb1): tile {0,6} x st3 x sw {0,8} x persist {0,1}. Covers per-shape dispatch
+  // (qkv/down non-persist t0/t6 sw0; gate persist sw8) + compare cells for the sweep.
+#define LDK(BM,BN,WM,WN,ST,KM,MB,SW,PS) do { \
+    launch_tma_dual<BM,BN,WM,WN,ST,KM,MB,SW,PS,1>(Al,SFAl,Bl,SFBl,Ah,SFAh,Bh,SFBh,s_x,s_w,D,Mi,Ni,Kl,Kh,stream); \
+    check_cuda(cudaGetLastError(), "b1_tma_dual(kpipe) launch"); \
+    check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual(kpipe) sync"); \
+    return D; } while(0)
+  if (kp == 1) {
+    TORCH_CHECK((int)kmul == 2 && st == 3, "kpipe curated to km2/st3");
+    if (tile == 0) {
+      if (sw == 0) { if (pst == 0) LDK(128,128,2,4,3,2,1,0,0); else LDK(128,128,2,4,3,2,1,0,1); }
+      if (sw == 8) { if (pst == 0) LDK(128,128,2,4,3,2,1,8,0); else LDK(128,128,2,4,3,2,1,8,1); }
+    } else if (tile == 6) {
+      if (sw == 0) { if (pst == 0) LDK(128,128,4,2,3,2,1,0,0); else LDK(128,128,4,2,3,2,1,0,1); }
+      if (sw == 8) { if (pst == 0) LDK(128,128,4,2,3,2,1,8,0); else LDK(128,128,4,2,3,2,1,8,1); }
+    }
+    TORCH_CHECK(false, "unsupported kpipe config: tile=", tile, " st=", st, " swz=", sw, " persist=", pst);
+  }
+#undef LDK
 
   // ----- round-7 persistent-scheduler variants (PERSIST=1): grid=#SM, CTA strides over
   // tiles with a continuous ring (StaticPersistentTileSchedulerSm90 semantics). Mirrors
@@ -959,5 +1105,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
         py::arg("stages") = 0, py::arg("tile") = 0,
         py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
-        py::arg("persist") = 0);
+        py::arg("persist") = 0, py::arg("kpipe") = 0);
 }
