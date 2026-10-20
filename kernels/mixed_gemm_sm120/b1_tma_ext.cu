@@ -377,7 +377,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -415,7 +415,8 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   // CTA rasterization for L2 reuse (round-6 gate attack). SWZ<=0: native 2D grid.
   // SWZ=G>0: 1D grid, Triton-style group-M ordering (G consecutive M-tiles sweep
   // all N-tiles, keeping G A-tiles hot across the 64 N-tiles of the gate row).
-  int pm, pn;
+  int pm = 0, pn = 0;
+  if constexpr (!PERSIST) {           // PERSIST=1 decodes (pm,pn) per-tile inside the loop
   if constexpr (SWZ <= 0) {
     pm = blockIdx.x; pn = blockIdx.y;
   } else {
@@ -428,6 +429,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
     const int gsize = min(num_m - first_m, SWZ);
     pm = first_m + (pid % gsize);
     pn = (pid % in_group) / gsize;
+  }
   }
   const int m0 = pm * BM, n0 = pn * BN;
   const int n1 = K_low / KCH4;              // fp4 chunks
@@ -455,11 +457,24 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   }
   __syncthreads();
 
+  // Persistent-scheduler tile iteration (round-7, maps StaticPersistentTileSchedulerSm90):
+  // grid = #CTAs, each CTA strides over output tiles; ring parity uses a CONTINUOUS
+  // giter so the pipeline fill is paid ONCE per CTA (not per tile) and the producer runs
+  // ahead across tile boundaries (hides the next tile's fill behind the prev epilogue).
+  const int num_m = (M + BM - 1) / BM;
+  const int num_n = (N + BN - 1) / BN;
+  const int num_tiles = num_m * num_n;
+#define DECODE_TILE(TIX, PPM, PPN) do {                                          \
+    if constexpr (SWZ <= 0) { (PPM) = (TIX) / num_n; (PPN) = (TIX) % num_n; }    \
+    else { int ig_ = SWZ * num_n; int gid_ = (TIX) / ig_; int fm_ = gid_ * SWZ; \
+           int gs_ = min(num_m - fm_, SWZ);                                      \
+           (PPM) = fm_ + (((TIX) % ig_) % gs_); (PPN) = ((TIX) % ig_) / gs_; }   \
+  } while (0)
+
   if (tid >= NT_C) {
     const int ptid = tid - NT_C;
-    for (int g = 0; g < ntot; ++g) {
-      const int s = g % STAGES;
-      if (g >= STAGES) mbar_wait(&mbar[STAGES + s], ((g / STAGES) - 1) & 1);
+    // Load one K-chunk g of tile (ppm,ppn) into ring stage s. pm0/pn0 = ppm*BM/ppn*BN.
+    auto prod = [&](int g, int s, int ppm, int ppn, int pm0, int pn0) {
       const bool f4 = (g < n1);
       const int c = f4 ? g : (g - n1);
       uint8_t* dSFA = sSFA_b + s * SFA_ST;
@@ -472,40 +487,58 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
         const int Knb = K_low / VEC_NV;
         const size_t off = (size_t)c * NBLK4;
         for (int row = ptid; row < BM; row += NT_P) {
-          int mg = m0 + row;
+          int mg = pm0 + row;
           sf_copy_row<NBLK4>(dSFA + (size_t)row * NBLK4, SFAl + (size_t)mg * Knb + off, mg < M);
         }
         for (int row = ptid; row < BN; row += NT_P) {
-          int ng = n0 + row;
+          int ng = pn0 + row;
           sf_copy_row<NBLK4>(dSFB + (size_t)row * NBLK4, SFBl + (size_t)ng * Knb + off, ng < N);
         }
       } else {
         const int Knb = K_high / VEC_MX;
         const size_t off = (size_t)c * NBLK8;
         for (int row = ptid; row < BM; row += NT_P) {
-          int mg = m0 + row;
+          int mg = pm0 + row;
           sf_copy_row<NBLK8>(dSFA + (size_t)row * NBLK8, SFAh + (size_t)mg * Knb + off, mg < M);
         }
         for (int row = ptid; row < BN; row += NT_P) {
-          int ng = n0 + row;
+          int ng = pn0 + row;
           sf_copy_row<NBLK8>(dSFB + (size_t)row * NBLK8, SFBh + (size_t)ng * Knb + off, ng < N);
         }
       }
       if (ptid == 0) {
         mbar_expect(&mbar[s], TX);
         if (f4) {
-          Tensor gA = local_tile(mAl, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(pm, c));
-          Tensor gB = local_tile(mBl, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(pn, c));
+          Tensor gA = local_tile(mAl, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(ppm, c));
+          Tensor gB = local_tile(mBl, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(ppn, c));
           copy(tma_al.with(mbar[s]), cta_al.partition_S(gA), cta_al.partition_D(sA(_, _, s)));
           copy(tma_bl.with(mbar[s]), cta_bl.partition_S(gB), cta_bl.partition_D(sB(_, _, s)));
         } else {
-          Tensor gA = local_tile(mAh, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(pm, c));
-          Tensor gB = local_tile(mBh, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(pn, c));
+          Tensor gA = local_tile(mAh, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(ppm, c));
+          Tensor gB = local_tile(mBh, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(ppn, c));
           copy(tma_ah.with(mbar[s]), cta_ah.partition_S(gA), cta_ah.partition_D(sA(_, _, s)));
           copy(tma_bh.with(mbar[s]), cta_bh.partition_S(gB), cta_bh.partition_D(sB(_, _, s)));
         }
       } else {
         mbar_arrive(&mbar[s]);
+      }
+    };
+    if constexpr (PERSIST) {
+      int giter = 0;
+      for (int tix = blockIdx.x; tix < num_tiles; tix += gridDim.x) {
+        int ppm, ppn; DECODE_TILE(tix, ppm, ppn);
+        const int pm0 = ppm * BM, pn0 = ppn * BN;
+        for (int g = 0; g < ntot; ++g, ++giter) {
+          const int s = giter % STAGES;
+          if (giter >= STAGES) mbar_wait(&mbar[STAGES + s], ((giter / STAGES) - 1) & 1);
+          prod(g, s, ppm, ppn, pm0, pn0);
+        }
+      }
+    } else {
+      for (int g = 0; g < ntot; ++g) {
+        const int s = g % STAGES;
+        if (g >= STAGES) mbar_wait(&mbar[STAGES + s], ((g / STAGES) - 1) & 1);
+        prod(g, s, pm, pn, m0, n0);
       }
     }
     return;
@@ -597,34 +630,52 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                  make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
   };
 
-  for (int g = 0; g < ntot; ++g) {
-    const int s = g % STAGES;
-    mbar_wait(&mbar[s], (g / STAGES) & 1);
-    if (g < n1) consume4(s); else consume8(s);
-  }
-
   // Epilogue: accum * s_x[m] * s_w[n] -> fp16 (direct half2 store).
   Tensor cD = thr_nv.partition_C(make_identity_tensor(Shape<Int<BM>, Int<BN>>{}));
-  CUTE_UNROLL
-  for (int i = 0; i < size(accum); i += 2) {
-    int mg = m0 + get<0>(cD(i));
-    int ng = n0 + get<1>(cD(i));
-    if (mg >= M) continue;
-    float sx = s_x[mg];
-    if (ng + 1 < N) {
-      __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
-                                    accum(i + 1) * sx * s_w[ng + 1]);
-      *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
-    } else if (ng < N) {
-      D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+  auto epi = [&](int em0, int en0) {
+    CUTE_UNROLL
+    for (int i = 0; i < size(accum); i += 2) {
+      int mg = em0 + get<0>(cD(i));
+      int ng = en0 + get<1>(cD(i));
+      if (mg >= M) continue;
+      float sx = s_x[mg];
+      if (ng + 1 < N) {
+        __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
+                                      accum(i + 1) * sx * s_w[ng + 1]);
+        *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
+      } else if (ng < N) {
+        D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+      }
     }
+  };
+
+  if constexpr (PERSIST) {
+    int giter = 0;
+    for (int tix = blockIdx.x; tix < num_tiles; tix += gridDim.x) {
+      int ppm, ppn; DECODE_TILE(tix, ppm, ppn);
+      clear(accum);                                   // fresh accumulator per output tile
+      for (int g = 0; g < ntot; ++g, ++giter) {
+        const int s = giter % STAGES;
+        mbar_wait(&mbar[s], (giter / STAGES) & 1);
+        if (g < n1) consume4(s); else consume8(s);
+      }
+      epi(ppm * BM, ppn * BN);
+    }
+  } else {
+    for (int g = 0; g < ntot; ++g) {
+      const int s = g % STAGES;
+      mbar_wait(&mbar[s], (g / STAGES) & 1);
+      if (g < n1) consume4(s); else consume8(s);
+    }
+    epi(m0, n0);
   }
+#undef DECODE_TILE
 }
 
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -657,8 +708,27 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  dim3 grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST,
+                                  decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
+  dim3 grid;
+  if constexpr (PERSIST) {
+    // Persistent grid = min(#tiles, #SM * max_active_blocks). Each CTA strides over
+    // tiles (StaticPersistentTileSchedulerSm90 semantics). Occupancy is typically 1
+    // (smem-bound ~99KB), so grid ~= #SM.
+    int dev = 0; cudaGetDevice(&dev);
+    int nsm = 1; cudaDeviceGetAttribute(&nsm, cudaDevAttrMultiProcessorCount, dev);
+    int occ = 1;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ, kptr, WM * WN * 32 + 32, 0);
+    if (occ < 1) occ = 1;
+    long cap = (long)nsm * occ;
+    long nt = (long)num_m * num_n;
+    int g = (int)(nt < cap ? nt : cap);
+    if (g < 1) g = 1;
+    grid = dim3(g);
+  } else {
+    grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
+  }
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -675,7 +745,8 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 torch::Tensor s_x, torch::Tensor s_w,
                                 int64_t M, int64_t N, int64_t K_low, int64_t K_high,
                                 int64_t stages, int64_t tile,
-                                int64_t swz, int64_t kmul, int64_t minb) {
+                                int64_t swz, int64_t kmul, int64_t minb,
+                                int64_t persist) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -688,8 +759,33 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   auto stream = at::cuda::getCurrentCUDAStream(dev.index());
   auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
   int st = (int)stages; if (st == 0) st = 4;
-  const int sw = (int)swz, mb = (int)minb;
+  const int sw = (int)swz, mb = (int)minb, pst = (int)persist;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-7 persistent-scheduler variants (PERSIST=1): grid=#SM, CTA strides over
+  // tiles with a continuous ring (StaticPersistentTileSchedulerSm90 semantics). Mirrors
+  // the 128x128 / 128x128-w42 km2 family (the only tiles that ever win per round-6).
+#define LDP(BM,BN,WM,WN,ST,KM,MB,SW) do { \
+    launch_tma_dual<BM,BN,WM,WN,ST,KM,MB,SW,1>(Al,SFAl,Bl,SFBl,Ah,SFAh,Bh,SFBh,s_x,s_w,D,Mi,Ni,Kl,Kh,stream); \
+    check_cuda(cudaGetLastError(), "b1_tma_dual(persist) launch"); \
+    check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual(persist) sync"); \
+    return D; } while(0)
+  if (pst == 1) {
+    if (km == 2) {
+      if (tile == 0) {
+        if (sw == 0) { if (st == 3) LDP(128,128,2,4,3,2,1,0); if (st == 4) LDP(128,128,2,4,4,2,1,0); }
+        if (sw == 4) { if (st == 3) LDP(128,128,2,4,3,2,1,4); if (st == 4) LDP(128,128,2,4,4,2,1,4); }
+        if (sw == 8) { if (st == 3) LDP(128,128,2,4,3,2,1,8); if (st == 4) LDP(128,128,2,4,4,2,1,8); }
+      } else if (tile == 6) {
+        if (sw == 0) { if (st == 3) LDP(128,128,4,2,3,2,1,0); if (st == 4) LDP(128,128,4,2,4,2,1,0); }
+        if (sw == 4) { if (st == 3) LDP(128,128,4,2,3,2,1,4); if (st == 4) LDP(128,128,4,2,4,2,1,4); }
+        if (sw == 8) { if (st == 3) LDP(128,128,4,2,3,2,1,8); if (st == 4) LDP(128,128,4,2,4,2,1,8); }
+      }
+    }
+    TORCH_CHECK(false, "unsupported persistent dual config: tile=", tile, " st=", st,
+                " swz=", sw, " kmul=", km);
+  }
+#undef LDP
 
   // ----- round-6 multi-axis grid: tile(BM,BN,WM,WN) x stages x swz x kmul x minb.
   // Each instantiated (tile,st,sw,km,mb) tuple below is one kernel; unlisted tuples
@@ -862,5 +958,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("s_x"), py::arg("s_w"),
         py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
         py::arg("stages") = 0, py::arg("tile") = 0,
-        py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1);
+        py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
+        py::arg("persist") = 0);
 }
