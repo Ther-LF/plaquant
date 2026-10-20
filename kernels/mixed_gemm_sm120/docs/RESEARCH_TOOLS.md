@@ -22,6 +22,11 @@ python3 scripts/get_page.py <page-id> --body-only
 include/cutlass/gemm/collective/sm120_blockscaled_mma_tma.hpp、kernel/sm120_*、
 tile_scheduler*.hpp、pipeline/*、cute/atom/mma_traits_sm120.hpp。
 
+## 非-CUTLASS 的 GEMM 参考源(不止 CUTLASS 一个,项目负责人指定)
+- **deepseek-ai/DeepGEMM**(纯 CUDA BLAS kernel 库,9k★)—— DeepSeek 自研的 FP8/block-scaled GEMM,Hopper/Blackwell 高 TC 写法的金矿。重点看它的 block-scaled FP8/FP4 mainloop 怎么保持 TC 打满、SF 怎么处理、warp specialization/pipeline 怎么排。远程 clone 读:`git clone https://github.com/deepseek-ai/DeepGEMM /home/luofan/DeepGEMM`。
+- **deepseek-ai/DeepInfer**(2026-10-20 开源的推理框架,Apache-2.0)—— 底层打通 FlashMLA/DeepGEMM/DeepEP;看 Blackwell 上 GEMM 怎么集成、调度。`git clone https://github.com/deepseek-ai/DeepInfer /home/luofan/DeepInfer`。
+- 对比它们和 CUTLASS 的 TC 利用率/alu-tc 配比,取最密的写法。
+
 ## 已证高价值来源(本工程查到的)
 - LeetCUDA(xlite-dev):寄存器乒乓 ldmatrix(k+1)⊗MMA(k) 的确切写法
 - TensorRT-LLM tensorrt_llm/_torch/cute_dsl_kernels/blackwell/dense_gemm_persistent.py:persistent + StaticPersistentTileScheduler
