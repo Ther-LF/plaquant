@@ -405,7 +405,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          int PERSIST, int KPIPE, int SFASYNC, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, int KPIPE, int SFASYNC, int PINGPONG, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -480,7 +480,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
     CUTE_UNROLL
     for (int s = 0; s < STAGES; ++s) {
       mbar_init(&mbar[s], NT_P);
-      mbar_init(&mbar[STAGES + s], NT_C);
+      mbar_init(&mbar[STAGES + s], NT_C);   // free: all NT_C consumers arrive
     }
   }
   __syncthreads();
@@ -590,6 +590,150 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
         if (g >= STAGES) mbar_wait(&mbar[STAGES + s], ((g / STAGES) - 1) & 1);
         prod(g, s, pm, pn, m0, n0);
       }
+    }
+    return;
+  }
+
+  // ============ Cooperative dual math warp-group (PINGPONG=1). ============
+  // Borrowed pattern: CUTLASS SM120 sm120_gemm_tma_warpspecialized_cooperative +
+  // sm120_mma_builder.inl `AtomLayoutMNK = Shape<_4,_2,_1>` — split the BM=128 output
+  // tile along M into two 64x128 halves, each consumed by one 4-warp math warp-group
+  // (Consumer0/Consumer1 roles) with its OWN FP32 accumulator and its OWN mma() loop,
+  // NO math-order barrier (cooperative, not ping-pong-with-barrier). Per issue #2181:
+  // ping-pong (different tiles + strict math-order barrier) targets epilogue/MMA overlap
+  // and does NOT fit our single-tile-per-ring-stage producer; cooperative does. Each WG
+  // uses warp layout Shape<2,2,1> (2 M-warps x 2 N-warps), faithfully mirroring CUTLASS's
+  // global Shape<4,2,1> split into two Shape<2,2,1> groups. Producer path byte-identical
+  // (full 128x128 A/B/SF staged) -> SF/data bit-exact; each output element keeps the same
+  // per-element fp4-then-fp8 chunk/kb FP32 accumulation order -> result bit-exact.
+  if constexpr (PINGPONG) {
+    constexpr int NT_WG = NT_C / 2;              // 128 threads / warp-group
+    constexpr int BMh = BM / 2;                  // 64 rows per warp-group
+    static_assert(WM == 2 && NT_C % 2 == 0, "PINGPONG assumes WM=2 (two M warp-groups)");
+    const int wg   = tid / NT_WG;                // 0 -> rows [0,64), 1 -> rows [64,128)
+    const int ltid = tid % NT_WG;                // 0..127 within the warp-group
+    using TiledNVp = decltype(make_tiled_mma(AtomNV{}, Layout<Shape<_2, _2, _1>>{}));
+    using TiledMXp = decltype(make_tiled_mma(AtomMX{}, Layout<Shape<_2, _2, _1>>{}));
+    TiledNVp mma_nv; TiledMXp mma_mx;
+    Tensor accum = partition_fragment_C(mma_nv, Shape<Int<BMh>, Int<BN>>{});
+    static_assert(cute::is_same_v<
+        decltype(partition_fragment_C(TiledNVp{}, Shape<Int<BMh>, Int<BN>>{}).layout()),
+        decltype(partition_fragment_C(TiledMXp{}, Shape<Int<BMh>, Int<BN>>{}).layout())>,
+        "PINGPONG NV/MX warp-group MMAs must partition C identically");
+    clear(accum);
+    auto thr_nv = mma_nv.get_thread_slice(ltid);
+    auto thr_mx = mma_mx.get_thread_slice(ltid);
+    auto tile_nv = tile_shape(mma_nv);
+    auto tile_mx = tile_shape(mma_mx);
+    auto tcopy_SFA4 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_NV>{},
+        tt_get_layoutSFA_TV(mma_nv), make_shape(size<0>(tile_nv), size<2>(tile_nv)));
+    auto tcopy_SFB4 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_NV>{},
+        tt_get_layoutSFB_TV(mma_nv), make_shape(size<1>(tile_nv), size<2>(tile_nv)));
+    auto tcopy_SFA8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
+        tt_get_layoutSFA_TV(mma_mx), make_shape(size<0>(tile_mx), size<2>(tile_mx)));
+    auto tcopy_SFB8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
+        tt_get_layoutSFB_TV(mma_mx), make_shape(size<1>(tile_mx), size<2>(tile_mx)));
+    auto tcopy_A4 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP4>{}, mma_nv);
+    auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP4>{}, mma_nv);
+    auto tcopy_A8 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP8>{}, mma_mx);
+    auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP8>{}, mma_mx);
+
+    auto consume4p = [&](int s) {
+      Tensor sAf = recast<ElemFP4>(sA(_, _, s));          // (BM, KCH4) fp4 view
+      Tensor sAh = local_tile(sAf, make_shape(Int<BMh>{}, Int<KCH4>{}), make_coord(wg, 0));
+      Tensor sBv = recast<ElemFP4>(sB(_, _, s));          // full N
+      Tensor sSFA = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFA_b + s * SFA_ST + (size_t)wg * BMh * NBLK4)),
+          make_layout(make_shape(Int<BMh>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor sSFB = make_tensor(recast_ptr<ElemSF_NV>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+          make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_NV>{}, Int<NBLK4>{})),
+                      make_stride(Int<NBLK4>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor tCrA = thr_nv.partition_fragment_A(sAh);
+      Tensor tCrB = thr_nv.partition_fragment_B(sBv);
+      copy(tcopy_A4, tcopy_A4.get_thread_slice(ltid).partition_S(sAh),
+           tcopy_A4.get_thread_slice(ltid).retile_D(tCrA));
+      copy(tcopy_B4, tcopy_B4.get_thread_slice(ltid).partition_S(sBv),
+           tcopy_B4.get_thread_slice(ltid).retile_D(tCrB));
+      fp4_shift_A(typename TiledNVp::MMA_Op{}, tCrA);
+      fp4_shift_B(typename TiledNVp::MMA_Op{}, tCrB);
+      Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_nv);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_nv);
+      copy(tcopy_SFA4.get_thread_slice(ltid).partition_S(sSFA),
+           tcopy_SFA4.get_thread_slice(ltid).retile_D(tCrSFA));
+      copy(tcopy_SFB4.get_thread_slice(ltid).partition_S(sSFB),
+           tcopy_SFB4.get_thread_slice(ltid).retile_D(tCrSFB));
+      mbar_arrive(&mbar[STAGES + s]);
+      CUTE_UNROLL
+      for (int kb = 0; kb < KMUL; ++kb)
+        cute::gemm(mma_nv, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                   make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+    };
+    auto consume8p = [&](int s) {
+      Tensor sAf = sA(_, _, s);                           // (BM, CHB) fp8 = uint8
+      Tensor sAh = local_tile(sAf, make_shape(Int<BMh>{}, Int<CHB>{}), make_coord(wg, 0));
+      Tensor sBv = sB(_, _, s);                           // full N
+      Tensor sSFA = make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFA_b + s * SFA_ST + (size_t)wg * BMh * NBLK8)),
+          make_layout(make_shape(Int<BMh>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                      make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor sSFB = make_tensor(recast_ptr<ElemSF_MX>(make_smem_ptr(sSFB_b + s * SFB_ST)),
+          make_layout(make_shape(Int<BN>{}, make_shape(Int<VEC_MX>{}, Int<NBLK8>{})),
+                      make_stride(Int<NBLK8>{}, make_stride(Int<0>{}, Int<1>{}))));
+      Tensor tCrA = thr_mx.partition_fragment_A(sAh);
+      Tensor tCrB = thr_mx.partition_fragment_B(sBv);
+      copy(tcopy_A8, tcopy_A8.get_thread_slice(ltid).partition_S(sAh),
+           tcopy_A8.get_thread_slice(ltid).retile_D(tCrA));
+      copy(tcopy_B8, tcopy_B8.get_thread_slice(ltid).partition_S(sBv),
+           tcopy_B8.get_thread_slice(ltid).retile_D(tCrB));
+      fp4_shift_A(typename TiledMXp::MMA_Op{}, tCrA);
+      fp4_shift_B(typename TiledMXp::MMA_Op{}, tCrB);
+      Tensor tCrSFA = tt_partition_fragment_SFA(sSFA, thr_mx);
+      Tensor tCrSFB = tt_partition_fragment_SFB(sSFB, thr_mx);
+      copy(tcopy_SFA8.get_thread_slice(ltid).partition_S(sSFA),
+           tcopy_SFA8.get_thread_slice(ltid).retile_D(tCrSFA));
+      copy(tcopy_SFB8.get_thread_slice(ltid).partition_S(sSFB),
+           tcopy_SFB8.get_thread_slice(ltid).retile_D(tCrSFB));
+      mbar_arrive(&mbar[STAGES + s]);
+      CUTE_UNROLL
+      for (int kb = 0; kb < KMUL; ++kb)
+        cute::gemm(mma_mx, make_zip_tensor(tCrA(_,_,kb), tCrSFA(_,_,kb)),
+                   make_zip_tensor(tCrB(_,_,kb), tCrSFB(_,_,kb)), accum);
+    };
+    Tensor cDp = thr_nv.partition_C(make_identity_tensor(Shape<Int<BMh>, Int<BN>>{}));
+    auto epip = [&](int em0, int en0) {
+      CUTE_UNROLL
+      for (int i = 0; i < size(accum); i += 2) {
+        int mg = em0 + wg * BMh + get<0>(cDp(i));
+        int ng = en0 + get<1>(cDp(i));
+        if (mg >= M) continue;
+        float sx = s_x[mg];
+        if (ng + 1 < N) {
+          __half2 h = __floats2half2_rn(accum(i) * sx * s_w[ng],
+                                        accum(i + 1) * sx * s_w[ng + 1]);
+          *reinterpret_cast<__half2*>(&D[(size_t)mg * N + ng]) = h;
+        } else if (ng < N) {
+          D[(size_t)mg * N + ng] = __float2half(accum(i) * sx * s_w[ng]);
+        }
+      }
+    };
+    if constexpr (PERSIST) {
+      int giter = 0;
+      for (int tix = blockIdx.x; tix < num_tiles; tix += gridDim.x) {
+        int ppm, ppn; DECODE_TILE(tix, ppm, ppn);
+        clear(accum);
+        for (int g = 0; g < ntot; ++g, ++giter) {
+          const int s = giter % STAGES;
+          mbar_wait(&mbar[s], (giter / STAGES) & 1);
+          if (g < n1) consume4p(s); else consume8p(s);
+        }
+        epip(ppm * BM, ppn * BN);
+      }
+    } else {
+      for (int g = 0; g < ntot; ++g) {
+        const int s = g % STAGES;
+        mbar_wait(&mbar[s], (g / STAGES) & 1);
+        if (g < n1) consume4p(s); else consume8p(s);
+      }
+      epip(m0, n0);
     }
     return;
   }
@@ -850,7 +994,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0, int PINGPONG = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -883,7 +1027,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG,
                                   decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
   dim3 grid;
   if constexpr (PERSIST) {
@@ -903,7 +1047,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   } else {
     grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
   }
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC,
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -921,7 +1065,8 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 int64_t M, int64_t N, int64_t K_low, int64_t K_high,
                                 int64_t stages, int64_t tile,
                                 int64_t swz, int64_t kmul, int64_t minb,
-                                int64_t persist, int64_t kpipe, int64_t sfasync) {
+                                int64_t persist, int64_t kpipe, int64_t sfasync,
+                                int64_t pingpong) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -937,6 +1082,32 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   const int sw = (int)swz, mb = (int)minb, pst = (int)persist, kp = (int)kpipe;
   const int sfa = (int)sfasync;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-10 PINGPONG=1: cooperative dual math warp-group (faithful to CUTLASS
+  // SM120 sm120_gemm_tma_warpspecialized_cooperative: two consumer warp-groups on the
+  // same tile, M-split, shared pipeline, NO math-order barrier, all NT_C consumers free).
+  // Composable with sfasync (orthogonal, producer-side). Curated km2/st3/tile0/kpipe0:
+  // per-shape best (sw0 p0 / sw8 p1) x sfa {0,1}. Placed BEFORE the sfasync-only block
+  // so pingpong takes precedence. (A free-asymmetric chunk-skew variant was prototyped
+  // and reverted: deadlock/NaN-prone, and a full-chunk offset cannot de-phase sub-chunk
+  // MMA stalls anyway — see round-10 report Part 3.)
+  const int pp = (int)pingpong;
+  if (pp == 1) {
+    TORCH_CHECK((int)kmul == 2 && st == 3 && tile == 0 && kp == 0,
+                "pingpong curated to km2/st3/tile0/kpipe0");
+    if (sfa == 1)
+      TORCH_CHECK((K_low == 0) || ((K_low / 16) % 8 == 0),
+                  "pingpong+sfasync needs 8B-aligned fp4 SF row stride (K_low/16 % 8 == 0)");
+#define LDPP(SW,PS,SFA) do { \
+    launch_tma_dual<128,128,2,4,3,2,1,SW,PS,0,SFA,1>(Al,SFAl,Bl,SFBl,Ah,SFAh,Bh,SFBh,s_x,s_w,D,Mi,Ni,Kl,Kh,stream); \
+    check_cuda(cudaGetLastError(), "b1_tma_dual(pingpong) launch"); \
+    check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual(pingpong) sync"); \
+    return D; } while(0)
+    if (sw == 0 && pst == 0) { if (sfa == 0) LDPP(0,0,0); else LDPP(0,0,1); }
+    if (sw == 8 && pst == 1) { if (sfa == 0) LDPP(8,1,0); else LDPP(8,1,1); }
+    TORCH_CHECK(false, "unsupported pingpong config: sw=", sw, " persist=", pst, " sfa=", sfa);
+#undef LDPP
+  }
 
   // ----- round-9 Lever 1: SFASYNC=1 (async cp.async SF prefetch on the shared
   // mbarrier; fp4 phase). Composable with kpipe/persist. Curated (km2 st3 tile0):
@@ -1180,5 +1351,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
         py::arg("stages") = 0, py::arg("tile") = 0,
         py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
-        py::arg("persist") = 0, py::arg("kpipe") = 0, py::arg("sfasync") = 0);
+        py::arg("persist") = 0, py::arg("kpipe") = 0, py::arg("sfasync") = 0,
+        py::arg("pingpong") = 0);
 }
