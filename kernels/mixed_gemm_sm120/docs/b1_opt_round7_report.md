@@ -162,5 +162,87 @@ cosine 按 (cfg,shape,phase) 家族 gate。excess 对**同场** CUTLASS presf �
 - `candidates.jsonl` 追加 round-7 条目。
 - **未改动**（保护）：`b1_fused_ext.cu` / `fused_gemm_ext.cu` / `nvfp4_gemm_ext.cu` / `mxfp8_gemm_ext.cu` / `mixed_gemm.py` / `pure_presf_ext.cu`。
 
+---
+
+## Part 3 — 项目负责人假设①：跨 phase prologue 气泡（Phase-1→Phase-2 接缝）
+
+**假设**：P1(NVFP4,K_low) 主循环跑完 → barrier + drain P1 → P2(MXFP8,K_high) prologue（建 TMA 描述符 +
+填流水）→ P2 主循环，中间是串行气泡。
+
+**这个气泡在当前 RECIPE B 融合 kernel 里基本不存在——continuous-ring 设计已经消除它。** 架构事实：
+- 不是两个 kernel，是**一个** kernel 一条**连续 ring**：producer `for g in 0..ntot`，g<n1 用 fp4 描述符
+  (mAl/mBl)、g≥n1 用 fp8 描述符 (mAh/mBh)，**同一组 mbar / 同一 SMEM ring**（CHB=64B/row/chunk 两 phase 相同）。
+  **无 phase 间 barrier、无 drain、无 ring reset**；4 个 TMA 描述符 host 侧预建、全程 grid-constant，**不中途重建**。
+- producer 领先 consumer 最多 STAGES。所以 g=n1 处 consumer 刚开始消费第一个 fp8 chunk 时，producer 早已把
+  fp8 的头 STAGES 个 chunk 预取进 ring（在 consumer 还在消费最后 STAGES 个 fp4 chunk 时就发了）——**P2 prologue
+  天然被 P1 尾部掩盖**。这正是项目负责人想要的"P1 算尾部时提前发 P2 TMA 预取"，RECIPE B 已内建。
+
+**量化（零 GPU 成本，直接从 r7_sweep.csv 自洽隔离接缝）**：固定 config，接缝只出现在混合点——r=0(纯 fp4)
+与 r=1(纯 fp8) 都**无** phase 边界，r=0.5 恰好**一个**边界。`seam = lat(0.5) − ½·[lat(0)+lat(1)]`：
+
+| 场景 | lat(0) | lat(.5) | lat(1) | interp | **seam** |
+|--|--|--|--|--|--|
+| down M2048 | 0.1214 | 0.1659 | 0.2095 | 0.1655 | **+0.0004ms (+0.2%)** |
+| down M8192 | 0.3115 | 0.4417 | 0.5705 | 0.4410 | **+0.0007ms (+0.2%)** |
+| gate M2048 | 0.1224 | 0.1550 | 0.1885 | 0.1554 | **−0.0004ms (−0.3%)** |
+| **gate M8192** | 0.4104 | 0.5027 | 0.6168 | 0.5136 | **−0.0109ms (−2.2%)** |
+| qkv M2048 | 0.0558 | 0.0657 | 0.0782 | 0.0670 | **−0.0013ms (−2.0%)** |
+| qkv M8192 | 0.1185 | 0.1484 | 0.1829 | 0.1507 | **−0.0023ms (−1.6%)** |
+
+**结论（诚实负结果）**：down 大-K 接缝 **+0.2%**（远 < 项目负责人设的 2% 阈值）；**gate M8192 接缝为负
+（−2.2%）**——混合点甚至比两纯端点插值**更快**（continuous ring 完全掩盖边界，且 fp4 段把缓存/流水预热给了
+fp8 段）。**这条杠杆是 moot：气泡本就不存在，不做。** 项目负责人的假设成立于旧的"两-kernel/drain-barrier"设计，
+RECIPE B 的 continuous ring（与 CUTLASS persistent 跨 tile 重叠 prologue 同思想）早已把它并掉了。
+（ncu 的 kernel 内 TC-掉零时长难以从聚合指标隔离；上面的自洽隔离是更干净、更直接的度量，信号已 < 阈值，
+故不再单独 ncu 复核此项。）
+
+---
+
+## Part 4 — 项目负责人假设②：L2 cache / 数据访问优化（gate 重点）
+
+**问题**：我们是两份独立数据（FP4 的 A_low/B_low + FP8 的 A_high/B_high + 两套 SF）。gate N=8192 一行 64 个
+CTA 读重叠 B tile，rasterization 顺序决定 L2 命中还是互刷；FP8 字节是 FP4 的 2×，两流可能互相驱逐。判断
+gate 残余（persistent 后 ~+10–14%）有多少是 L2 复用没做好。
+
+**诊断（ncu，luofan-ncu，GPU2，detached → `l2_ncu.csv`）**：gate M8192 r=0.5 × swz{0,8} × persist{0,1}，
++ 纯 FP4(r=0)/纯 FP8(r=1) 的 L2 footprint，+ down M8192 r=0.5 长-K 对照。指标：`lts__t_sector_hit_rate.pct`
+(L2 命中)、`l1tex__t_sector_hit_rate.pct`、`dram__bytes_read.sum` + `%peak`、`dram__throughput %peak`
+(是否 DRAM-bound)、`sm__pipe_tensor_cycles_active %`(TC 利用)、`gpu__time`。
+
+### ncu 现状（luofan-ncu, GPU2, `l2_ncu.csv`，单 launch 捕获）
+
+| config | L2 hit% | L1 hit% | DRAM %peak | TC %peak | time(ns) |
+|--|--|--|--|--|--|
+| gate M8192 r=.5 sw0 P0 | 95.08 | 87.9 | 12.3 | 49.6 | 590592 |
+| gate M8192 r=.5 sw8 P0 | 95.15 | 88.0 | 12.6 | 50.6 | 575904 |
+| gate M8192 r=.5 sw8 **P1** | 95.07 | 87.5 | 13.1 | **52.7** | **553344** |
+| gate M8192 r=.5 sw0 P1 | 95.07 | 87.2 | 12.8 | 51.8 | 566400 |
+| gate M8192 r=0 (fp4) sw0 | 93.83 | 80.1 | 14.5 | 41.8 | 466560 |
+| gate M8192 r=0 (fp4) sw8 | 93.89 | 80.3 | 15.3 | 44.0 | 441760 |
+| gate M8192 r=1 (fp8) sw0 | 95.80 | 92.5 | 10.5 | 52.8 | 736832 |
+| gate M8192 r=1 (fp8) sw8 | 95.82 | 92.6 | 10.6 | 53.4 | 728512 |
+| down M8192 r=.5 sw0 | 95.32 | 86.6 | 7.7 | 53.9 | 544160 |
+| down M8192 r=.5 sw8 | 95.35 | 86.6 | 7.9 | 54.0 | 543264 |
+
+### 判定（诚实负结果：L2 杠杆几乎无 headroom）
+
+1. **L2 命中率全程已 ~94–96%，DRAM 吞吐仅 7.7–15% of peak** —— gate 和 down **都不是** L2/DRAM-bound。
+   working set 本就贴 L2，复用已接近饱和。**"gate 残余有多少是 L2 复用没做好"的答案 ≈ 0。**
+2. **rasterization（swz0→swz8）几乎不动 L2 命中**（gate r.5: 95.08→95.15，+0.07pp；fp4 93.83→93.89）。
+   round-6/7 看到的 swz8 小增益**不是来自 L2 命中改善**（已封顶），是调度/尾波效应。→ rasterization × L2 命中没空间。
+3. **两数据流不互相驱逐（capacity-bound 假设被否）**：FP8（2× 字节）L2 命中 **95.8% 反而高于** FP4 93.8%；
+   r 从 0→.5→1 变化 L2 稳定 94–96% 无退化。L1 差异（fp4 80% vs fp8 92.5%）被 L2 吸收。
+4. **SF 未打乱主数据局部性**：若有整体 L2 命中会掉；实测 95%+ 说明两套小 SF 的 plain-load 无害。
+5. **persisting-L2 / access-policy-window（钉 B 在 L2）不会有用**：无法在 95% 命中 / 12% DRAM 之上再改善；
+   CUTLASS 用 L2 residency 是针对**大 working set 溢出 L2**，我们 gate tile 根本没溢出。
+6. **真正瓶颈是 TC 利用率 ~42–54%**（张量核约一半空转）—— 与 round-5/6/7 一致：gate 残余是
+   **latency/overhead/occupancy-bound，非 memory-bound**。persistent 把 TC 50.6%(sw8 P0)→52.7%(sw8 P1)、
+   time 575904→553344ns，靠去掉 per-CTA fill/setup 填满 TC —— 与 persistent sweep 的 gate 增益同源。
+
+**结论**：**L2/数据访问线对 gate 残余无 headroom，不做**（L2 已 95%、DRAM 12%、无流间驱逐、rasterization 不经 L2
+起效）。gate 残余的下一杠杆是提升 **TC 利用率** = 对账表 #2 **寄存器级 K-block 流水**（mma() 的
+`copy_kblock(next)+gemm_kblock(cur)` 隐藏 ldmatrix 延迟），列为 round-8 首选。产物：`prof_l2.py`、`run_l2_ncu.sh`、`l2_ncu.csv`。
+
+
 </content>
 </invoke>
