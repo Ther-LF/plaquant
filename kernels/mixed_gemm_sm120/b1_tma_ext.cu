@@ -163,6 +163,34 @@ __device__ __forceinline__ void mbar_wait(uint64_t* m, uint32_t parity) {
                "@P bra DONE;\n bra LAB;\n DONE:\n}\n" :: "r"(a), "r"(parity));
 }
 
+// ---- Lever 1 (round-9): async SF prefetch via cp.async on the SHARED mbarrier. ----
+// Borrowed pattern: CUTLASS sm120_blockscaled_mma_tma.hpp loads SFA/SFB with TMA
+// `.with(*tma_barrier)` on the SAME producer barrier as A/B (one expect_tx for the
+// combined A/B/SF transaction bytes). A literal cp.async.bulk.tensor port is blocked
+// by alignment: the plain SF gmem row stride is 8 bytes for small-Kh fp8 (K_high/32),
+// below TMA's 16B global-stride requirement — which is precisely why CUTLASS re-lays
+// SF into the interleaved Sm1xxBlkScaledConfig atom layout. We instead keep the SF
+// smem layout byte-identical (consumer untouched -> bit-exact) and move the fp4 SF
+// off the issue/long_scoreboard path with SM80 cp.async, gating the SAME mbarrier via
+// `cp.async.mbarrier.arrive.noinc` (PTX ISA: deferred arrive-on when all prior cp.async
+// by the thread complete; .noinc => the init count already accounts for it).
+// expect_tx (A/B bytes) is set WITHOUT an extra arrival via the non-arriving form.
+__device__ __forceinline__ void mbar_expect_noarrive(uint64_t* m, uint32_t bytes) {
+  uint32_t a = cast_smem_ptr_to_uint(m);
+  asm volatile("mbarrier.expect_tx.shared::cta.b64 [%0], %1;\n" :: "r"(a), "r"(bytes));
+}
+__device__ __forceinline__ void cp_async_mbar_arrive(uint64_t* m) {
+  uint32_t a = cast_smem_ptr_to_uint(m);
+  asm volatile("cp.async.mbarrier.arrive.noinc.shared::cta.b64 [%0];\n" :: "r"(a));
+}
+// 8-byte cp.async (NBLK4 = 4*KMUL=8 for the measured KMUL=2 fp4 path). srcsize<8
+// zero-fills the tail (matches sf_copy_row valid=false -> 0) without reading src.
+__device__ __forceinline__ void cp_async8(uint8_t* dst, const uint8_t* src, int srcsize) {
+  uint32_t d = cast_smem_ptr_to_uint(dst);
+  asm volatile("cp.async.ca.shared::cta.global [%0], [%1], 8, %2;\n"
+               :: "r"(d), "l"(src), "r"(srcsize));
+}
+
 // Width-generic coalesced SF row copy (round-6: makes BK/KMUL a real axis).
 // NB = SF bytes/row/chunk; picks the widest aligned vector type. For KMUL=2 this
 // is byte-identical to the round-5 hardcoded uint64(fp4)/uint16(fp8) path.
@@ -377,7 +405,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          int PERSIST, int KPIPE, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, int KPIPE, int SFASYNC, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -486,6 +514,28 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
         // cutting the long-scoreboard stall that dominated the fp4 phase.
         const int Knb = K_low / VEC_NV;
         const size_t off = (size_t)c * NBLK4;
+        if constexpr (SFASYNC) {
+          // Lever 1: async SF prefetch. 8B cp.async/row (NBLK4=8), no ld.global
+          // occupying the producer -> no long_scoreboard; completion gates the
+          // SAME mbarrier via cp.async.mbarrier.arrive.noinc. A/B stay TMA.
+          for (int row = ptid; row < BM; row += NT_P) {
+            int mg = pm0 + row;
+            cp_async8(dSFA + (size_t)row * NBLK4, (mg < M) ? SFAl + (size_t)mg * Knb + off : SFAl, (mg < M) ? 8 : 0);
+          }
+          for (int row = ptid; row < BN; row += NT_P) {
+            int ng = pn0 + row;
+            cp_async8(dSFB + (size_t)row * NBLK4, (ng < N) ? SFBl + (size_t)ng * Knb + off : SFBl, (ng < N) ? 8 : 0);
+          }
+          if (ptid == 0) {
+            mbar_expect_noarrive(&mbar[s], TX);  // A/B bytes, no arrival
+            Tensor gA = local_tile(mAl, make_shape(Int<BM>{}, Int<CHB>{}), make_coord(ppm, c));
+            Tensor gB = local_tile(mBl, make_shape(Int<BN>{}, Int<CHB>{}), make_coord(ppn, c));
+            copy(tma_al.with(mbar[s]), cta_al.partition_S(gA), cta_al.partition_D(sA(_, _, s)));
+            copy(tma_bl.with(mbar[s]), cta_bl.partition_S(gB), cta_bl.partition_D(sB(_, _, s)));
+          }
+          cp_async_mbar_arrive(&mbar[s]);  // all 32 threads (noinc); gated on own cp.async
+          return;
+        }
         for (int row = ptid; row < BM; row += NT_P) {
           int mg = pm0 + row;
           sf_copy_row<NBLK4>(dSFA + (size_t)row * NBLK4, SFAl + (size_t)mg * Knb + off, mg < M);
@@ -800,7 +850,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -833,7 +883,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC,
                                   decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
   dim3 grid;
   if constexpr (PERSIST) {
@@ -853,7 +903,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   } else {
     grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
   }
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE,
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -871,7 +921,7 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 int64_t M, int64_t N, int64_t K_low, int64_t K_high,
                                 int64_t stages, int64_t tile,
                                 int64_t swz, int64_t kmul, int64_t minb,
-                                int64_t persist, int64_t kpipe) {
+                                int64_t persist, int64_t kpipe, int64_t sfasync) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -885,7 +935,32 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(dev));
   int st = (int)stages; if (st == 0) st = 4;
   const int sw = (int)swz, mb = (int)minb, pst = (int)persist, kp = (int)kpipe;
+  const int sfa = (int)sfasync;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-9 Lever 1: SFASYNC=1 (async cp.async SF prefetch on the shared
+  // mbarrier; fp4 phase). Composable with kpipe/persist. Curated (km2 st3 tile0):
+  // sw {0,8} x persist {0,1} x kpipe {0,1}. Covers per-shape dispatch + sweep cells.
+#define LDS(BM,BN,WM,WN,ST,KM,MB,SW,PS,KPP) do { \
+    launch_tma_dual<BM,BN,WM,WN,ST,KM,MB,SW,PS,KPP,1>(Al,SFAl,Bl,SFBl,Ah,SFAh,Bh,SFBh,s_x,s_w,D,Mi,Ni,Kl,Kh,stream); \
+    check_cuda(cudaGetLastError(), "b1_tma_dual(sfasync) launch"); \
+    check_cuda(cudaStreamSynchronize(stream), "b1_tma_dual(sfasync) sync"); \
+    return D; } while(0)
+  if (sfa == 1) {
+    TORCH_CHECK((int)kmul == 2 && st == 3 && tile == 0, "sfasync curated to km2/st3/tile0");
+    TORCH_CHECK((K_low == 0) || ((K_low / 16) % 8 == 0),
+                "sfasync needs 8B-aligned fp4 SF row stride (K_low/16 % 8 == 0)");
+    if (sw == 0) {
+      if (pst == 0) { if (kp == 0) LDS(128,128,2,4,3,2,1,0,0,0); else LDS(128,128,2,4,3,2,1,0,0,1); }
+      else          { if (kp == 0) LDS(128,128,2,4,3,2,1,0,1,0); else LDS(128,128,2,4,3,2,1,0,1,1); }
+    }
+    if (sw == 8) {
+      if (pst == 0) { if (kp == 0) LDS(128,128,2,4,3,2,1,8,0,0); else LDS(128,128,2,4,3,2,1,8,0,1); }
+      else          { if (kp == 0) LDS(128,128,2,4,3,2,1,8,1,0); else LDS(128,128,2,4,3,2,1,8,1,1); }
+    }
+    TORCH_CHECK(false, "unsupported sfasync config: sw=", sw, " persist=", pst, " kpipe=", kp);
+  }
+#undef LDS
 
   // ----- round-8 KPIPE=1 (register K-block pipelined consumer). Curated instantiations
   // (km2 mb1): tile {0,6} x st3 x sw {0,8} x persist {0,1}. Covers per-shape dispatch
@@ -1105,5 +1180,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("M"), py::arg("N"), py::arg("K_low"), py::arg("K_high"),
         py::arg("stages") = 0, py::arg("tile") = 0,
         py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
-        py::arg("persist") = 0, py::arg("kpipe") = 0);
+        py::arg("persist") = 0, py::arg("kpipe") = 0, py::arg("sfasync") = 0);
 }

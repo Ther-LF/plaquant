@@ -24,12 +24,13 @@ Kt = Kl + Kh
 if kind == "dual":
     tile, st, sw, km, mb, pers = (int(x) for x in sys.argv[6:12])
     kpipe = int(sys.argv[12]) if len(sys.argv) > 12 else 0
+    sfasync = int(sys.argv[13]) if len(sys.argv) > 13 else 0
     ext = t.get_tma()
     p, _ = mg.prep_mixed(M, N, Kl, Kh, seed=1)
     fn = lambda: ext.b1_fused_tma_dual(
         p["Al_packed"], p["SFAl"], p["Bl_packed"], p["SFBl"],
         p["Ah_bytes"], p["SFAh"], p["Bh_bytes"], p["SFBh"],
-        p["s_x"], p["s_w"], M, N, Kl, Kh, st, tile, sw, km, mb, pers, kpipe)
+        p["s_x"], p["s_w"], M, N, Kl, Kh, st, tile, sw, km, mb, pers, kpipe, sfasync)
 elif kind == "fp4":
     b1.get_presf_ext()
     p4, _ = b1.prep_bounds_presf(M, N, Kt, seed=1)
