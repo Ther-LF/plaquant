@@ -405,7 +405,7 @@ b1_tma_mx_kernel(CUTE_GRID_CONSTANT TmaA const tma_a,
 // phase selected by g<n1). SF stays on the plain-store path (union-sized for fp4).
 // ============================================================================
 template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB, int SWZ,
-          int PERSIST, int KPIPE, int SFASYNC, int PINGPONG, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
+          int PERSIST, int KPIPE, int SFASYNC, int PINGPONG, int LDBW, class TmaAl, class TmaBl, class TmaAh, class TmaBh>
 __global__ void __launch_bounds__(WM * WN * 32 + 32, MINB)
 b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
                    CUTE_GRID_CONSTANT TmaBl const tma_bl,
@@ -634,9 +634,9 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
     auto tcopy_SFB8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
         tt_get_layoutSFB_TV(mma_mx), make_shape(size<1>(tile_mx), size<2>(tile_mx)));
     auto tcopy_A4 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP4>{}, mma_nv);
-    auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP4>{}, mma_nv);
+    auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP4>{}, mma_nv);
     auto tcopy_A8 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP8>{}, mma_mx);
-    auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP8>{}, mma_mx);
+    auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP8>{}, mma_mx);
 
     auto consume4p = [&](int s) {
       Tensor sAf = recast<ElemFP4>(sA(_, _, s));          // (BM, KCH4) fp4 view
@@ -761,9 +761,9 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
   auto tcopy_SFB8 = make_tiled_copy_impl(Copy_Atom<DefaultCopy, ElemSF_MX>{},
       tt_get_layoutSFB_TV(mma_mx), make_shape(size<1>(tile_mx), size<2>(tile_mx)));
   auto tcopy_A4 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP4>{}, mma_nv);
-  auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP4>{}, mma_nv);
+  auto tcopy_B4 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP4>{}, mma_nv);
   auto tcopy_A8 = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, ElemFP8>{}, mma_mx);
-  auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<SM75_U32x2_LDSM_N, ElemFP8>{}, mma_mx);
+  auto tcopy_B8 = make_tiled_copy_B(Copy_Atom<cute::conditional_t<(LDBW==1), SM75_U32x4_LDSM_N, SM75_U32x2_LDSM_N>, ElemFP8>{}, mma_mx);
 
   auto consume4 = [&](int s) {
     Tensor sAv = recast<ElemFP4>(sA(_, _, s));   // SW64-swizzled uint8 ring -> fp4 view
@@ -994,7 +994,7 @@ b1_tma_dual_kernel(CUTE_GRID_CONSTANT TmaAl const tma_al,
 // ============================================================================
 // Host entry — dual-phase (NVFP4 + MXFP8) TMA kernel (RECIPE B).
 // ============================================================================
-template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0, int PINGPONG = 0>
+template <int BM, int BN, int WM, int WN, int STAGES, int KMUL, int MINB = 1, int SWZ = 0, int PERSIST = 0, int KPIPE = 0, int SFASYNC = 0, int PINGPONG = 0, int LDBW = 0>
 static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
                             const torch::Tensor& Bl, const torch::Tensor& SFBl,
                             const torch::Tensor& Ah, const torch::Tensor& SFAh,
@@ -1027,7 +1027,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   auto tma_bh = make_tma_copy(SM90_TMA_LOAD{}, mBh, LB{}(_, _, Int<0>{}),
                               make_shape(Int<BN>{}, Int<CHB>{}), _1{});
   const int num_m = (M + BM - 1) / BM, num_n = (N + BN - 1) / BN;
-  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG,
+  auto kptr = &b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW,
                                   decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>;
   dim3 grid;
   if constexpr (PERSIST) {
@@ -1047,7 +1047,7 @@ static void launch_tma_dual(const torch::Tensor& Al, const torch::Tensor& SFAl,
   } else {
     grid = (SWZ > 0) ? dim3(num_m * num_n) : dim3(num_m, num_n);
   }
-  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG,
+  b1_tma_dual_kernel<BM, BN, WM, WN, STAGES, KMUL, MINB, SWZ, PERSIST, KPIPE, SFASYNC, PINGPONG, LDBW,
                      decltype(tma_al), decltype(tma_bl), decltype(tma_ah), decltype(tma_bh)>
       <<<grid, WM * WN * 32 + 32, 0, stream>>>(
           tma_al, tma_bl, tma_ah, tma_bh,
@@ -1066,7 +1066,7 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
                                 int64_t stages, int64_t tile,
                                 int64_t swz, int64_t kmul, int64_t minb,
                                 int64_t persist, int64_t kpipe, int64_t sfasync,
-                                int64_t pingpong) {
+                                int64_t pingpong, int64_t ldbw) {
   TORCH_CHECK(Al.is_cuda() && Bl.is_cuda() && Ah.is_cuda() && Bh.is_cuda(), "cuda");
   const int km = (int)kmul;
   TORCH_CHECK(km == 1 || km == 2 || km == 4, "kmul must be 1, 2 or 4");
@@ -1082,6 +1082,23 @@ torch::Tensor b1_fused_tma_dual(torch::Tensor Al, torch::Tensor SFAl,
   const int sw = (int)swz, mb = (int)minb, pst = (int)persist, kp = (int)kpipe;
   const int sfa = (int)sfasync;
   const int Mi = M, Ni = N, Kl = K_low, Kh = K_high;
+
+  // ----- round-11 LDBW: attempted to widen operand-B smem->reg ldmatrix from
+  // SM75_U32x2_LDSM_N (64-bit, round-10 default) to SM75_U32x4_LDSM_N (128-bit),
+  // matching CUTLASS sm120_rr_smem_copy_selector_B (returns SM75_U32x4_LDSM_N for B).
+  // COMPILE-LEVEL BLOCKER (honest negative, round-11): make_tiled_copy_B with the x4
+  // atom fails "TiledCopy uses too few vals for selected CopyAtom" in BOTH warp layouts
+  // (WM2WN4 and WM4WN2). Root cause: our per-thread B fragment is 2 uint32 per k-block
+  // (B operand = 8 N x 32 K fp8 = 256 uint8 / 32 threads = 2 uint32/thr), but x4 LDSM_N
+  // needs 4 uint32/thr. CUTLASS feeds x4 because its B smem->reg copy spans more per
+  // thread (2 k-blocks worth); matching it needs a B-copy restructure (copy 2 k-blocks
+  // per ldmatrix) with bit-exact risk -> deferred. The LDBW template param is kept
+  // (default 0 = round-10 x2, byte-equivalent); ldbw=1 is not instantiated.
+  const int ldw = (int)ldbw;
+  if (ldw == 1) {
+    TORCH_CHECK(false, "ldbw=1 (B ldmatrix x4) blocked: B fragment=2 uint32/thr/kblock < "
+                       "4 needed by SM75_U32x4_LDSM_N (round-11 honest negative; see source note)");
+  }
 
   // ----- round-10 PINGPONG=1: cooperative dual math warp-group (faithful to CUTLASS
   // SM120 sm120_gemm_tma_warpspecialized_cooperative: two consumer warp-groups on the
@@ -1352,5 +1369,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("stages") = 0, py::arg("tile") = 0,
         py::arg("swz") = 0, py::arg("kmul") = 2, py::arg("minb") = 1,
         py::arg("persist") = 0, py::arg("kpipe") = 0, py::arg("sfasync") = 0,
-        py::arg("pingpong") = 0);
+        py::arg("pingpong") = 0, py::arg("ldbw") = 0);
 }
