@@ -1,4 +1,4 @@
-// codesign_fused_ext.cu — STAGE 2 of the co-design rewrite (b1-opt round-14).
+// codesign_fused_ext.cu — STAGE 2 of the co-design rewrite (b1-opt round-14/17).
 //
 // Dual-format shared-accumulator fused GEMM: one kernel launch computes
 //   D = (A_low  @ B_low^T   scaled by NVFP4 block-16 SFs)      [Phase 1, K_low]
@@ -18,11 +18,40 @@
 //   SF logical (rows, K/VEC) scattered into CUTLASS interleaved atom buffer.
 //   high_fraction = 1/8 : K_high = K/8, K_low = 7K/8 (reorder [low|main|high]).
 //
-// Shipping kernel b1_tma_ext.cu and PROTECTED files are UNTOUCHED.
+// Shipping kernel b1_tma_ext.cu and PROTECTED mainloop headers are UNTOUCHED.
+// (codesign_sm120_bs_mma.hpp / codesign_fused_kernel.hpp mainloop logic unchanged.)
+//
+// ===================================================================================
+// round-17 wrapper-level fairness work (NO mainloop logic changes). Three overheads
+// removed so the end-to-end A/B vs the shipping kernel is fair:
+//
+//  (1) WEIGHT-SF interleave -> load/pack time (already hoisted: prepack_sf_*_b is
+//      called once by the caller; made efficient here too, free).
+//  (2) ACTIVATION-SF interleave -> the per-call scatter is now ONE thread per logical
+//      SF byte (rows*K/VEC) instead of rows*K. The stock kernel wrote the SAME physical
+//      byte VEC(=16/32)x redundantly because the within-block (VEC) coordinate is a
+//      stride-0 broadcast mode of the CUTLASS atom layout (filter_zeros collapses it,
+//      hence the phys buffer is only rows*K/VEC bytes). The redundant kernel was the
+//      16-44%-of-device-time cost round-16 identified. Bit-identical output (a layout
+//      permutation, not a value change); the old redundant kernel is kept as
+//      fused_gemm_slow / prepack_sf_*_a_slow purely to MEASURE the before->after cost.
+//  (3) WORKSPACE -> cached/preallocated across calls; can_implement run once. initialize
+//      still runs per call (TMA descriptors depend on the per-call pointers) but no
+//      per-call device alloc/free of the workspace and no per-call can_implement.
+//
+// Entry points for the fair A/B:
+//   fused_gemm(...)            : realistic per-call = efficient activation-SF interleave
+//                                + cached-workspace dual GEMM (co-design's TRUE per-call cost)
+//   fused_gemm_prepacked(...)  : GEMM-only ceiling (activation SF pre-interleaved by caller)
+//   fused_gemm_slow(...)       : old redundant interleave (before number only)
+//   prepack_sf_fp4_a / _fp8_a  : interleave activation SF out-of-line (efficient)
+//   prepack_sf_fp4_a_slow / _fp8_a_slow : old redundant interleave (before number only)
+// ===================================================================================
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <string>
 
 #include "cutlass/cutlass.h"
@@ -54,6 +83,9 @@ static inline void check_cuda(cudaError_t e, const char* what) {
   TORCH_CHECK(e == cudaSuccess, what, ": ", cudaGetErrorString(e));
 }
 
+// OLD (stock round-14) scatter: one thread per (row,k) element -> VEC-fold redundant
+// writes to the same physical byte (the within-block coord is a stride-0 broadcast of
+// the atom layout). Kept ONLY to measure the before->after interleave cost.
 template <class LayoutSF>
 __global__ void cd_fill_sf_kernel(uint8_t* __restrict__ phys,
                                   const uint8_t* __restrict__ logical,
@@ -66,6 +98,24 @@ __global__ void cd_fill_sf_kernel(uint8_t* __restrict__ phys,
   int nblk = K / VEC;
   int off = layout(make_coord(r, k, 0));
   phys[off] = logical[r * nblk + (k / VEC)];
+}
+
+// NEW (round-17) scatter: one thread per LOGICAL SF byte (row, block). Each (row,block)
+// maps to a unique physical offset (buffer size == rows*nblk), so this writes every
+// physical byte exactly once -> bit-identical to the redundant kernel, VEC(=16/32)x
+// fewer threads, coalesced logical reads. This is the co-design's minimal honest
+// per-call activation-SF interleave cost.
+template <class LayoutSF>
+__global__ void cd_fill_sf_block_kernel(uint8_t* __restrict__ phys,
+                                        const uint8_t* __restrict__ logical,
+                                        LayoutSF layout, int rows, int nblk, int VEC) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = rows * nblk;
+  if (idx >= total) return;
+  int r = idx / nblk;
+  int blk = idx % nblk;
+  int off = layout(make_coord(r, blk * VEC, 0));
+  phys[off] = logical[r * nblk + blk];
 }
 
 // Decompose a MainloopSm120TmaWarpSpecializedBlockScaled policy into its parts so
@@ -157,56 +207,110 @@ using StrideA = typename FusedKernel<true>::StrideA;
 using StrideB = typename FusedKernel<true>::StrideB;
 using StrideC = typename FusedKernel<true>::StrideC;
 using StrideD = typename FusedKernel<true>::StrideD;
-using ElementDataNV_A = typename cutlass::nv_float4_t<cutlass::float_e2m1_t>::DataType;
-using ElementDataNV_SF = typename cutlass::nv_float4_t<cutlass::float_e2m1_t>::ScaleFactorType;
-using ElementDataMX_A = typename cutlass::mx_float8_t<cutlass::float_e4m3_t>::DataType;
-using ElementDataMX_SF = typename cutlass::mx_float8_t<cutlass::float_e4m3_t>::ScaleFactorType;
 
-// ---- SF scatter helpers (per format) ----
-template <class BSConfig, int VEC>
-static torch::Tensor prepack_b_impl(torch::Tensor SFB, int64_t N, int64_t K) {
+static inline torch::TensorOptions u8opts(torch::Device dev) {
+  return torch::TensorOptions().dtype(torch::kUInt8).device(dev);
+}
+
+// ---- generic SF interleave (efficient by default; EFFICIENT=false -> old redundant) ----
+// SFB path: tile_atom_to_shape_SFB(make_shape(1,N,K,1)), rows=N.
+template <class BSConfig, int VEC, bool EFFICIENT>
+static torch::Tensor interleave_sfb(torch::Tensor SFB, int Ni, int Ki, cudaStream_t stream) {
   TORCH_CHECK(SFB.is_cuda() && SFB.scalar_type() == torch::kUInt8, "SFB must be CUDA uint8");
   SFB = SFB.contiguous();
   auto dev = SFB.device();
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream(dev.index());
-  int Ni = (int)N, Ki = (int)K;
   auto layout_SFB = BSConfig::tile_atom_to_shape_SFB(make_shape(1, Ni, Ki, 1));
   int64_t sz = (int64_t)size(filter_zeros(layout_SFB));
-  auto phys = torch::empty({sz}, torch::TensorOptions().dtype(torch::kUInt8).device(dev));
-  int total = Ni * Ki, tpb = 256;
-  cd_fill_sf_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
-      phys.data_ptr<uint8_t>(), SFB.data_ptr<uint8_t>(), layout_SFB, Ni, Ki, VEC);
-  check_cuda(cudaGetLastError(), "prepack_b launch");
+  auto phys = torch::empty({sz}, u8opts(dev));
+  int nblk = Ki / VEC, tpb = 256;
+  if (EFFICIENT) {
+    int total = Ni * nblk;
+    cd_fill_sf_block_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
+        phys.data_ptr<uint8_t>(), SFB.data_ptr<uint8_t>(), layout_SFB, Ni, nblk, VEC);
+  } else {
+    int total = Ni * Ki;
+    cd_fill_sf_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
+        phys.data_ptr<uint8_t>(), SFB.data_ptr<uint8_t>(), layout_SFB, Ni, Ki, VEC);
+  }
+  check_cuda(cudaGetLastError(), "interleave_sfb launch");
+  return phys;
+}
+
+// SFA path: tile_atom_to_shape_SFA(make_shape(M,N,K,1)), rows=M.
+template <class BSConfig, int VEC, bool EFFICIENT>
+static torch::Tensor interleave_sfa(torch::Tensor SFA, int Mi, int Ni, int Ki, cudaStream_t stream) {
+  SFA = SFA.contiguous();
+  auto dev = SFA.device();
+  auto layout_SFA = BSConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
+  int64_t sz = (int64_t)size(filter_zeros(layout_SFA));
+  auto phys = torch::empty({sz}, u8opts(dev));
+  int nblk = Ki / VEC, tpb = 256;
+  if (EFFICIENT) {
+    int total = Mi * nblk;
+    cd_fill_sf_block_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
+        phys.data_ptr<uint8_t>(), SFA.data_ptr<uint8_t>(), layout_SFA, Mi, nblk, VEC);
+  } else {
+    int total = Mi * Ki;
+    cd_fill_sf_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
+        phys.data_ptr<uint8_t>(), SFA.data_ptr<uint8_t>(), layout_SFA, Mi, Ki, VEC);
+  }
+  check_cuda(cudaGetLastError(), "interleave_sfa launch");
+  return phys;
+}
+
+// ---- load-time weight-SF interleave (hoisted; efficient) ----
+torch::Tensor cd_prepack_sf_fp4_b(torch::Tensor SFB, int64_t N, int64_t K) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  auto stream = at::cuda::getCurrentCUDAStream(SFB.device().index());
+  auto phys = interleave_sfb<BSConfigNV, 16, true>(SFB, (int)N, (int)K, stream);
+  check_cuda(cudaStreamSynchronize(stream), "prepack_b sync");
+  return phys;
+}
+torch::Tensor cd_prepack_sf_fp8_b(torch::Tensor SFB, int64_t N, int64_t K) {
+  TORCH_CHECK(K % 32 == 0, "K%32");
+  auto stream = at::cuda::getCurrentCUDAStream(SFB.device().index());
+  auto phys = interleave_sfb<BSConfigMX, 32, true>(SFB, (int)N, (int)K, stream);
   check_cuda(cudaStreamSynchronize(stream), "prepack_b sync");
   return phys;
 }
 
-torch::Tensor cd_prepack_sf_fp4_b(torch::Tensor SFB, int64_t N, int64_t K) {
+// ---- out-of-line activation-SF interleave (efficient + slow variants) ----
+torch::Tensor cd_prepack_sf_fp4_a(torch::Tensor SFA, int64_t M, int64_t N, int64_t K) {
   TORCH_CHECK(K % 16 == 0, "K%16");
-  return prepack_b_impl<BSConfigNV, 16>(SFB, N, K);
+  auto stream = at::cuda::getCurrentCUDAStream(SFA.device().index());
+  auto phys = interleave_sfa<BSConfigNV, 16, true>(SFA, (int)M, (int)N, (int)K, stream);
+  check_cuda(cudaStreamSynchronize(stream), "prepack_a sync");
+  return phys;
 }
-torch::Tensor cd_prepack_sf_fp8_b(torch::Tensor SFB, int64_t N, int64_t K) {
+torch::Tensor cd_prepack_sf_fp8_a(torch::Tensor SFA, int64_t M, int64_t N, int64_t K) {
   TORCH_CHECK(K % 32 == 0, "K%32");
-  return prepack_b_impl<BSConfigMX, 32>(SFB, N, K);
+  auto stream = at::cuda::getCurrentCUDAStream(SFA.device().index());
+  auto phys = interleave_sfa<BSConfigMX, 32, true>(SFA, (int)M, (int)N, (int)K, stream);
+  check_cuda(cudaStreamSynchronize(stream), "prepack_a sync");
+  return phys;
+}
+torch::Tensor cd_prepack_sf_fp4_a_slow(torch::Tensor SFA, int64_t M, int64_t N, int64_t K) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  auto stream = at::cuda::getCurrentCUDAStream(SFA.device().index());
+  auto phys = interleave_sfa<BSConfigNV, 16, false>(SFA, (int)M, (int)N, (int)K, stream);
+  check_cuda(cudaStreamSynchronize(stream), "prepack_a_slow sync");
+  return phys;
+}
+torch::Tensor cd_prepack_sf_fp8_a_slow(torch::Tensor SFA, int64_t M, int64_t N, int64_t K) {
+  TORCH_CHECK(K % 32 == 0, "K%32");
+  auto stream = at::cuda::getCurrentCUDAStream(SFA.device().index());
+  auto phys = interleave_sfa<BSConfigMX, 32, false>(SFA, (int)M, (int)N, (int)K, stream);
+  check_cuda(cudaStreamSynchronize(stream), "prepack_a_slow sync");
+  return phys;
 }
 
-// Build a collective's mainloop Arguments (A/SFA/B/physSFB already on device).
-template <class Coll, class BSConfig, int VEC>
-static typename Coll::Arguments make_mainloop_args(torch::Tensor A, torch::Tensor SFA,
+// Build a collective's mainloop Arguments from pre-interleaved SF (phys_SFA/phys_SFB).
+template <class Coll, class BSConfig>
+static typename Coll::Arguments make_mainloop_args_pre(torch::Tensor A, torch::Tensor physSFA,
                                 torch::Tensor B, torch::Tensor physSFB,
-                                torch::Tensor& phys_SFA_out,
-                                int Mi, int Ni, int Ki, cudaStream_t stream) {
-  auto dev = A.device();
+                                int Mi, int Ni, int Ki) {
   auto layout_SFA = BSConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
   auto layout_SFB = BSConfig::tile_atom_to_shape_SFB(make_shape(Mi, Ni, Ki, 1));
-  auto u8opts = torch::TensorOptions().dtype(torch::kUInt8).device(dev);
-  int64_t sfa_size = (int64_t)size(filter_zeros(layout_SFA));
-  phys_SFA_out = torch::empty({sfa_size}, u8opts);
-  int total = Mi * Ki, tpb = 256;
-  cd_fill_sf_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
-      phys_SFA_out.data_ptr<uint8_t>(), SFA.data_ptr<uint8_t>(), layout_SFA, Mi, Ki, VEC);
-  check_cuda(cudaGetLastError(), "fill SFA launch");
-
   using ElemA = typename Coll::ElementA;      // packed data type (fp4/fp8)
   using ElemSF = typename Coll::ElementSF;
   StrideA sA = cutlass::make_cute_packed_stride(StrideA{}, {Mi, Ki, 1});
@@ -216,7 +320,7 @@ static typename Coll::Arguments make_mainloop_args(torch::Tensor A, torch::Tenso
   m.dA = sA;
   m.ptr_B = reinterpret_cast<ElemA const*>(B.data_ptr<uint8_t>());
   m.dB = sB;
-  m.ptr_SFA = reinterpret_cast<ElemSF const*>(phys_SFA_out.data_ptr<uint8_t>());
+  m.ptr_SFA = reinterpret_cast<ElemSF const*>(physSFA.data_ptr<uint8_t>());
   m.layout_SFA = layout_SFA;
   m.ptr_SFB = reinterpret_cast<ElemSF const*>(physSFB.data_ptr<uint8_t>());
   m.layout_SFB = layout_SFB;
@@ -235,58 +339,36 @@ static typename Epilogue::Arguments make_epi_args(torch::Tensor D, int Mi, int N
   };
 }
 
-// ---- Single-phase NVFP4 through the FORKED glue (Milestone-A gate) ----
-torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
-                                   torch::Tensor B, torch::Tensor physSFB,
-                                   int64_t M, int64_t N, int64_t K) {
-  TORCH_CHECK(K % 16 == 0, "K%16");
-  A = A.contiguous(); B = B.contiguous(); SFA = SFA.contiguous(); physSFB = physSFB.contiguous();
-  auto dev = A.device();
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream(dev.index());
-  int Mi=(int)M, Ni=(int)N, Ki=(int)K;
-  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
-
-  torch::Tensor phys_SFA;
-  auto nv_args = make_mainloop_args<ForkNV, BSConfigNV, 16>(
-      A, SFA, B, physSFB, phys_SFA, Mi, Ni, Ki, stream);
-
-  typename GemmSingle::Arguments arguments;
-  arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
-  arguments.problem_shape = {Mi, Ni, Ki, 1};
-  arguments.mainloop_nv = nv_args;
-  arguments.K_high = 0;
-  arguments.epilogue = make_epi_args(D, Mi, Ni);
-
-  GemmSingle gemm;
-  size_t ws = GemmSingle::get_workspace_size(arguments);
-  auto workspace = torch::empty({(int64_t)ws}, torch::TensorOptions().dtype(torch::kUInt8).device(dev));
-  auto st = gemm.can_implement(arguments);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "single can_implement: ", cutlassGetStatusString(st));
-  st = gemm.initialize(arguments, workspace.data_ptr(), stream);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "single initialize: ", cutlassGetStatusString(st));
+// ---- cached workspace helpers (overhead #3) ----
+// Persistent per-adapter workspace; grows only. can_implement run once per adapter.
+template <class Gemm>
+static void run_with_cached_ws(Gemm& gemm, typename Gemm::Arguments& arguments,
+                               torch::Device dev, cudaStream_t stream,
+                               torch::Tensor& ws_cache, bool& checked,
+                               const char* tag) {
+  size_t ws = Gemm::get_workspace_size(arguments);
+  if (!ws_cache.defined() || (size_t)ws_cache.numel() < std::max<size_t>(ws, 1)) {
+    ws_cache = torch::empty({(int64_t)std::max<size_t>(ws, 1)}, u8opts(dev));
+  }
+  if (!checked) {
+    auto st = gemm.can_implement(arguments);
+    TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " can_implement: ", cutlassGetStatusString(st));
+    checked = true;
+  }
+  auto st = gemm.initialize(arguments, ws_cache.data_ptr(), stream);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " initialize: ", cutlassGetStatusString(st));
   st = gemm.run(stream);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "single run: ", cutlassGetStatusString(st));
-  check_cuda(cudaStreamSynchronize(stream), "single sync");
-  return D;
+  TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " run: ", cutlassGetStatusString(st));
+  check_cuda(cudaStreamSynchronize(stream), "run sync");
 }
 
-// ---- Dual-phase fused NVFP4(K_low) + MXFP8(K_high) ----
-torch::Tensor cd_fused_gemm(torch::Tensor A_lo, torch::Tensor SFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
-                            torch::Tensor A_hi, torch::Tensor SFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
-                            int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
-  TORCH_CHECK(K_lo % 16 == 0 && K_hi % 32 == 0, "K_lo%16, K_hi%32");
-  A_lo=A_lo.contiguous(); B_lo=B_lo.contiguous(); SFA_lo=SFA_lo.contiguous(); physSFB_lo=physSFB_lo.contiguous();
-  A_hi=A_hi.contiguous(); B_hi=B_hi.contiguous(); SFA_hi=SFA_hi.contiguous(); physSFB_hi=physSFB_hi.contiguous();
-  auto dev = A_lo.device();
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream(dev.index());
-  int Mi=(int)M, Ni=(int)N, Klo=(int)K_lo, Khi=(int)K_hi;
-  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
-
-  torch::Tensor phys_SFA_lo, phys_SFA_hi;
-  auto nv_args = make_mainloop_args<ForkNV, BSConfigNV, 16>(
-      A_lo, SFA_lo, B_lo, physSFB_lo, phys_SFA_lo, Mi, Ni, Klo, stream);
-  auto mx_args = make_mainloop_args<ForkMX, BSConfigMX, 32>(
-      A_hi, SFA_hi, B_hi, physSFB_hi, phys_SFA_hi, Mi, Ni, Khi, stream);
+// ---- dual GEMM core: takes PRE-INTERLEAVED activation+weight SF, GEMM only ----
+static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
+                                  torch::Tensor A_hi, torch::Tensor physSFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
+                                  int Mi, int Ni, int Klo, int Khi, cudaStream_t stream, torch::Device dev) {
+  auto D = torch::empty({Mi, Ni}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
+  auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A_lo, physSFA_lo, B_lo, physSFB_lo, Mi, Ni, Klo);
+  auto mx_args = make_mainloop_args_pre<ForkMX, BSConfigMX>(A_hi, physSFA_hi, B_hi, physSFB_hi, Mi, Ni, Khi);
 
   typename GemmDual::Arguments arguments;
   arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
@@ -296,16 +378,81 @@ torch::Tensor cd_fused_gemm(torch::Tensor A_lo, torch::Tensor SFA_lo, torch::Ten
   arguments.K_high = Khi;
   arguments.epilogue = make_epi_args(D, Mi, Ni);
 
-  GemmDual gemm;
-  size_t ws = GemmDual::get_workspace_size(arguments);
-  auto workspace = torch::empty({(int64_t)ws}, torch::TensorOptions().dtype(torch::kUInt8).device(dev));
-  auto st = gemm.can_implement(arguments);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused can_implement: ", cutlassGetStatusString(st));
-  st = gemm.initialize(arguments, workspace.data_ptr(), stream);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused initialize: ", cutlassGetStatusString(st));
-  st = gemm.run(stream);
-  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused run: ", cutlassGetStatusString(st));
-  check_cuda(cudaStreamSynchronize(stream), "fused sync");
+  static GemmDual gemm;
+  static torch::Tensor ws_cache;
+  static bool checked = false;
+  run_with_cached_ws(gemm, arguments, dev, stream, ws_cache, checked, "fused");
+  return D;
+}
+
+// ---- GEMM-only ceiling: caller supplies already-interleaved activation SF ----
+torch::Tensor cd_fused_gemm_prepacked(torch::Tensor A_lo, torch::Tensor physSFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
+                                      torch::Tensor A_hi, torch::Tensor physSFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
+                                      int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+  TORCH_CHECK(K_lo % 16 == 0 && K_hi % 32 == 0, "K_lo%16, K_hi%32");
+  A_lo=A_lo.contiguous(); B_lo=B_lo.contiguous(); A_hi=A_hi.contiguous(); B_hi=B_hi.contiguous();
+  physSFA_lo=physSFA_lo.contiguous(); physSFB_lo=physSFB_lo.contiguous();
+  physSFA_hi=physSFA_hi.contiguous(); physSFB_hi=physSFB_hi.contiguous();
+  auto dev = A_lo.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  return run_dual_pre(A_lo, physSFA_lo, B_lo, physSFB_lo, A_hi, physSFA_hi, B_hi, physSFB_hi,
+                      (int)M, (int)N, (int)K_lo, (int)K_hi, stream, dev);
+}
+
+// ---- realistic per-call: efficient internal activation-SF interleave + cached dual GEMM ----
+template <bool EFFICIENT>
+static torch::Tensor fused_gemm_impl(torch::Tensor A_lo, torch::Tensor SFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
+                                     torch::Tensor A_hi, torch::Tensor SFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
+                                     int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+  TORCH_CHECK(K_lo % 16 == 0 && K_hi % 32 == 0, "K_lo%16, K_hi%32");
+  A_lo=A_lo.contiguous(); B_lo=B_lo.contiguous(); SFA_lo=SFA_lo.contiguous(); physSFB_lo=physSFB_lo.contiguous();
+  A_hi=A_hi.contiguous(); B_hi=B_hi.contiguous(); SFA_hi=SFA_hi.contiguous(); physSFB_hi=physSFB_hi.contiguous();
+  auto dev = A_lo.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  int Mi=(int)M, Ni=(int)N, Klo=(int)K_lo, Khi=(int)K_hi;
+  // per-call activation-SF interleave (no intermediate sync; same stream as GEMM)
+  auto physSFA_lo = interleave_sfa<BSConfigNV, 16, EFFICIENT>(SFA_lo, Mi, Ni, Klo, stream);
+  auto physSFA_hi = interleave_sfa<BSConfigMX, 32, EFFICIENT>(SFA_hi, Mi, Ni, Khi, stream);
+  return run_dual_pre(A_lo, physSFA_lo, B_lo, physSFB_lo, A_hi, physSFA_hi, B_hi, physSFB_hi,
+                      Mi, Ni, Klo, Khi, stream, dev);
+}
+
+torch::Tensor cd_fused_gemm(torch::Tensor A_lo, torch::Tensor SFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
+                            torch::Tensor A_hi, torch::Tensor SFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
+                            int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+  return fused_gemm_impl<true>(A_lo, SFA_lo, B_lo, physSFB_lo, A_hi, SFA_hi, B_hi, physSFB_hi, M, N, K_lo, K_hi);
+}
+torch::Tensor cd_fused_gemm_slow(torch::Tensor A_lo, torch::Tensor SFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
+                                 torch::Tensor A_hi, torch::Tensor SFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
+                                 int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+  return fused_gemm_impl<false>(A_lo, SFA_lo, B_lo, physSFB_lo, A_hi, SFA_hi, B_hi, physSFB_hi, M, N, K_lo, K_hi);
+}
+
+// ---- Single-phase NVFP4 through the FORKED glue (Milestone-A gate) ----
+torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
+                                   torch::Tensor B, torch::Tensor physSFB,
+                                   int64_t M, int64_t N, int64_t K) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  A = A.contiguous(); B = B.contiguous(); SFA = SFA.contiguous(); physSFB = physSFB.contiguous();
+  auto dev = A.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  int Mi=(int)M, Ni=(int)N, Ki=(int)K;
+  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
+  auto physSFA = interleave_sfa<BSConfigNV, 16, true>(SFA, Mi, Ni, Ki, stream);
+
+  auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A, physSFA, B, physSFB, Mi, Ni, Ki);
+
+  typename GemmSingle::Arguments arguments;
+  arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
+  arguments.problem_shape = {Mi, Ni, Ki, 1};
+  arguments.mainloop_nv = nv_args;
+  arguments.K_high = 0;
+  arguments.epilogue = make_epi_args(D, Mi, Ni);
+
+  static GemmSingle gemm;
+  static torch::Tensor ws_cache;
+  static bool checked = false;
+  run_with_cached_ws(gemm, arguments, dev, stream, ws_cache, checked, "single");
   return D;
 }
 
@@ -324,9 +471,15 @@ static std::string cd_compat_report() {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("prepack_sf_fp4_b", &cd_prepack_sf_fp4_b, "prepack NVFP4 weight SF");
-  m.def("prepack_sf_fp8_b", &cd_prepack_sf_fp8_b, "prepack MXFP8 weight SF");
+  m.def("prepack_sf_fp4_b", &cd_prepack_sf_fp4_b, "prepack NVFP4 weight SF (load-time, efficient)");
+  m.def("prepack_sf_fp8_b", &cd_prepack_sf_fp8_b, "prepack MXFP8 weight SF (load-time, efficient)");
+  m.def("prepack_sf_fp4_a", &cd_prepack_sf_fp4_a, "interleave NVFP4 activation SF (efficient)");
+  m.def("prepack_sf_fp8_a", &cd_prepack_sf_fp8_a, "interleave MXFP8 activation SF (efficient)");
+  m.def("prepack_sf_fp4_a_slow", &cd_prepack_sf_fp4_a_slow, "interleave NVFP4 activation SF (old redundant; before-number only)");
+  m.def("prepack_sf_fp8_a_slow", &cd_prepack_sf_fp8_a_slow, "interleave MXFP8 activation SF (old redundant; before-number only)");
   m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)");
-  m.def("fused_gemm", &cd_fused_gemm, "dual-format NVFP4(Klo)+MXFP8(Khi) shared-accumulator fused GEMM");
+  m.def("fused_gemm", &cd_fused_gemm, "dual-format fused GEMM; efficient per-call activation-SF interleave + cached workspace");
+  m.def("fused_gemm_slow", &cd_fused_gemm_slow, "dual-format fused GEMM with OLD redundant interleave (before-number only)");
+  m.def("fused_gemm_prepacked", &cd_fused_gemm_prepacked, "dual-format fused GEMM, activation SF pre-interleaved (GEMM-only ceiling)");
   m.def("compat_report", &cd_compat_report, "build/smem report");
 }
