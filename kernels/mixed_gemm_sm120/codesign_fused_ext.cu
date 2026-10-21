@@ -53,6 +53,7 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <string>
+#include <vector>
 
 #include "cutlass/cutlass.h"
 #include "cute/tensor.hpp"
@@ -116,6 +117,55 @@ __global__ void cd_fill_sf_block_kernel(uint8_t* __restrict__ phys,
   int blk = idx % nblk;
   int off = layout(make_coord(r, blk * VEC, 0));
   phys[off] = logical[r * nblk + blk];
+}
+
+// ===================================================================================
+// round-18: FUSED activation quant/pack step. The REAL inference pipeline quantizes the
+// activation per call -- the quantize/pack step already touches every element and emits
+// the block SF. This kernel models that step: ONE pass over (row, block) that (a) packs
+// the data (fp4: 2 codes/byte; fp8: byte copy) AND (b) stores the block SF to EITHER the
+// natural contiguous layout (ILV=false) OR the CUTLASS interleaved atom layout (ILV=true).
+// The data-pack path is byte-identical for both SF targets; the ONLY difference between
+// the two variants is the SF store address (one contiguous write vs one scattered write).
+// Measuring NAT vs ILV therefore isolates the true marginal cost of emitting interleaved
+// SF inside the step that already runs per call -> answers "is folding the interleave
+// into quant/pack free?". When ILV output feeds fused_gemm_prepacked there is NO separate
+// per-call interleave launch: the co-design reaches its GEMM-only ceiling.
+// Bit-exact by construction: the SF VALUES are unchanged (a layout permutation); the ILV
+// output is torch.equal to the standalone interleave of the same natural SF (r17-proven).
+template <class LayoutSF, int VEC, bool PACK, bool ILV>
+__global__ void cd_quant_pack_kernel(uint8_t* __restrict__ data_out,
+                                     uint8_t* __restrict__ sf_out,
+                                     const uint8_t* __restrict__ data_in,
+                                     const uint8_t* __restrict__ sf_in,
+                                     LayoutSF layout, int rows, int nblk, int K) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = rows * nblk;
+  if (idx >= total) return;
+  int r = idx / nblk;
+  int b = idx % nblk;
+  // --- SF store: the ONLY NAT/ILV difference (same value, different address) ---
+  uint8_t sfv = sf_in[r * nblk + b];
+  if (ILV) {
+    int off = layout(make_coord(r, b * VEC, 0));
+    sf_out[off] = sfv;
+  } else {
+    sf_out[r * nblk + b] = sfv;
+  }
+  // --- data pack/copy: byte-identical for both variants ---
+  int base = r * K + b * VEC;
+  if (PACK) {                      // fp4: VEC codes -> VEC/2 packed bytes (even k = low nibble)
+    int obase = r * (K / 2) + b * (VEC / 2);
+#pragma unroll
+    for (int j = 0; j < VEC / 2; ++j) {
+      uint8_t lo = data_in[base + 2 * j] & 0x0F;
+      uint8_t hi = data_in[base + 2 * j + 1] & 0x0F;
+      data_out[obase + j] = lo | (hi << 4);
+    }
+  } else {                         // fp8: copy VEC bytes
+#pragma unroll
+    for (int j = 0; j < VEC; ++j) data_out[base + j] = data_in[base + j];
+  }
 }
 
 // Decompose a MainloopSm120TmaWarpSpecializedBlockScaled policy into its parts so
@@ -304,6 +354,53 @@ torch::Tensor cd_prepack_sf_fp8_a_slow(torch::Tensor SFA, int64_t M, int64_t N, 
   return phys;
 }
 
+// ---- round-18: fused quant/pack step (data pack + SF layout in one pass) ----
+// Returns {packed_data, SF}. ilv=true emits interleaved atom-layout SF (folds the r17
+// standalone interleave into the pack step -> GEMM-only ceiling reachable per call with
+// NO separate interleave launch). ilv=false emits natural contiguous SF (what the
+// shipping kernel consumes natively). Data pack is identical for both.
+template <class BSConfig, int VEC, bool PACK>
+static std::vector<torch::Tensor> quant_pack_impl(torch::Tensor data_in, torch::Tensor sf_in,
+                                                  int Mi, int Ni, int Ki, bool ilv,
+                                                  cudaStream_t stream) {
+  TORCH_CHECK(data_in.is_cuda() && data_in.scalar_type() == torch::kUInt8, "data_in CUDA uint8");
+  TORCH_CHECK(sf_in.is_cuda() && sf_in.scalar_type() == torch::kUInt8, "sf_in CUDA uint8");
+  data_in = data_in.contiguous(); sf_in = sf_in.contiguous();
+  auto dev = data_in.device();
+  int nblk = Ki / VEC;
+  int64_t dsz = PACK ? (int64_t)Mi * (Ki / 2) : (int64_t)Mi * Ki;
+  auto data_out = torch::empty({dsz}, u8opts(dev));
+  auto layout_SFA = BSConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
+  int64_t sfsz = ilv ? (int64_t)size(filter_zeros(layout_SFA)) : (int64_t)Mi * nblk;
+  auto sf_out = torch::empty({sfsz}, u8opts(dev));
+  int total = Mi * nblk, tpb = 256;
+  dim3 grid((total + tpb - 1) / tpb);
+  if (ilv)
+    cd_quant_pack_kernel<decltype(layout_SFA), VEC, PACK, true><<<grid, tpb, 0, stream>>>(
+        data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
+        data_in.data_ptr<uint8_t>(), sf_in.data_ptr<uint8_t>(), layout_SFA, Mi, nblk, Ki);
+  else
+    cd_quant_pack_kernel<decltype(layout_SFA), VEC, PACK, false><<<grid, tpb, 0, stream>>>(
+        data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
+        data_in.data_ptr<uint8_t>(), sf_in.data_ptr<uint8_t>(), layout_SFA, Mi, nblk, Ki);
+  check_cuda(cudaGetLastError(), "quant_pack launch");
+  data_out = data_out.view({Mi, PACK ? Ki / 2 : Ki});
+  return {data_out, sf_out};
+}
+
+std::vector<torch::Tensor> cd_quant_pack_fp4(torch::Tensor codes, torch::Tensor SFA,
+                                             int64_t M, int64_t N, int64_t K, bool ilv) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  auto stream = at::cuda::getCurrentCUDAStream(codes.device().index());
+  return quant_pack_impl<BSConfigNV, 16, true>(codes, SFA, (int)M, (int)N, (int)K, ilv, stream);
+}
+std::vector<torch::Tensor> cd_quant_pack_fp8(torch::Tensor bytes, torch::Tensor SFA,
+                                             int64_t M, int64_t N, int64_t K, bool ilv) {
+  TORCH_CHECK(K % 32 == 0, "K%32");
+  auto stream = at::cuda::getCurrentCUDAStream(bytes.device().index());
+  return quant_pack_impl<BSConfigMX, 32, false>(bytes, SFA, (int)M, (int)N, (int)K, ilv, stream);
+}
+
 // Build a collective's mainloop Arguments from pre-interleaved SF (phys_SFA/phys_SFB).
 template <class Coll, class BSConfig>
 static typename Coll::Arguments make_mainloop_args_pre(torch::Tensor A, torch::Tensor physSFA,
@@ -477,6 +574,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("prepack_sf_fp8_a", &cd_prepack_sf_fp8_a, "interleave MXFP8 activation SF (efficient)");
   m.def("prepack_sf_fp4_a_slow", &cd_prepack_sf_fp4_a_slow, "interleave NVFP4 activation SF (old redundant; before-number only)");
   m.def("prepack_sf_fp8_a_slow", &cd_prepack_sf_fp8_a_slow, "interleave MXFP8 activation SF (old redundant; before-number only)");
+  m.def("quant_pack_fp4", &cd_quant_pack_fp4, "round-18 fused pack: NVFP4 data pack + SF layout (ilv=interleaved atom / natural); returns {packed, SF}");
+  m.def("quant_pack_fp8", &cd_quant_pack_fp8, "round-18 fused pack: MXFP8 byte copy + SF layout (ilv=interleaved atom / natural); returns {bytes, SF}");
   m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)");
   m.def("fused_gemm", &cd_fused_gemm, "dual-format fused GEMM; efficient per-call activation-SF interleave + cached workspace");
   m.def("fused_gemm_slow", &cd_fused_gemm_slow, "dual-format fused GEMM with OLD redundant interleave (before-number only)");
