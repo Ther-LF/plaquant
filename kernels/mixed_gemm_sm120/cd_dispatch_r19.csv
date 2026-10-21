@@ -1,0 +1,16 @@
+shape,M,r_range,kernel,cd_config,hand_config,verdict
+qkv,512,r<=0.875,ship,,SFILV0+SFASYNC+KPIPE tile0/sw0/pers0,headroom-small-gemm
+qkv,512,r>=0.9375,codesign,128x128_NV4MX2(M512:NV3 +~1%),,headroom
+qkv,2048,r<=0.1875,ship,,SFILV0+SFASYNC+KPIPE tile0/sw0/pers0,headroom
+qkv,2048,r>=0.25,codesign,128x128_NV4MX2,,headroom-phase
+qkv,4096,all,codesign,128x128_NV4MX2,,at-limit(r=0);headroom(r>0)
+qkv,8192,all,codesign,128x128_NV4MX2,,at-limit(r<=1/16);headroom
+down,512,all,codesign,128x128_NV4MX2,,headroom-small-gemm
+down,2048,all,codesign,128x128_NV4MX2,,at-limit(r<=1/16);headroom
+down,4096,all,codesign,128x128_NV4MX2,,at-limit(r<=1/8 incl production);headroom
+down,8192,all,codesign,128x128_NV4MX2,,at-limit(r<=1/8 incl production);headroom
+gate,512,r<=0.75,ship,,SFILV0+SFASYNC+KPIPE tile0/sw8/pers1,headroom-small-gemm
+gate,512,r>0.75,codesign,128x128_NV4MX2,,headroom
+gate,2048,all,codesign,128x128_NV4MX2,,headroom-phase
+gate,4096,all,codesign,128x128_NV4MX2,,at-limit(r=0);headroom
+gate,8192,all,codesign,128x128_NV4MX2,,at-limit(r<=1/16);headroom
