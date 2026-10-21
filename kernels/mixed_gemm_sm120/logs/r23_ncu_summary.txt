@@ -1,0 +1,20 @@
+# Round-23 ncu (luofan-ncu, GPU4, -c1 -s10, device_kernel/b1_tma regex). ncu base clock.
+# label        TCela  TCact  SMact  DRAM  regs  occR  occS  waves  warp%  dur_us
+base_down      72.6   81.0   89.6  10.5   168     1     1   1.00   18.8   313.4   # serial dual, shared accum (co-design)
+optc_down      72.0   80.5   89.5  10.4   168     1     1   1.00   18.8   315.6   # Option-C 2-accumulator (register probe)
+ship_down      60.1   66.6   90.2   8.7   168     1     1   5.45   18.5   374.2
+fp4_down       78.0   86.6   90.0  11.4   168     1     1   5.45   20.8   260.8   # PURE NVFP4 2-WG -> 78% TC ceiling
+fp8_down       75.5   83.6   90.2  10.6   168     1     1   5.45   20.8   526.9   # PURE MXFP8 2-WG
+base_gate      64.4   67.1   96.1  16.0   168     1     1   1.00   18.8   455.7
+optc_gate      62.6   64.8   96.7  15.4   168     1     1   1.00   18.8   470.7
+ship_gate      55.5   56.8   97.6  13.7   168     1     1   1.00   18.7   530.1
+fp4_gate       71.2   72.7   98.0  24.0   168     1     1  21.79   20.8   280.8
+fp8_gate       75.6   77.2   97.9  14.8   168     1     1  21.79   20.8   523.6
+base_qkv       54.4   62.4   87.2   7.9   168     1     1   1.00   18.8   105.0
+optc_qkv       53.0   60.8   87.2   7.7   168     1     1   1.00   18.8   107.0
+ship_qkv       44.7   50.1   89.2   6.5   168     1     1   5.45   18.1   126.0
+#
+# Option-C register/smem (codesign_optc_ext compat_report + ptxas):
+#   two accumulators (128 floats/thread) -> 168 reg/thread (= baseline, launch-bound capped), trivial spill 24B st/48B ld, 1 CTA/SM, cos 0.999998-0.999999, latency optc/base 1.009(down)/0.993(gate)/0.990(qkv)
+#   tensor_smem NV=73728 MX=67584  union(serial)=73728 (<101376 OK)  deunion(concurrent Option-C)=141312 (>>101376 cap) -> SMEM-BLOCKED at 128x128
+# Verdict: register wall REFUTED; real blocker = de-union smem; concurrent dual-precision TC = NO-GO (pure single-format 2-WG already caps 71-78%).
