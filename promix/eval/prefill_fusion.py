@@ -246,17 +246,23 @@ def run_ppl(config, args):
 
     # (a) pre-fix real-kernel baseline (bf16 gemm, no fixes) -> reproduces 14.85
     ppl_base = real_ppl(cd, False, False, "REAL_BASELINE")
+    # (a2) fix1 ALONE (div-fold, bf16 gemm) -> the SHIPPABLE numerics-safe config
+    ppl_fix1 = real_ppl(cd, True, False, "REAL_fix1_divfold_ONLY")
     # (b) SHIP config: div-fold + fp16-output GEMM (gate-passing fixes)
     ppl_ship = real_ppl(cd16, True, False, "REAL_SHIP_fix1_fix3")
     # (c) +fix2 (fp32 Hadamard -> pack) for documentation of its accuracy impact
     ppl_hadfp32 = real_ppl(cd16, True, True, "REAL_PLUS_fix2_hadfp32")
 
     print(f"PPL_SUMMARY twin={ppl_twin:.4f} base={ppl_base:.4f} "
+          f"fix1_only={ppl_fix1:.4f} "
           f"ship(fix1+fix3)={ppl_ship:.4f} (+fix2)={ppl_hadfp32:.4f} "
+          f"| fix1 vs base delta={ppl_fix1-ppl_base:+.4f} "
           f"| ship vs base delta={ppl_ship-ppl_base:+.4f}", flush=True)
     out = {"config": args.config, "ppl": dict(
         fake_twin=ppl_twin, real_baseline=ppl_base,
+        real_fix1_divfold_only=ppl_fix1,
         real_ship_fix1_fix3=ppl_ship, real_plus_fix2=ppl_hadfp32,
+        fix1_minus_base=ppl_fix1 - ppl_base,
         ship_minus_base=ppl_ship - ppl_base, gptq=args.gptq)}
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2, default=str)

@@ -184,15 +184,24 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
         wrapper.module = mql
         wrapper.quantizer.bits = 16  # disable fake-quant; real quant is inside mql
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
-        # Prefill-fusion levers for the online Hadamard (down_proj only): fold
-        # 1/sqrt(n) into the transform kernel (kill the separate div) and hand
-        # the FP32 Hadamard output straight to the qpf pack (skip the fp32->fp16
-        # cast). Both are numerics-safe (constant fold + one fewer intermediate
-        # round) and gated by the prefill-fusion cosine/PPL harnesses.
+        # Prefill-fusion lever (down_proj online Hadamard only): fold 1/sqrt(n)
+        # into the transform kernel (kills the separate /sqrt(n) div kernel).
+        # VALIDATED numerics-safe: it is a constant fold (reciprocal-multiply vs
+        # divide, <=1 ULP) -> whole-model prefill logit cosine 1.000000 vs the
+        # pre-fusion path at M=2048/4096/8192 and wikitext-2 PPL 14.849 == the
+        # pre-fusion 14.849 baseline (docs/prefill_fusion_validated_report.md).
+        #
+        # The other two prefill-fusion candidates were REVERTED here after the
+        # numerics gate failed them (kept ONLY as reproducible negatives in the
+        # prefill_fusion.py harness, never in this production path):
+        #   - had_out_fp32 (feed FP32 Hadamard output straight to the qpf pack,
+        #     skipping the .to(fp16) cast): changes the down_proj quant input
+        #     precision -> logit cos 0.96-0.98, PPL 14.874 (+0.025). FAIL.
+        #   - fp16-output GEMM epilogue (codesign_fused_fp16_ext.cu, cd16): the
+        #     bf16->fp16 accumulator-store change -> logit cos 0.983, PPL 14.914
+        #     (+0.064). FAIL. Production keeps the bf16-output `cd`.
         if getattr(wrapper, "online_full_had", False):
             wrapper.fold_had_scale = True
-            if getattr(wrapper, "fp32_had", False):
-                wrapper.had_out_fp32 = True
         n += 1
     print(f"wire_real_kernel: wired {n} Linears (qpf={'on' if qpf else 'off'}, "
           f"decode_gemv={'on' if dg else 'off'})", flush=True)

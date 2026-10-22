@@ -1,0 +1,204 @@
+{
+  "config": "/home/luofan/plaquant/promix/configs/llama-3.2-1b-fp-perhead.yaml",
+  "ms": "2048,4096,8192",
+  "perf": [
+    {
+      "M": 2048,
+      "t_fp16_eager_ms": 20.655600004829466,
+      "stages": [
+        {
+          "stage": "baseline",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 29.15834402665496,
+          "t_graph_ms": 18.793865980114788,
+          "cos_eager_vs_prefix": 1.0000003576278687,
+          "cos_graph_vs_prefix": 1.0000003576278687,
+          "speedup_graph_vs_fp16": 1.0990607268714443
+        },
+        {
+          "stage": "fix1_divfold",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 28.025345993228257,
+          "t_graph_ms": 18.45226704608649,
+          "cos_eager_vs_prefix": 1.0000003576278687,
+          "cos_graph_vs_prefix": 1.0000003576278687,
+          "speedup_graph_vs_fp16": 1.119407168411335
+        },
+        {
+          "stage": "fix3_fp16gemm_only",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 27.84116001566872,
+          "t_graph_ms": 17.688845982775092,
+          "cos_eager_vs_prefix": 0.9831165075302124,
+          "cos_graph_vs_prefix": 0.9831165075302124,
+          "speedup_graph_vs_fp16": 1.1677189130903913
+        },
+        {
+          "stage": "fix13_divfold_fp16",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 26.566112996079028,
+          "t_graph_ms": 17.036398989148438,
+          "cos_eager_vs_prefix": 0.9831165075302124,
+          "cos_graph_vs_prefix": 0.9831165075302124,
+          "speedup_graph_vs_fp16": 1.2124393199517296
+        },
+        {
+          "stage": "fix2_hadfp32",
+          "divfold": true,
+          "hadfp32": true,
+          "gemm": "fp16",
+          "t_eager_ms": 26.582267018966377,
+          "t_graph_ms": 16.64675201755017,
+          "cos_eager_vs_prefix": 0.9830741286277771,
+          "cos_graph_vs_prefix": 0.9830741286277771,
+          "speedup_graph_vs_fp16": 1.2408186283458111
+        }
+      ],
+      "breakdown": {
+        "pack_ms": 3.143274721999963,
+        "gemm_ms": 8.157400538523992,
+        "fp16_linear_ms": 11.59560006732742
+      }
+    },
+    {
+      "M": 4096,
+      "t_fp16_eager_ms": 40.723211015574634,
+      "stages": [
+        {
+          "stage": "baseline",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 49.436389002949,
+          "t_graph_ms": 42.72436600876972,
+          "cos_eager_vs_prefix": 1.0000005960464478,
+          "cos_graph_vs_prefix": 1.0000005960464478,
+          "speedup_graph_vs_fp16": 0.9531612711869306
+        },
+        {
+          "stage": "fix1_divfold",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 46.824118006043136,
+          "t_graph_ms": 39.97547196922824,
+          "cos_eager_vs_prefix": 1.0000005960464478,
+          "cos_graph_vs_prefix": 1.0000005960464478,
+          "speedup_graph_vs_fp16": 1.018704946045965
+        },
+        {
+          "stage": "fix3_fp16gemm_only",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 46.97413498070091,
+          "t_graph_ms": 40.200399002060294,
+          "cos_eager_vs_prefix": 0.9843597412109375,
+          "cos_graph_vs_prefix": 0.9843597412109375,
+          "speedup_graph_vs_fp16": 1.0130051448864361
+        },
+        {
+          "stage": "fix13_divfold_fp16",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 44.07845297828317,
+          "t_graph_ms": 37.32760896673426,
+          "cos_eager_vs_prefix": 0.9843597412109375,
+          "cos_graph_vs_prefix": 0.9843597412109375,
+          "speedup_graph_vs_fp16": 1.090967574479964
+        },
+        {
+          "stage": "fix2_hadfp32",
+          "divfold": true,
+          "hadfp32": true,
+          "gemm": "fp16",
+          "t_eager_ms": 42.51999099506065,
+          "t_graph_ms": 35.805071995127946,
+          "cos_eager_vs_prefix": 0.9842121005058289,
+          "cos_graph_vs_prefix": 0.9842121005058289,
+          "speedup_graph_vs_fp16": 1.1373587245157866
+        }
+      ],
+      "breakdown": {
+        "pack_ms": 5.421160037318865,
+        "gemm_ms": 11.304760506997505,
+        "fp16_linear_ms": 21.866122695306935
+      }
+    },
+    {
+      "M": 8192,
+      "t_fp16_eager_ms": 85.45165997929871,
+      "stages": [
+        {
+          "stage": "baseline",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 103.5046479664743,
+          "t_graph_ms": 97.8834829875268,
+          "cos_eager_vs_prefix": 1.0000011920928955,
+          "cos_graph_vs_prefix": 1.0000011920928955,
+          "speedup_graph_vs_fp16": 0.8729936591057731
+        },
+        {
+          "stage": "fix1_divfold",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "bf16",
+          "t_eager_ms": 96.41678602201864,
+          "t_graph_ms": 91.98407299118116,
+          "cos_eager_vs_prefix": 1.0000011920928955,
+          "cos_graph_vs_prefix": 1.0000011920928955,
+          "speedup_graph_vs_fp16": 0.9289832163388901
+        },
+        {
+          "stage": "fix3_fp16gemm_only",
+          "divfold": false,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 95.7558989757672,
+          "t_graph_ms": 90.12524597346783,
+          "cos_eager_vs_prefix": 0.9836820960044861,
+          "cos_graph_vs_prefix": 0.9836820960044861,
+          "speedup_graph_vs_fp16": 0.9481434314693024
+        },
+        {
+          "stage": "fix13_divfold_fp16",
+          "divfold": true,
+          "hadfp32": false,
+          "gemm": "fp16",
+          "t_eager_ms": 89.93676403770223,
+          "t_graph_ms": 84.35792499221861,
+          "cos_eager_vs_prefix": 0.9836820960044861,
+          "cos_graph_vs_prefix": 0.9836820960044861,
+          "speedup_graph_vs_fp16": 1.0129654088478466
+        },
+        {
+          "stage": "fix2_hadfp32",
+          "divfold": true,
+          "hadfp32": true,
+          "gemm": "fp16",
+          "t_eager_ms": 86.42497699474916,
+          "t_graph_ms": 80.64172696322203,
+          "cos_eager_vs_prefix": 0.9834153056144714,
+          "cos_graph_vs_prefix": 0.9834153056144714,
+          "speedup_graph_vs_fp16": 1.0596457094510183
+        }
+      ],
+      "breakdown": {
+        "pack_ms": 9.961030414948862,
+        "gemm_ms": 19.334422921140987,
+        "fp16_linear_ms": 40.526370611041784
+      }
+    }
+  ]
+}
