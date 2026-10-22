@@ -248,8 +248,17 @@ def run_gptq_if_enabled(model, config, dev, *, _gptq_fwrd=None,
     GPTQ instead of TypeErroring on a bare `bits < 16`.
 
     Returns True iff GPTQ ran, False if w_bits was 16 (no quant).
+
+    Side effect: when GPTQ runs, the returned per-layer `WeightQuantizer`
+    dict (each holding the FROZEN per-block weight scales from
+    `find_params` on the pre-correction weight) is stashed on the model as
+    `model._gptq_quantizers`. The full-network weight packer
+    (`full_network.pack_all_targets`) reuses those frozen scales so the
+    packed NVFP4/MXFP8 codes are built against GPTQ's frozen scale instead
+    of a re-derived absmax (RTN), recovering GPTQ's full accuracy benefit.
     """
     if not _quant_enabled(config['quantize']['w_bits']):
+        model._gptq_quantizers = None
         return False
     if _gptq_fwrd is None:
         _gptq_fwrd = gptq_fwrd
@@ -266,7 +275,8 @@ def run_gptq_if_enabled(model, config, dev, *, _gptq_fwrd=None,
         tokenizer=tokenizer_calib,
         eval_mode=False,
     )
-    _gptq_fwrd(model, trainloader, dev, config)
+    quantizers, _int_weights = _gptq_fwrd(model, trainloader, dev, config)
+    model._gptq_quantizers = quantizers
     return True
 
 

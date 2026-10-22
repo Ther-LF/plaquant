@@ -101,10 +101,53 @@ class FakeMixedLinear(nn.Module):
         return D.reshape(*in_shape[:-1], self.N)
 
 
-def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True):
+def _frozen_scales_for(name, quantizers):
+    """Look up GPTQ's frozen per-block weight scales for the target Linear at
+    ActQuantWrapper module `name`.
+
+    `gptq_fwrd` keys its returned `quantizers` dict by
+    ``model.layers.{i}.{sub}.module`` (main/NVFP4 quantizer) and
+    ``model.layers.{i}.{sub}.module,high_quantizer`` (high/MXFP8). The
+    wrapper names yielded by `iter_target_wrappers` are exactly
+    ``model.layers.{i}.{sub}`` (HF LlamaForCausalLM.named_modules), so the
+    main key is simply ``name + ".module"``.
+
+    Returns (nvfp4_scale, mxfp8_scale): each a (N, n_blocks) tensor frozen on
+    the PRE-correction weight by `WeightQuantizer.find_params`, or None when
+    the quantizers dict is absent or the entry/attribute is missing (RTN
+    fallback).
+    """
+    if not quantizers:
+        return None, None
+    main_key = name + ".module"
+    high_key = main_key + ",high_quantizer"
+    nv_scale = mx_scale = None
+    qm = quantizers.get(main_key)
+    if qm is not None:
+        nv_scale = getattr(qm, "frozen_scales", None)
+    qh = quantizers.get(high_key)
+    if qh is not None:
+        mx_scale = getattr(qh, "frozen_scales", None)
+    return nv_scale, mx_scale
+
+
+def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
+                     quantizers=None):
     """Pack every target Linear's (rotated+reordered) weight ONCE. Returns
     {name: PackedWeight}. Call before wiring; both wire_* consume this so the
-    real kernel and the fake twin share byte-identical weight numerics."""
+    real kernel and the fake twin share byte-identical weight numerics.
+
+    When GPTQ ran, its frozen per-block weight scales are used so the packed
+    NVFP4/MXFP8 codes + SFB are built against GPTQ's FROZEN scale (the one its
+    inner loop rounded the Hessian-corrected columns against) instead of a
+    re-derived absmax (RTN) — this recovers GPTQ's full accuracy benefit.
+    `quantizers` defaults to the dict stashed on the model by
+    `run_gptq_if_enabled` (`model._gptq_quantizers`); pass an explicit dict to
+    override, or leave None (and no stash) to use the RTN path.
+    """
+    if quantizers is None:
+        quantizers = getattr(model, "_gptq_quantizers", None)
+    nfrozen = 0
     packed = {}
     for name, short, wrapper in iter_target_wrappers(model):
         W = wrapper.module.weight.data
@@ -112,13 +155,18 @@ def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True):
         K_low, K_high = _khigh_for(wrapper, K, high_fraction)
         bias = getattr(wrapper.module, "bias", None)
         bias = None if bias is None else bias.data
-        pk = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
+        nv_scale, mx_scale = _frozen_scales_for(name, quantizers)
+        if nv_scale is not None or mx_scale is not None:
+            nfrozen += 1
+        pk = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias,
+                               frozen_nvfp4_scale=nv_scale,
+                               frozen_mxfp8_scale=mx_scale)
         packed[name] = pk
         if verbose:
             print(f"  packed {name:48s} N={pk.N:5d} K={pk.K:5d} "
                   f"Kl={pk.K_low:5d} Kh={pk.K_high:4d}", flush=True)
-    if verbose:
-        print(f"pack_all_targets: packed {len(packed)} Linears", flush=True)
+    src = f"frozen-GPTQ-scale ({nfrozen}/{len(packed)})" if nfrozen else "RTN absmax"
+    print(f"pack_all_targets: packed {len(packed)} Linears [{src}]", flush=True)
     return packed
 
 

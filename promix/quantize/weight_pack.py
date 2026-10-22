@@ -42,19 +42,32 @@ from promix.quantize import quant_utils as qu
 # nvfp4_gemm.quantize_nvfp4 helper) makes MixedQuantLinear a faithful,
 # >=0.999-cosine replacement for the ProMix fake-quant path.
 # ---------------------------------------------------------------------------
-def quantize_nvfp4_spec(x, block=16):
+def quantize_nvfp4_spec(x, block=16, frozen_scale=None):
     """NVFP4: returns (codes uint8 (R,K), sf uint8 (R,K/16), deq f32 (R,K)).
 
-    deq == quant_utils.fake_quantize_nvfp4(x); sf = E4M3 byte of the round-UP
-    block scale; codes = FP4 E2M1 (abs index | 0x8 sign)."""
+    deq == quant_utils.fake_quantize_nvfp4(x); sf = E4M3 byte of the block
+    scale; codes = FP4 E2M1 (abs index | 0x8 sign).
+
+    Block-scale source:
+      * frozen_scale=None  -> RTN: re-derive the scale from this (possibly
+        GPTQ-corrected) block's own absmax, rounded UP to the E4M3 grid.
+      * frozen_scale given  -> use GPTQ's FROZEN per-row-per-block scale
+        (shape (R, K//block), each value an E4M3 grid point produced by
+        quant_utils.select_block_scales_nvfp4 on the PRE-correction weight).
+        This is the scale GPTQ's inner loop rounded the Hessian-corrected
+        columns against, so packing the stored (dequantized) weight against
+        it is bit-faithful to GPTQ instead of a scale-re-derivation RTN."""
     R, K = x.shape
     assert K % block == 0
     dev = x.device
     xf = x.float().reshape(R, K // block, block)
-    bmax = xf.abs().amax(-1, keepdim=True)
-    ideal = (bmax / qu.FP4_E2M1_MAX).clamp_min(2.0 ** -9)
-    e4m3 = torch.tensor(qu._FP8_E4M3_POS, device=dev, dtype=torch.float32)
-    scale = qu._ceil_to_value(ideal, e4m3)                      # (R,nb,1) grid value
+    if frozen_scale is not None:
+        scale = frozen_scale.to(dev, torch.float32).reshape(R, K // block, 1)
+    else:
+        bmax = xf.abs().amax(-1, keepdim=True)
+        ideal = (bmax / qu.FP4_E2M1_MAX).clamp_min(2.0 ** -9)
+        e4m3 = torch.tensor(qu._FP8_E4M3_POS, device=dev, dtype=torch.float32)
+        scale = qu._ceil_to_value(ideal, e4m3)                  # (R,nb,1) grid value
     xs = (xf / scale).clamp(-qu.FP4_E2M1_MAX, qu.FP4_E2M1_MAX)
     fp4 = torch.tensor(qu.FP4_E2M1_POS, device=dev, dtype=torch.float32)
     qsigned = qu._round_to_nearest_value(xs, fp4)               # signed grid value
@@ -67,18 +80,27 @@ def quantize_nvfp4_spec(x, block=16):
     return code.reshape(R, K).contiguous(), sf, deq
 
 
-def quantize_mxfp8_spec(x, block=32):
+def quantize_mxfp8_spec(x, block=32, frozen_scale=None):
     """MXFP8: returns (bytes uint8 (R,K), sf uint8 (R,K/32), deq f32 (R,K)).
 
     deq == quant_utils.fake_quantize_mxfp8(x); sf = E8M0 exponent byte
-    (exp+127); bytes = FP8 E4M3 element encoding."""
+    (exp+127); bytes = FP8 E4M3 element encoding.
+
+    Block-scale source mirrors quantize_nvfp4_spec: frozen_scale=None re-derives
+    a power-of-2 scale from this block's absmax (RTN); frozen_scale (shape
+    (R, K//block), each value a power-of-2 from
+    quant_utils.select_block_scales_mxfp8 on the pre-correction weight) uses
+    GPTQ's frozen scale so packing is bit-faithful to GPTQ."""
     R, K = x.shape
     assert K % block == 0
     dev = x.device
     xf = x.float().reshape(R, K // block, block)
-    bmax = xf.abs().amax(-1, keepdim=True).clamp_min(0.0)
-    ideal = bmax / qu.FP8_E4M3_MAX
-    scale = qu._e8m0_round_up(ideal.clamp_min(2.0 ** -127))     # power-of-2
+    if frozen_scale is not None:
+        scale = frozen_scale.to(dev, torch.float32).reshape(R, K // block, 1)
+    else:
+        bmax = xf.abs().amax(-1, keepdim=True).clamp_min(0.0)
+        ideal = bmax / qu.FP8_E4M3_MAX
+        scale = qu._e8m0_round_up(ideal.clamp_min(2.0 ** -127))     # power-of-2
     xs = (xf / scale).clamp(-qu.FP8_E4M3_MAX, qu.FP8_E4M3_MAX)
     e4m3 = torch.tensor(qu._FP8_E4M3_POS, device=dev, dtype=torch.float32)
     qsigned = qu._round_to_nearest_value(xs, e4m3)
@@ -120,7 +142,8 @@ def split_k(K, high_fraction=0.125):
     return K_low, K_high
 
 
-def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None):
+def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
+                      frozen_nvfp4_scale=None, frozen_mxfp8_scale=None):
     """Pack a rotated+reordered weight ``W`` (N, K) into mixed NVFP4+MXFP8 buffers.
 
     Args:
@@ -132,6 +155,15 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None):
         nv, mx, cd: the kernel python modules (nvfp4_gemm, mxfp8_gemm,
            codesign_fused_ext) providing quantize/pack/prepack entry points.
         bias: optional (N,) bias, stored verbatim (applied in MixedQuantLinear).
+        frozen_nvfp4_scale: optional (N, K_low//16) GPTQ frozen per-block scale
+           for the NVFP4 (main) segment. When provided, the NVFP4 codes/SFB are
+           built against GPTQ's FROZEN scale (the one its inner loop rounded the
+           Hessian-corrected columns against) instead of re-deriving from the
+           stored weight's absmax — recovering GPTQ's full benefit. When None,
+           falls back to RTN (re-derive from absmax); this preserves the
+           bit-exact single-layer probe / `from_linear` path.
+        frozen_mxfp8_scale: optional (N, K_high//32) GPTQ frozen per-block scale
+           for the MXFP8 (high) segment. Same frozen-vs-RTN contract.
 
     Returns:
         PackedWeight.
@@ -145,13 +177,13 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None):
     W_lo = Wf[:, :K_low].contiguous()
     W_hi = Wf[:, K_low:].contiguous()
 
-    # --- NVFP4 low/main segment (spec-matching quant -> faithful to fake-quant) ---
-    codes_lo, SFB_lo, deq_lo = quantize_nvfp4_spec(W_lo)
+    # --- NVFP4 low/main segment (frozen GPTQ scale when available, else RTN) ---
+    codes_lo, SFB_lo, deq_lo = quantize_nvfp4_spec(W_lo, frozen_scale=frozen_nvfp4_scale)
     W_lo_packed = nv.pack_fp4(codes_lo)
     physSFB_lo = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
 
-    # --- MXFP8 high segment ---
-    bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi)
+    # --- MXFP8 high segment (frozen GPTQ scale when available, else RTN) ---
+    bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale)
     physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
 
     W_deq = torch.cat([deq_lo, deq_hi], dim=-1).contiguous()

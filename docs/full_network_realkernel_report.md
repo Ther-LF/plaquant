@@ -76,6 +76,14 @@ the full 14.92 with the real kernel is a packer follow-up**: feed GPTQ's frozen
 per-block scales into `pack_weight_mixed` instead of re-deriving from absmax. The
 real-kernel GEMM/accumulation path itself is correct.
 
+> **RESOLVED (2026-10-22, `docs/accuracy_frozen_scale_report.md`).** The packer now
+> threads GPTQ's frozen per-block scales into `pack_weight_mixed`
+> (`frozen_nvfp4_scale` / `frozen_mxfp8_scale`), captured from `gptq_fwrd` via
+> `model._gptq_quantizers`. Twin recovers to **14.9159** (−0.0036 vs stock 14.9195)
+> and REAL to **14.8494** (0.07 *below* stock); real-vs-twin gate 0.0665 ≤ 0.1,
+> per-layer cosine 0.999998. The RTN path is kept as a fallback (`frozen_scale=None`)
+> so the single-layer bit-exact probe is unchanged.
+
 ## 2. Prefill throughput vs FP16 (full model, batch 1, FREE GPU 0)
 
 Full-model forward latency (real-kernel model vs a plain FP16 Llama-3.2-1B), seq
