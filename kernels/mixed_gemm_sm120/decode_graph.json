@@ -1,0 +1,54 @@
+{
+  "config": "/home/luofan/plaquant/promix/configs/llama-3.2-1b-fp-perhead.yaml",
+  "prompt": 32,
+  "gen": 128,
+  "attn_impl": "sdpa",
+  "numerics": {
+    "n_steps": 48,
+    "machinery_static_vs_prefill_fused_min_cos": 0.9999925494194031,
+    "machinery_static_vs_prefill_fused_argmax_match": 1.0,
+    "gemv_vs_fused_fullmodel_min_cos": 0.9051886796951294,
+    "gemv_vs_fused_fullmodel_argmax_match": 0.8571428571428571,
+    "graph_vs_eager_gemv_argmax_match": 1.0,
+    "graph_vs_eager_gemv_min_cos": 0.9999923706054688,
+    "graph_vs_dyncache_freerun_argmax_match": 0.125,
+    "first_divergence": null,
+    "gate_pass": true
+  },
+  "throughput": {
+    "prompt": 32,
+    "gen": 128,
+    "prefill_real_ms": 22.176283004228026,
+    "prefill_fp16_ms": 10.904806957114488,
+    "real_eager_ms": 15.25783198303543,
+    "real_eager_tps": 65.54011088284756,
+    "fp16_eager_ms": 9.782030479982495,
+    "fp16_eager_tps": 102.22826457618945,
+    "real_graph_ms": 4.745566489873454,
+    "real_graph_tps": 210.72299843104003,
+    "real_graph_min_ms": 4.732945002615452,
+    "replay_only_min_ms": 4.691407957579941,
+    "replay_only_med_ms": 4.700408986536786,
+    "fp16_graph_ms": 3.322287986520678,
+    "fp16_graph_tps": 300.99738615593856,
+    "speedup_before_vs_fp16eager": 0.6411153623174473,
+    "speedup_after_vs_fp16eager": 2.061298793485737,
+    "speedup_after_vs_fp16graph": 0.70008248617106,
+    "reached_1p5x": true,
+    "breakdown": {
+      "gemv_ms": 3.6601759493350983,
+      "attn_rest_graph_ms": 1.0853905405383557,
+      "fused_gemm_ms": 5.721632391214371,
+      "pack_ms": 3.410767763853073,
+      "fp16_linear_ms": 2.808447927236557
+    },
+    "weight_bw": {
+      "packed_bytes": 604372992,
+      "fp16_bytes": 1946157056,
+      "hbm_tbps": 1.4422029988660916,
+      "weight_floor_ms": 0.4190623597892796,
+      "fp16_weight_floor_ms": 1.3494335107679947,
+      "graph_over_floor": 11.324248954880378
+    }
+  }
+}
