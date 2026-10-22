@@ -456,7 +456,14 @@ static void run_with_cached_ws(Gemm& gemm, typename Gemm::Arguments& arguments,
   TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " initialize: ", cutlassGetStatusString(st));
   st = gemm.run(stream);
   TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " run: ", cutlassGetStatusString(st));
-  check_cuda(cudaStreamSynchronize(stream), "run sync");
+  // CUDA-graph capture safety (prefill-overhead round): a stream sync is ILLEGAL while
+  // the stream is capturing and would abort graph capture. This sync is only a host-side
+  // timing/isolation barrier — within a single CUDA stream the torch ops that consume D
+  // already serialize after this GEMM — so it is skipped during capture. Non-capture
+  // behavior is byte-for-byte unchanged (no kernel math / mainloop / epilogue touched).
+  cudaStreamCaptureStatus _cap = cudaStreamCaptureStatusNone;
+  if (cudaStreamIsCapturing(stream, &_cap) != cudaSuccess || _cap == cudaStreamCaptureStatusNone)
+    check_cuda(cudaStreamSynchronize(stream), "run sync");
 }
 
 // ---- dual GEMM core: takes PRE-INTERLEAVED activation+weight SF, GEMM only ----
