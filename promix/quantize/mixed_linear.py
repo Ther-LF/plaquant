@@ -33,12 +33,19 @@ from promix.quantize.weight_pack import pack_weight_mixed, split_k, quantize_nvf
 
 
 class MixedQuantLinear(nn.Module):
-    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16):
+    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
             nv, mx, cd: kernel python modules.
             out_dtype: dtype of the returned activation (default fp16).
+            qpf: optional quant_pack_float_ext module. When provided, the
+                per-forward activation quant+pack uses the fused float-input
+                CUDA kernel (quant_pack_float_fp4/fp8) — one pass float->packed
+                codes + interleaved SF — instead of the slow torch quantize +
+                cd.quant_pack. Bit-exact to the torch path (probe-verified), so
+                the GEMM output is unchanged; it removes the 93-98%-of-e2e
+                torch quantize cost. If None, falls back to the torch path.
         """
         super().__init__()
         self.N = packed.N
@@ -56,25 +63,36 @@ class MixedQuantLinear(nn.Module):
         self._nv = nv
         self._mx = mx
         self._cd = cd
+        self._qpf = qpf
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
         bias = getattr(linear, "bias", None)
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
-        return cls(packed, nv, mx, cd, out_dtype=out_dtype)
+        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf)
 
     def _pack_activation(self, x2d):
-        """x2d: (M, K) fp -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi)."""
+        """x2d: (M, K) fp (any dtype) -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi)."""
         M = x2d.shape[0]
+        if self._qpf is not None:
+            # FAST PATH: fused float->packed-codes + interleaved-SF, one CUDA kernel each,
+            # reading the low/high column slices of x2d IN PLACE (row_stride=K, col_off) —
+            # no pre-slice or fp32-convert copies. fp16/bf16/fp32 all bit-exact.
+            x2d = x2d.contiguous()
+            a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low,
+                                                  row_stride=self.K, col_off=0)
+            a_hi = self._qpf.quant_pack_float_fp8(x2d, M, self.N, self.K_high,
+                                                  row_stride=self.K, col_off=self.K_low)
+            return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
+        # SLOW PATH (fallback): torch quantize then fold pack + interleaved SF.
         x_lo = x2d[:, :self.K_low].contiguous()
         x_hi = x2d[:, self.K_low:].contiguous()
-        codes_lo, SFA_lo, _ = quantize_nvfp4_spec(x_lo)
-        bytes_hi, SFA_hi, _ = quantize_mxfp8_spec(x_hi)
-        # fold data-pack + interleaved-SF layout in one pass (ilv=True)
+        codes_lo, SFA_lo, _ = quantize_nvfp4_spec(x_lo.float())
+        bytes_hi, SFA_hi, _ = quantize_mxfp8_spec(x_hi.float())
         a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low, True)
         a_hi = self._cd.quant_pack_fp8(bytes_hi, SFA_hi, M, self.N, self.K_high, True)
         return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
@@ -82,7 +100,7 @@ class MixedQuantLinear(nn.Module):
     def forward(self, x):
         """x: (..., K) -> (..., N). Flattens leading dims to M for the GEMM."""
         in_shape = x.shape
-        x2d = x.reshape(-1, in_shape[-1]).to(torch.float32)
+        x2d = x.reshape(-1, in_shape[-1])          # keep dtype (kernel reads fp16/bf16/fp32)
         M = x2d.shape[0]
         A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
         D = self._cd.fused_gemm_prepacked(
@@ -97,5 +115,5 @@ class MixedQuantLinear(nn.Module):
 
     def pack_only(self, x):
         """Timing seam: run just the per-forward activation quant+pack (no GEMM)."""
-        x2d = x.reshape(-1, x.shape[-1]).to(torch.float32)
+        x2d = x.reshape(-1, x.shape[-1])
         return self._pack_activation(x2d)

@@ -72,7 +72,13 @@ def load_kernels():
               extra_cuda_cflags=["-std=c++17", "--expt-relaxed-constexpr",
                                  "--expt-extended-lambda", "-O3"],
               verbose=False)
-    return nv, mx, cd
+    qpf = load(name="quant_pack_float_ext",
+               sources=[os.path.join(KERN, "quant_pack_float_ext.cu")],
+               extra_include_paths=inc,
+               extra_cuda_cflags=["-std=c++17", "--expt-relaxed-constexpr",
+                                  "--expt-extended-lambda", "-O3"],
+               verbose=False)
+    return nv, mx, cd, qpf
 
 
 def cosine(a, b):
@@ -146,7 +152,7 @@ def phase_bitexact(nv, mx, cd, dev):
 # ---------------------------------------------------------------------------
 # Phase 2: per-shape cosine (synthetic)
 # ---------------------------------------------------------------------------
-def build_layer(nv, mx, cd, dev, M=2048, seed=0, real_caps=None):
+def build_layer(nv, mx, cd, dev, M=2048, seed=0, real_caps=None, qpf=None):
     """Returns list of (name, N, K, Kl, Kh, x, W, mql). If real_caps given, uses
     captured (x, W) per name; else synthetic randn."""
     layer = []
@@ -164,7 +170,7 @@ def build_layer(nv, mx, cd, dev, M=2048, seed=0, real_caps=None):
             x[:, Kl:] *= 3.0
         mql = MixedQuantLinear.from_linear(
             type("L", (), {"weight": type("T", (), {"data": W})(), "bias": None})(),
-            nv, mx, cd, high_fraction=HIGH_FRACTION)
+            nv, mx, cd, high_fraction=HIGH_FRACTION, qpf=qpf)
         layer.append((name, N, K, Kl, Kh, x, W, mql))
     return layer
 
@@ -207,53 +213,68 @@ def phase_cosine(nv, mx, cd, dev, layer, tag="synthetic"):
 # ---------------------------------------------------------------------------
 # Phase 3: latency
 # ---------------------------------------------------------------------------
-def phase_latency(nv, mx, cd, dev, Ms):
+def phase_latency(nv, mx, cd, dev, Ms, qpf=None):
     print("=== PHASE 3: PREFILL LATENCY (sum of 7 Linears) ===", flush=True)
     rows = []
     for M in Ms:
-        layer = build_layer(nv, mx, cd, dev, M=M)
-        tot_pack = tot_gemm = tot_rk = tot_fp16 = tot_fq = 0.0
+        layer_fast = build_layer(nv, mx, cd, dev, M=M, qpf=qpf)      # fused float pack
+        layer_slow = build_layer(nv, mx, cd, dev, M=M, qpf=None)     # torch pack (before)
+        tot_pack_slow = tot_pack_fast = tot_gemm = 0.0
+        tot_e2e_fast = tot_e2e_slow = tot_fp16 = tot_fq = 0.0
         per = []
-        for name, N, K, Kl, Kh, x, W, mql in layer:
+        for (name, N, K, Kl, Kh, x, W, mql_f), (_, _, _, _, _, _, _, mql_s) in zip(layer_fast, layer_slow):
             xf = x
             Wh = W.half(); xh = x.half()
-            t_pack = time_ms(lambda: mql.pack_only(xf))
+            t_pack_slow = time_ms(lambda: mql_s.pack_only(xf))
+            t_pack_fast = time_ms(lambda: mql_f.pack_only(xf))
 
             # GEMM-only: pre-pack activation once, time the kernel GEMM alone
-            A_lo, pSFA_lo, A_hi, pSFA_hi = mql.pack_only(xf)
+            A_lo, pSFA_lo, A_hi, pSFA_hi = mql_f.pack_only(xf)
 
             def gemm_only():
                 return cd.fused_gemm_prepacked(
-                    A_lo, pSFA_lo, mql.W_lo_packed, mql.physSFB_lo,
-                    A_hi, pSFA_hi, mql.W_hi_bytes, mql.physSFB_hi,
+                    A_lo, pSFA_lo, mql_f.W_lo_packed, mql_f.physSFB_lo,
+                    A_hi, pSFA_hi, mql_f.W_hi_bytes, mql_f.physSFB_hi,
                     M, N, Kl, Kh)
             t_gemm = time_ms(gemm_only)
 
-            def rk():
+            def rk_fast():
                 with torch.no_grad():
-                    mql(xf)
-            t_rk = time_ms(rk)
+                    mql_f(xf)
+            def rk_slow():
+                with torch.no_grad():
+                    mql_s(xf)
+            t_e2e_fast = time_ms(rk_fast)
+            t_e2e_slow = time_ms(rk_slow)
             t_fp16 = time_ms(lambda: xh @ Wh.t())
 
             def fq():
                 a = fakequant_split(xf, Kl); w = fakequant_split(W, Kl)
                 return a @ w.t()
             t_fq = time_ms(fq, iters=20, warmup=5)
-            per.append(dict(name=name, t_pack_ms=t_pack, t_gemm_only_ms=t_gemm,
-                            t_e2e_ms=t_rk, t_fp16_ms=t_fp16, t_fakequant_ms=t_fq))
-            tot_pack += t_pack; tot_gemm += t_gemm; tot_rk += t_rk
+            per.append(dict(name=name, t_pack_slow_ms=t_pack_slow, t_pack_fast_ms=t_pack_fast,
+                            t_gemm_only_ms=t_gemm, t_e2e_fast_ms=t_e2e_fast,
+                            t_e2e_slow_ms=t_e2e_slow, t_fp16_ms=t_fp16, t_fakequant_ms=t_fq))
+            tot_pack_slow += t_pack_slow; tot_pack_fast += t_pack_fast; tot_gemm += t_gemm
+            tot_e2e_fast += t_e2e_fast; tot_e2e_slow += t_e2e_slow
             tot_fp16 += t_fp16; tot_fq += t_fq
         su_gemm = tot_fp16 / tot_gemm if tot_gemm > 0 else float('nan')
-        su_e2e = tot_fp16 / tot_rk if tot_rk > 0 else float('nan')
-        su_fq = tot_fq / tot_rk if tot_rk > 0 else float('nan')
-        print(f"  M={M:5d}: GEMM-only={tot_gemm:.3f}ms (vs FP16 {tot_fp16:.3f}ms = "
-              f"{su_gemm:.2f}x) | pack(torch-quant)={tot_pack:.3f}ms | "
-              f"e2e(pack+GEMM)={tot_rk:.3f}ms (vs FP16 {su_e2e:.2f}x, vs fakequant {su_fq:.2f}x) "
-              f"| fakequant={tot_fq:.3f}ms", flush=True)
-        rows.append(dict(M=M, tot_pack_ms=tot_pack, tot_gemm_only_ms=tot_gemm,
-                         tot_e2e_ms=tot_rk, tot_fp16_ms=tot_fp16, tot_fakequant_ms=tot_fq,
-                         speedup_gemm_vs_fp16=su_gemm, speedup_e2e_vs_fp16=su_e2e,
-                         speedup_e2e_vs_fakequant=su_fq, per_linear=per))
+        su_e2e_fast = tot_fp16 / tot_e2e_fast if tot_e2e_fast > 0 else float('nan')
+        su_e2e_slow = tot_fp16 / tot_e2e_slow if tot_e2e_slow > 0 else float('nan')
+        pack_speedup = tot_pack_slow / tot_pack_fast if tot_pack_fast > 0 else float('nan')
+        print(f"  M={M:5d}: GEMM-only={tot_gemm:.3f}ms (vs FP16 {tot_fp16:.3f}ms = {su_gemm:.2f}x)",
+              flush=True)
+        print(f"         pack: torch={tot_pack_slow:.3f}ms -> fused-float={tot_pack_fast:.3f}ms "
+              f"({pack_speedup:.0f}x faster)", flush=True)
+        print(f"         e2e(fast pack+GEMM)={tot_e2e_fast:.3f}ms vs FP16 {tot_fp16:.3f}ms = "
+              f"{su_e2e_fast:.2f}x  | e2e(torch pack)={tot_e2e_slow:.3f}ms ({su_e2e_slow:.2f}x)",
+              flush=True)
+        rows.append(dict(M=M, tot_pack_slow_ms=tot_pack_slow, tot_pack_fast_ms=tot_pack_fast,
+                         pack_speedup=pack_speedup, tot_gemm_only_ms=tot_gemm,
+                         tot_e2e_fast_ms=tot_e2e_fast, tot_e2e_slow_ms=tot_e2e_slow,
+                         tot_fp16_ms=tot_fp16, tot_fakequant_ms=tot_fq,
+                         speedup_gemm_vs_fp16=su_gemm, speedup_e2e_fast_vs_fp16=su_e2e_fast,
+                         speedup_e2e_slow_vs_fp16=su_e2e_slow, per_linear=per))
     return rows
 
 
@@ -342,22 +363,22 @@ def main():
     Ms = [int(x) for x in args.ms.split(",")]
 
     print("Loading kernels (JIT build may take minutes)...", flush=True)
-    nv, mx, cd = load_kernels()
+    nv, mx, cd, qpf = load_kernels()
     print(cd.compat_report() if hasattr(cd, "compat_report") else "cd loaded", flush=True)
 
     out = {"bitexact": None, "cosine_synthetic": None, "latency": None, "cosine_real": None}
     out["bitexact"] = phase_bitexact(nv, mx, cd, dev)
 
-    layer = build_layer(nv, mx, cd, dev, M=2048)
+    layer = build_layer(nv, mx, cd, dev, M=2048, qpf=qpf)
     out["cosine_synthetic"] = phase_cosine(nv, mx, cd, dev, layer, tag="synthetic")
     del layer; torch.cuda.empty_cache()
 
-    out["latency"] = phase_latency(nv, mx, cd, dev, Ms)
+    out["latency"] = phase_latency(nv, mx, cd, dev, Ms, qpf=qpf)
 
     if args.real:
         try:
             caps = capture_real(args.config, args.layer, dev)
-            rlayer = build_layer(nv, mx, cd, dev, real_caps=caps)
+            rlayer = build_layer(nv, mx, cd, dev, real_caps=caps, qpf=qpf)
             out["cosine_real"] = phase_cosine(nv, mx, cd, dev, rlayer, tag="real")
         except Exception as e:
             import traceback
