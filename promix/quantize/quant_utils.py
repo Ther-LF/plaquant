@@ -345,6 +345,16 @@ class ActQuantWrapper(nn.Module):
         self.K = 1
         self.online_full_had = False
         self.fp32_had = False
+        # Prefill-fusion levers (set by full_network.wire_real_kernel for the
+        # real packed-kernel path; default off keeps the fake-quant / PPL-twin
+        # path byte-identical):
+        #   fold_had_scale: fold the online Hadamard's 1/sqrt(n) into the
+        #       transform kernel (kills the separate div kernel).
+        #   had_out_fp32: keep the FP32 Hadamard output in FP32 and feed it
+        #       STRAIGHT to the inner module (MixedQuantLinear's qpf pack reads
+        #       fp32 directly), skipping the fp32->fp16 round-trip cast.
+        self.fold_had_scale = False
+        self.had_out_fp32 = False
         # FP per-head o_proj: apply the column reorder BEFORE quantization so
         # the quantizer sees the contiguous [low|main|high] layout whose
         # segment lengths align to the FP block grid (NVFP4 16 / MXFP8 32).
@@ -374,9 +384,15 @@ class ActQuantWrapper(nn.Module):
 
         if self.online_full_had:
             if self.fp32_had:
-                x = matmul_hadU_cuda(x.float(), self.had_K, self.K).to(x_dtype)
+                xf = matmul_hadU_cuda(x.float(), self.had_K, self.K,
+                                      fold_scale=self.fold_had_scale)
+                # Skip the fp32->fp16 cast when the inner module consumes fp32
+                # directly (real kernel): the qpf pack is bit-exact-to-spec on
+                # fp32 and this removes a full-tensor copy per down_proj.
+                x = xf if self.had_out_fp32 else xf.to(x_dtype)
             else:
-                x = matmul_hadU_cuda(x, self.had_K, self.K)
+                x = matmul_hadU_cuda(x, self.had_K, self.K,
+                                     fold_scale=self.fold_had_scale)
 
         order = col_order if col_order is not None else getattr(self, '_column_order', None)
         if order is not None and self.reorder_before_quant:

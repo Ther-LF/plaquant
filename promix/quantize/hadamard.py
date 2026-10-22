@@ -6,6 +6,7 @@ For non-power-of-2 intermediate sizes, loads pre-computed Hadamard matrices.
 
 import json
 import os
+import math
 
 import torch
 
@@ -36,13 +37,27 @@ def get_hadK(n, transpose=False):
     raise ValueError(f"Cannot find Hadamard decomposition for n={n}")
 
 
-def matmul_hadU_cuda(X, had_K, K):
-    """Apply Hadamard rotation: X @ kron(had_K, H) / sqrt(n)."""
+def matmul_hadU_cuda(X, had_K, K, fold_scale=False):
+    """Apply Hadamard rotation: X @ kron(had_K, H) / sqrt(n).
+
+    The 1/sqrt(n) normalization is a constant that commutes with both the
+    Hadamard transform and the had_K matmul. When ``fold_scale=True`` it is
+    folded into the fast_hadamard_transform kernel's own ``scale`` argument
+    (a free fused multiply), eliminating the separate full-tensor ``/sqrt(n)``
+    division kernel. This is numerically a constant fold (reciprocal multiply
+    vs divide, <=1 ULP). Default ``False`` keeps every offline caller
+    (rotation.py weight prep, etc.) byte-identical to the pre-fold path; only
+    the hot online down_proj activation path opts in.
+    """
     n = X.shape[-1]
+    scale = (1.0 / math.sqrt(n)) if fold_scale else 1.0
     if K == 1:
-        return HadamardTransform.apply(X.contiguous()) / torch.tensor(n).sqrt()
+        out = HadamardTransform.apply(X.contiguous(), scale)
+        return out if fold_scale else out / torch.tensor(n).sqrt()
     input = X.view(-1, K, n // K)
-    input = HadamardTransform.apply(input.contiguous()) / torch.tensor(n).sqrt()
+    input = HadamardTransform.apply(input.contiguous(), scale)
+    if not fold_scale:
+        input = input / torch.tensor(n).sqrt()
     input = had_K.to(input.device).to(input.dtype) @ input
     return input.reshape(X.shape)
 

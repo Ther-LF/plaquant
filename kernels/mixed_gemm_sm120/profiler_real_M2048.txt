@@ -1,0 +1,46 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+_ZN7cutlass13device_kernelIN8codesign19CodesignFused...         0.00%       0.000us         0.00%       0.000us       0.000us      26.913ms        27.86%      26.913ms      48.058us           560  
+                                               lin.gemm         0.00%       0.000us         0.00%       0.000us       0.000us      26.913ms        27.86%      26.913ms      48.058us           560  
+                                              mlp.total         1.33%       3.338ms        35.91%      90.241ms       1.128ms       0.000us         0.00%      20.705ms     258.811us            80  
+                                attn.sdpa_qk_softmax_pv         0.00%       0.000us         0.00%       0.000us       0.000us      17.940ms        18.57%      17.940ms     224.255us            80  
+                                               lin.pack         0.00%       0.000us         0.00%       0.000us       0.000us      16.124ms        16.69%      16.124ms      28.794us           560  
+                                              attn.rope         0.00%       0.000us         0.00%       0.000us       0.000us      15.020ms        15.55%      15.020ms     187.754us            80  
+                                            aten::copy_         3.02%       7.590ms         5.76%      14.480ms       9.884us      14.914ms        15.44%      14.914ms      10.180us          1465  
+                                      lin.down_hadamard         0.00%       0.000us         0.00%       0.000us       0.000us      14.843ms        15.37%      14.843ms     185.541us            80  
+                                           aten::matmul         0.04%      95.906us         0.37%     924.679us      92.468us       0.000us         0.00%      13.505ms       1.350ms            10  
+                                           aten::linear         0.01%      25.449us         0.23%     589.405us     117.881us       0.000us         0.00%      13.498ms       2.700ms             5  
+                                               aten::mm         0.17%     419.304us         0.18%     459.380us      91.876us      13.498ms        13.97%      13.498ms       2.700ms             5  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816...         0.00%       0.000us         0.00%       0.000us       0.000us      13.498ms        13.97%      13.498ms       2.700ms             5  
+                                               aten::to         0.56%       1.396ms         8.31%      20.891ms      10.604us       0.000us         0.00%      12.516ms       6.353us          1970  
+                                         aten::_to_copy         1.45%       3.634ms         7.76%      19.495ms      17.026us       0.000us         0.00%      12.516ms      10.931us          1145  
+                                          mlp.down_proj         2.08%       5.230ms        15.30%      38.440ms     480.500us       0.000us         0.00%      11.885ms     148.563us            80  
+void qpf4_kernel<__half, cute::Layout<cute::tuple<cu...         0.00%       0.000us         0.00%       0.000us       0.000us      11.427ms        11.83%      11.427ms      20.405us           560  
+                                      post_attn_rmsnorm         0.00%       0.000us         0.00%       0.000us       0.000us      11.397ms        11.80%      11.397ms     142.466us            80  
+                                          input_rmsnorm         0.00%       0.000us         0.00%       0.000us       0.000us      10.814ms        11.19%      10.814ms     135.177us            80  
+                                               lin.gemm         5.88%      14.777ms        25.19%      63.294ms     113.024us       0.000us         0.00%      10.169ms      18.159us           560  
+                                      lin.down_hadamard         1.69%       4.242ms         5.63%      14.139ms     176.734us       0.000us         0.00%       9.935ms     124.192us            80  
+                                attn.sdpa_qk_softmax_pv         1.95%       4.902ms         7.37%      18.515ms     231.437us       0.000us         0.00%       9.671ms     120.893us            80  
+                     aten::scaled_dot_product_attention         0.38%     946.699us         2.06%       5.188ms      64.854us       0.000us         0.00%       7.274ms      90.919us            80  
+              aten::_scaled_dot_product_flash_attention         0.25%     640.486us         1.69%       4.242ms      53.021us       0.000us         0.00%       7.274ms      90.919us            80  
+                         aten::_flash_attention_forward         0.42%       1.064ms         1.26%       3.158ms      39.476us       7.274ms         7.53%       7.274ms      90.919us            80  
+void pytorch_flash::flash_fwd_kernel<Flash_fwd_kerne...         0.00%       0.000us         0.00%       0.000us       0.000us       7.274ms         7.53%       7.274ms      90.919us            80  
+                                          lin.cast_bias         3.70%       9.289ms         8.59%      21.587ms      38.548us       0.000us         0.00%       6.519ms      11.641us           560  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us       6.519ms         6.75%       6.519ms      11.641us           560  
+                                          lin.cast_bias         0.00%       0.000us         0.00%       0.000us       0.000us       6.519ms         6.75%       6.519ms      11.641us           560  
+                                              aten::mul         2.40%       6.019ms         3.78%       9.499ms      12.837us       5.945ms         6.15%       5.945ms       8.034us           740  
+                                            attn.o_proj         2.03%       5.101ms         9.21%      23.139ms     289.233us       0.000us         0.00%       5.925ms      74.065us            80  
+                                              attn.rope         2.28%       5.732ms         7.19%      18.062ms     225.776us       0.000us         0.00%       4.787ms      59.840us            80  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us       3.639ms         3.77%       3.639ms      14.554us           250  
+                                      post_attn_rmsnorm         1.54%       3.872ms         5.47%      13.745ms     171.813us       0.000us         0.00%       3.500ms      43.749us            80  
+                                          input_rmsnorm         1.53%       3.857ms         5.41%      13.604ms     170.055us       0.000us         0.00%       3.485ms      43.557us            80  
+                                            mlp.up_proj         1.56%       3.932ms         8.59%      21.590ms     269.880us       0.000us         0.00%       3.374ms      42.178us            80  
+                                          mlp.gate_proj         1.69%       4.255ms         9.13%      22.954ms     286.930us       0.000us         0.00%       3.275ms      40.937us            80  
+                                              aten::div         0.36%     907.751us         0.53%       1.342ms      16.779us       3.206ms         3.32%       3.206ms      40.073us            80  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us       3.206ms         3.32%       3.206ms      40.073us            80  
+                                  cudaStreamSynchronize        14.59%      36.654ms        14.59%      36.654ms      65.453us       3.167ms         3.28%       3.167ms       5.656us           560  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us       3.053ms         3.16%       3.053ms       6.294us           485  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 251.286ms
+Self CUDA time total: 96.603ms

@@ -80,6 +80,14 @@ using namespace cute;
 #define CD_MX_STAGES 2
 #endif
 
+// Output torch dtype must match StockBuilder::ElementD (bf16 default; fp16 when
+// CD_OUT_FP16 is set by the fp16 epilogue config copy).
+#ifdef CD_OUT_FP16
+#define CD_OUT_TORCH_DTYPE torch::kHalf
+#else
+#define CD_OUT_TORCH_DTYPE torch::kBFloat16
+#endif
+
 static inline void check_cuda(cudaError_t e, const char* what) {
   TORCH_CHECK(e == cudaSuccess, what, ": ", cudaGetErrorString(e));
 }
@@ -168,6 +176,60 @@ __global__ void cd_quant_pack_kernel(uint8_t* __restrict__ data_out,
   }
 }
 
+// round-21: VECTORIZED quant/pack. Same (row,block) grid, same SF store, but the data
+// path uses 128-bit aligned loads/stores instead of scalar byte traffic. One thread owns
+// one block (VEC contiguous input bytes starting at a VEC-aligned offset), so within a
+// warp the 32 threads touch 32*VEC contiguous bytes -> fully coalesced 128-bit sectors.
+//   fp4 (VEC=16, PACK): ONE 128-bit load -> register nibble-pack -> ONE 64-bit store.
+//   fp8 (VEC=32, copy) : TWO 128-bit loads -> TWO 128-bit stores.
+// Register-only packing (no local-memory byte array) keeps the pack bit-identical to the
+// scalar kernel above (see cd_pack4nib below). SF store path is unchanged.
+__device__ __forceinline__ uint32_t cd_pack4nib(uint32_t w) {
+  // 4 input code bytes in w -> 2 packed bytes (16 bits); even k = low nibble.
+  // out[0] = (in0 & 0xF) | ((in1 & 0xF) << 4); out[1] = (in2 & 0xF) | ((in3 & 0xF) << 4)
+  uint32_t p0 = (w & 0x0Fu) | ((w >> 4) & 0xF0u);            // bytes 0,1
+  uint32_t p1 = ((w >> 16) & 0x0Fu) | ((w >> 20) & 0xF0u);   // bytes 2,3
+  return p0 | (p1 << 8);
+}
+
+template <class LayoutSF, int VEC, bool PACK, bool ILV>
+__global__ void cd_quant_pack_kernel_vec(uint8_t* __restrict__ data_out,
+                                         uint8_t* __restrict__ sf_out,
+                                         const uint8_t* __restrict__ data_in,
+                                         const uint8_t* __restrict__ sf_in,
+                                         LayoutSF layout, int rows, int nblk, int K) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int total = rows * nblk;
+  if (idx >= total) return;
+  int r = idx / nblk;
+  int b = idx % nblk;
+  // --- SF store: the ONLY NAT/ILV difference (same value, different address) ---
+  uint8_t sfv = sf_in[r * nblk + b];
+  if (ILV) {
+    int off = layout(make_coord(r, b * VEC, 0));
+    sf_out[off] = sfv;
+  } else {
+    sf_out[r * nblk + b] = sfv;
+  }
+  // --- data pack/copy: vectorized 128-bit, bit-identical to scalar kernel ---
+  int base = r * K + b * VEC;
+  if (PACK) {                      // fp4 VEC=16: one 128-bit load -> one 64-bit store
+    const uint4 v = *reinterpret_cast<const uint4*>(data_in + base);
+    uint64_t out = (uint64_t)cd_pack4nib(v.x)
+                 | ((uint64_t)cd_pack4nib(v.y) << 16)
+                 | ((uint64_t)cd_pack4nib(v.z) << 32)
+                 | ((uint64_t)cd_pack4nib(v.w) << 48);
+    int obase = r * (K / 2) + b * (VEC / 2);
+    *reinterpret_cast<uint64_t*>(data_out + obase) = out;
+  } else {                         // fp8 VEC=32: two 128-bit copies
+#pragma unroll
+    for (int j = 0; j < VEC; j += 16) {
+      uint4 v = *reinterpret_cast<const uint4*>(data_in + base + j);
+      *reinterpret_cast<uint4*>(data_out + base + j) = v;
+    }
+  }
+}
+
 // Decompose a MainloopSm120TmaWarpSpecializedBlockScaled policy into its parts so
 // the forked collective can be re-instantiated with the builder's exact config.
 namespace {
@@ -201,8 +263,19 @@ using ForkMma = cutlass::gemm::collective::CodesignBlockScaledMma<
 // pure_presf_ext.cu / ex79a,c). Only the mainloop differs per format.
 template <class ElementAB, int Alignment, int Stages>
 struct StockBuilder {
+  // Output element type. Default bf16 (the validated path, byte-identical).
+  // The prefill-fusion round adds a fp16-output config copy
+  // (codesign_fused_fp16_ext.cu sets CD_OUT_FP16) so the fused-GEMM epilogue
+  // emits fp16 directly, folding away the 112x per-Linear bf16->fp16 cast
+  // (`D.to(fp16)`). ONLY the epilogue ElementC/D change; the PROTECTED
+  // mainloop (codesign_fused_kernel.hpp) is included unchanged.
+#ifdef CD_OUT_FP16
+  using ElementD = cutlass::half_t;
+  using ElementC = cutlass::half_t;
+#else
   using ElementD = cutlass::bfloat16_t;
   using ElementC = cutlass::bfloat16_t;
+#endif
   using LayoutCTag = cutlass::layout::RowMajor;
   using LayoutDTag = cutlass::layout::RowMajor;
   static constexpr int AlignmentD = 128 / cutlass::sizeof_bits<ElementD>::value;
@@ -361,7 +434,7 @@ torch::Tensor cd_prepack_sf_fp8_a_slow(torch::Tensor SFA, int64_t M, int64_t N, 
 // shipping kernel consumes natively). Data pack is identical for both.
 template <class BSConfig, int VEC, bool PACK>
 static std::vector<torch::Tensor> quant_pack_impl(torch::Tensor data_in, torch::Tensor sf_in,
-                                                  int Mi, int Ni, int Ki, bool ilv,
+                                                  int Mi, int Ni, int Ki, bool ilv, int impl,
                                                   cudaStream_t stream) {
   TORCH_CHECK(data_in.is_cuda() && data_in.scalar_type() == torch::kUInt8, "data_in CUDA uint8");
   TORCH_CHECK(sf_in.is_cuda() && sf_in.scalar_type() == torch::kUInt8, "sf_in CUDA uint8");
@@ -375,30 +448,38 @@ static std::vector<torch::Tensor> quant_pack_impl(torch::Tensor data_in, torch::
   auto sf_out = torch::empty({sfsz}, u8opts(dev));
   int total = Mi * nblk, tpb = 256;
   dim3 grid((total + tpb - 1) / tpb);
-  if (ilv)
-    cd_quant_pack_kernel<decltype(layout_SFA), VEC, PACK, true><<<grid, tpb, 0, stream>>>(
-        data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
-        data_in.data_ptr<uint8_t>(), sf_in.data_ptr<uint8_t>(), layout_SFA, Mi, nblk, Ki);
-  else
-    cd_quant_pack_kernel<decltype(layout_SFA), VEC, PACK, false><<<grid, tpb, 0, stream>>>(
-        data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
-        data_in.data_ptr<uint8_t>(), sf_in.data_ptr<uint8_t>(), layout_SFA, Mi, nblk, Ki);
+  using L = decltype(layout_SFA);
+  uint8_t* dout = data_out.data_ptr<uint8_t>();
+  uint8_t* sout = sf_out.data_ptr<uint8_t>();
+  const uint8_t* din = data_in.data_ptr<uint8_t>();
+  const uint8_t* sin = sf_in.data_ptr<uint8_t>();
+  if (impl == 0) {                 // scalar (round-18 reference; before-number only)
+    if (ilv)
+      cd_quant_pack_kernel<L, VEC, PACK, true><<<grid, tpb, 0, stream>>>(dout, sout, din, sin, layout_SFA, Mi, nblk, Ki);
+    else
+      cd_quant_pack_kernel<L, VEC, PACK, false><<<grid, tpb, 0, stream>>>(dout, sout, din, sin, layout_SFA, Mi, nblk, Ki);
+  } else {                         // vectorized (round-21 default)
+    if (ilv)
+      cd_quant_pack_kernel_vec<L, VEC, PACK, true><<<grid, tpb, 0, stream>>>(dout, sout, din, sin, layout_SFA, Mi, nblk, Ki);
+    else
+      cd_quant_pack_kernel_vec<L, VEC, PACK, false><<<grid, tpb, 0, stream>>>(dout, sout, din, sin, layout_SFA, Mi, nblk, Ki);
+  }
   check_cuda(cudaGetLastError(), "quant_pack launch");
   data_out = data_out.view({Mi, PACK ? Ki / 2 : Ki});
   return {data_out, sf_out};
 }
 
 std::vector<torch::Tensor> cd_quant_pack_fp4(torch::Tensor codes, torch::Tensor SFA,
-                                             int64_t M, int64_t N, int64_t K, bool ilv) {
+                                             int64_t M, int64_t N, int64_t K, bool ilv, int64_t impl) {
   TORCH_CHECK(K % 16 == 0, "K%16");
   auto stream = at::cuda::getCurrentCUDAStream(codes.device().index());
-  return quant_pack_impl<BSConfigNV, 16, true>(codes, SFA, (int)M, (int)N, (int)K, ilv, stream);
+  return quant_pack_impl<BSConfigNV, 16, true>(codes, SFA, (int)M, (int)N, (int)K, ilv, (int)impl, stream);
 }
 std::vector<torch::Tensor> cd_quant_pack_fp8(torch::Tensor bytes, torch::Tensor SFA,
-                                             int64_t M, int64_t N, int64_t K, bool ilv) {
+                                             int64_t M, int64_t N, int64_t K, bool ilv, int64_t impl) {
   TORCH_CHECK(K % 32 == 0, "K%32");
   auto stream = at::cuda::getCurrentCUDAStream(bytes.device().index());
-  return quant_pack_impl<BSConfigMX, 32, false>(bytes, SFA, (int)M, (int)N, (int)K, ilv, stream);
+  return quant_pack_impl<BSConfigMX, 32, false>(bytes, SFA, (int)M, (int)N, (int)K, ilv, (int)impl, stream);
 }
 
 // Build a collective's mainloop Arguments from pre-interleaved SF (phys_SFA/phys_SFB).
@@ -458,8 +539,8 @@ static void run_with_cached_ws(Gemm& gemm, typename Gemm::Arguments& arguments,
   TORCH_CHECK(st == cutlass::Status::kSuccess, tag, " run: ", cutlassGetStatusString(st));
   // CUDA-graph capture safety (prefill-overhead round): a stream sync is ILLEGAL while
   // the stream is capturing and would abort graph capture. This sync is only a host-side
-  // timing/isolation barrier — within a single CUDA stream the torch ops that consume D
-  // already serialize after this GEMM — so it is skipped during capture. Non-capture
+  // timing/isolation barrier -- within a single CUDA stream the torch ops that consume D
+  // already serialize after this GEMM -- so it is skipped during capture. Non-capture
   // behavior is byte-for-byte unchanged (no kernel math / mainloop / epilogue touched).
   cudaStreamCaptureStatus _cap = cudaStreamCaptureStatusNone;
   if (cudaStreamIsCapturing(stream, &_cap) != cudaSuccess || _cap == cudaStreamCaptureStatusNone)
@@ -470,7 +551,7 @@ static void run_with_cached_ws(Gemm& gemm, typename Gemm::Arguments& arguments,
 static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
                                   torch::Tensor A_hi, torch::Tensor physSFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
                                   int Mi, int Ni, int Klo, int Khi, cudaStream_t stream, torch::Device dev) {
-  auto D = torch::empty({Mi, Ni}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
+  auto D = torch::empty({Mi, Ni}, torch::TensorOptions().dtype(CD_OUT_TORCH_DTYPE).device(dev));
   auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A_lo, physSFA_lo, B_lo, physSFB_lo, Mi, Ni, Klo);
   auto mx_args = make_mainloop_args_pre<ForkMX, BSConfigMX>(A_hi, physSFA_hi, B_hi, physSFB_hi, Mi, Ni, Khi);
 
@@ -541,7 +622,7 @@ torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
   auto dev = A.device();
   auto stream = at::cuda::getCurrentCUDAStream(dev.index());
   int Mi=(int)M, Ni=(int)N, Ki=(int)K;
-  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kBFloat16).device(dev));
+  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(CD_OUT_TORCH_DTYPE).device(dev));
   auto physSFA = interleave_sfa<BSConfigNV, 16, true>(SFA, Mi, Ni, Ki, stream);
 
   auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A, physSFA, B, physSFB, Mi, Ni, Ki);
@@ -581,8 +662,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("prepack_sf_fp8_a", &cd_prepack_sf_fp8_a, "interleave MXFP8 activation SF (efficient)");
   m.def("prepack_sf_fp4_a_slow", &cd_prepack_sf_fp4_a_slow, "interleave NVFP4 activation SF (old redundant; before-number only)");
   m.def("prepack_sf_fp8_a_slow", &cd_prepack_sf_fp8_a_slow, "interleave MXFP8 activation SF (old redundant; before-number only)");
-  m.def("quant_pack_fp4", &cd_quant_pack_fp4, "round-18 fused pack: NVFP4 data pack + SF layout (ilv=interleaved atom / natural); returns {packed, SF}");
-  m.def("quant_pack_fp8", &cd_quant_pack_fp8, "round-18 fused pack: MXFP8 byte copy + SF layout (ilv=interleaved atom / natural); returns {bytes, SF}");
+  m.def("quant_pack_fp4", &cd_quant_pack_fp4, "round-18/21 fused pack: NVFP4 data pack + SF layout (ilv=interleaved atom / natural; impl=1 vectorized default, 0 scalar-ref); returns {packed, SF}",
+        pybind11::arg("codes"), pybind11::arg("SFA"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("ilv"), pybind11::arg("impl") = 1);
+  m.def("quant_pack_fp8", &cd_quant_pack_fp8, "round-18/21 fused pack: MXFP8 byte copy + SF layout (ilv=interleaved atom / natural; impl=1 vectorized default, 0 scalar-ref); returns {bytes, SF}",
+        pybind11::arg("bytes"), pybind11::arg("SFA"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("ilv"), pybind11::arg("impl") = 1);
   m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)");
   m.def("fused_gemm", &cd_fused_gemm, "dual-format fused GEMM; efficient per-call activation-SF interleave + cached workspace");
   m.def("fused_gemm_slow", &cd_fused_gemm_slow, "dual-format fused GEMM with OLD redundant interleave (before-number only)");

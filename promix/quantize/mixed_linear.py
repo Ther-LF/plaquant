@@ -30,10 +30,11 @@ import torch
 import torch.nn as nn
 
 from promix.quantize.weight_pack import pack_weight_mixed, split_k, quantize_nvfp4_spec, quantize_mxfp8_spec
+from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
 
 class MixedQuantLinear(nn.Module):
-    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None):
+    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -46,6 +47,13 @@ class MixedQuantLinear(nn.Module):
                 cd.quant_pack. Bit-exact to the torch path (probe-verified), so
                 the GEMM output is unchanged; it removes the 93-98%-of-e2e
                 torch quantize cost. If None, falls back to the torch path.
+            dg: optional decode_gemv_ext module. When provided AND the flattened
+                batch M==1 (autoregressive DECODE), the forward uses the
+                memory-bound W4A4 GEMV (decode_gemv_ext.cu) that streams the
+                packed 4-bit/8-bit weights at HBM bandwidth — the prefill-oriented
+                128x128 fused GEMM is ~1/128-utilized and bandwidth-wasteful at
+                M=1. Bit-faithful to the fused path (dequant identical to W_deq).
+                For M>1 the fused prefill GEMM is used regardless.
         """
         super().__init__()
         self.N = packed.N
@@ -59,21 +67,37 @@ class MixedQuantLinear(nn.Module):
         self.register_buffer("W_hi_bytes", packed.W_hi_bytes)
         self.register_buffer("physSFB_hi", packed.physSFB_hi)
         self.register_buffer("bias", packed.bias)
+        # decode-GEMV buffers (optional; only used when dg is provided and M==1)
+        self.register_buffer("W_lo_dec", packed.W_lo_dec)
+        self.register_buffer("S_lo_dec", packed.S_lo_dec)
+        self.register_buffer("W_hi_dec", packed.W_hi_dec)
+        self.register_buffer("S_hi_dec", packed.S_hi_dec)
         # kernel modules (not buffers)
         self._nv = nv
         self._mx = mx
         self._cd = cd
         self._qpf = qpf
+        self._dg = dg
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
         bias = getattr(linear, "bias", None)
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
-        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf)
+        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg)
+
+    def _decode_gemv(self, x2d):
+        """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
+        (tiny) activation to the spec grid (bit-exact to fake_quantize_*) and
+        streams the packed 4-bit/8-bit weights at HBM BW. Bit-faithful to the
+        fused kernel (same dequantized weight, FP32 accumulate)."""
+        D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
+                                       self.W_hi_dec, self.S_hi_dec,
+                                       self.N, self.K_low, self.K_high)
+        return D.unsqueeze(0)      # (1, N)
 
     def _pack_activation(self, x2d):
         """x2d: (M, K) fp (any dtype) -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi)."""
@@ -102,12 +126,15 @@ class MixedQuantLinear(nn.Module):
         in_shape = x.shape
         x2d = x.reshape(-1, in_shape[-1])          # keep dtype (kernel reads fp16/bf16/fp32)
         M = x2d.shape[0]
-        A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
-        D = self._cd.fused_gemm_prepacked(
-            A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
-            A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-            M, self.N, self.K_low, self.K_high,
-        )
+        if self._dg is not None and M == 1:
+            D = self._decode_gemv(x2d)             # memory-bound W4A4 GEMV (decode)
+        else:
+            A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
+            D = self._cd.fused_gemm_prepacked(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                M, self.N, self.K_low, self.K_high,
+            )
         D = D.to(self.out_dtype)
         if self.bias is not None:
             D = D + self.bias.to(D.dtype)

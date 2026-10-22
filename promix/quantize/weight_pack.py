@@ -128,6 +128,13 @@ class PackedWeight:
     # dequantized reference (kernel numerics), for building the fake-quant ref
     W_deq: torch.Tensor            # (N, K) float32, cat([deq_lo, deq_hi], -1)
     bias: torch.Tensor = None      # (N,) or None
+    # decode-GEMV pack (row-major, raw FP32 scales) — a memory-bound M=1 path that
+    # streams the SAME 4-bit/8-bit weights at HBM BW (decode_gemv_ext.cu). Built
+    # from the identical spec codes/scales, so dequant is bit-identical to W_deq.
+    W_lo_dec: torch.Tensor = None  # (N, K_low/2) uint8, 2 NVFP4 codes/byte (even=low nibble)
+    S_lo_dec: torch.Tensor = None  # (N, K_low/16) float32, NVFP4 block scale
+    W_hi_dec: torch.Tensor = None  # (N, K_high) uint8, FP8 E4M3 bytes
+    S_hi_dec: torch.Tensor = None  # (N, K_high/32) float32, MXFP8 block scale
 
 
 def split_k(K, high_fraction=0.125):
@@ -188,6 +195,16 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
 
     W_deq = torch.cat([deq_lo, deq_hi], dim=-1).contiguous()
 
+    # decode-GEMV pack (reuse the already-computed spec codes/scales): row-major
+    # 2-codes/byte NVFP4 (even k -> low nibble) + FP32 per-16 scale; FP8 bytes +
+    # FP32 per-32 power-of-2 scale. dequant is bit-identical to W_deq above.
+    N_, _ = codes_lo.shape
+    cl = codes_lo.view(N_, K_low // 2, 2)
+    W_lo_dec = (cl[:, :, 0] | (cl[:, :, 1] << 4)).to(torch.uint8).contiguous()
+    S_lo_dec = SFB_lo.view(torch.float8_e4m3fn).float().contiguous()
+    W_hi_dec = bytes_hi.contiguous()
+    S_hi_dec = torch.exp2(SFB_hi.float() - 127.0).contiguous()
+
     return PackedWeight(
         N=N, K=K, K_low=K_low, K_high=K_high,
         W_lo_packed=W_lo_packed.contiguous(),
@@ -196,6 +213,7 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
         physSFB_hi=physSFB_hi.contiguous(),
         W_deq=W_deq,
         bias=None if bias is None else bias.detach().to(dev).contiguous(),
+        W_lo_dec=W_lo_dec, S_lo_dec=S_lo_dec, W_hi_dec=W_hi_dec, S_hi_dec=S_hi_dec,
     )
 
 

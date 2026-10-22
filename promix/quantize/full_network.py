@@ -170,20 +170,32 @@ def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
     return packed
 
 
-def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, out_dtype=torch.float16):
+def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16):
     """Replace each target Linear's inner module with MixedQuantLinear (real
     packed fused kernel) and disable the wrapper's fake-quant input quantizer
     (MixedQuantLinear quantizes the activation itself). Keeps Hadamard / o_proj
-    reorder / out_quantizer intact. Returns the number of Linears wired."""
+    reorder / out_quantizer intact. When `dg` (decode_gemv_ext) is given, each
+    MixedQuantLinear uses the memory-bound W4A4 GEMV at M==1 (decode). Returns
+    the number of Linears wired."""
     n = 0
     for name, short, wrapper in iter_target_wrappers(model):
         pk = packed[name]
-        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf)
+        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg)
         wrapper.module = mql
         wrapper.quantizer.bits = 16  # disable fake-quant; real quant is inside mql
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
+        # Prefill-fusion levers for the online Hadamard (down_proj only): fold
+        # 1/sqrt(n) into the transform kernel (kill the separate div) and hand
+        # the FP32 Hadamard output straight to the qpf pack (skip the fp32->fp16
+        # cast). Both are numerics-safe (constant fold + one fewer intermediate
+        # round) and gated by the prefill-fusion cosine/PPL harnesses.
+        if getattr(wrapper, "online_full_had", False):
+            wrapper.fold_had_scale = True
+            if getattr(wrapper, "fp32_had", False):
+                wrapper.had_out_fp32 = True
         n += 1
-    print(f"wire_real_kernel: wired {n} Linears (qpf={'on' if qpf else 'off'})", flush=True)
+    print(f"wire_real_kernel: wired {n} Linears (qpf={'on' if qpf else 'off'}, "
+          f"decode_gemv={'on' if dg else 'off'})", flush=True)
     return n
 
 

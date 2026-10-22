@@ -1,0 +1,46 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                           aten::matmul         0.48%       2.040ms        10.06%      42.487ms      74.538us       0.000us         0.00%     275.255ms     482.904us           570  
+                                           aten::linear         0.26%       1.113ms        10.72%      45.273ms      80.129us       0.000us         0.00%     275.248ms     487.164us           565  
+                                               aten::mm         2.18%       9.195ms         9.14%      38.623ms      68.360us     259.409ms        60.56%     275.248ms     487.164us           565  
+                                              mlp.total         0.78%       3.312ms         7.73%      32.646ms     408.076us       0.000us         0.00%     215.489ms       2.694ms            80  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816...         0.00%       0.000us         0.00%       0.000us       0.000us     196.214ms        45.80%     196.214ms     490.535us           400  
+                                attn.sdpa_qk_softmax_pv         1.08%       4.559ms        11.91%      50.310ms     628.875us       0.000us         0.00%     103.349ms       1.292ms            80  
+                     aten::scaled_dot_product_attention         0.19%     792.771us         8.90%      37.596ms     469.946us       0.000us         0.00%      91.285ms       1.141ms            80  
+              aten::_scaled_dot_product_flash_attention         0.13%     544.272us         8.71%      36.803ms     460.037us       0.000us         0.00%      91.285ms       1.141ms            80  
+                         aten::_flash_attention_forward         0.22%     938.038us         8.48%      35.841ms     448.014us      71.507ms        16.69%      91.285ms       1.141ms            80  
+                                attn.sdpa_qk_softmax_pv         0.00%       0.000us         0.00%       0.000us       0.000us      83.561ms        19.51%      83.561ms       1.045ms            80  
+                                          mlp.down_proj         0.26%       1.080ms         4.32%      18.242ms     228.025us       0.000us         0.00%      72.289ms     903.614us            80  
+void pytorch_flash::flash_fwd_kernel<Flash_fwd_kerne...         0.00%       0.000us         0.00%       0.000us       0.000us      71.507ms        16.69%      71.507ms     893.843us            80  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816...         0.00%       0.000us         0.00%       0.000us       0.000us      63.195ms        14.75%      63.195ms     382.999us           165  
+                                          mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us      57.773ms        13.49%      57.773ms     722.158us            80  
+                                          mlp.gate_proj         0.29%       1.209ms         0.97%       4.091ms      51.136us       0.000us         0.00%      54.177ms     677.213us            80  
+                                          mlp.gate_proj         0.00%       0.000us         0.00%       0.000us       0.000us      54.177ms        12.65%      54.177ms     677.213us            80  
+                                            mlp.up_proj         0.26%       1.099ms         0.80%       3.399ms      42.493us       0.000us         0.00%      54.158ms     676.974us            80  
+                                            mlp.up_proj         0.00%       0.000us         0.00%       0.000us       0.000us      54.158ms        12.64%      54.158ms     676.974us            80  
+                                    Command Buffer Full        43.28%     182.825ms        43.28%     182.825ms     261.179us      47.668ms        11.13%      47.668ms      68.098us           700  
+                                              aten::mul         1.36%       5.759ms        10.96%      46.285ms      62.548us      39.727ms         9.27%      45.166ms      61.036us           740  
+                                           mlp.silu_mul         0.00%       0.000us         0.00%       0.000us       0.000us      35.001ms         8.17%      35.001ms     437.513us            80  
+                                           mlp.silu_mul         0.35%       1.473ms         0.85%       3.602ms      45.022us       0.000us         0.00%      34.865ms     435.815us            80  
+                                       cudaLaunchKernel         3.33%      14.057ms        40.27%     170.094ms      58.755us       0.000us         0.00%      31.830ms      10.995us          2895  
+                                              attn.rope         1.29%       5.430ms        18.30%      77.319ms     966.484us       0.000us         0.00%      21.803ms     272.534us            80  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      21.664ms         5.06%      21.664ms     270.806us            80  
+                                            aten::copy_         0.84%       3.535ms         6.56%      27.701ms      41.655us      18.372ms         4.29%      19.926ms      29.964us           665  
+                                              attn.rope         0.00%       0.000us         0.00%       0.000us       0.000us      17.936ms         4.19%      17.936ms     224.206us            80  
+                                          input_rmsnorm         0.84%       3.564ms         4.69%      19.830ms     247.879us       0.000us         0.00%      17.082ms     213.524us            80  
+                                      post_attn_rmsnorm         0.88%       3.728ms        15.93%      67.311ms     841.393us       0.000us         0.00%      16.342ms     204.269us            80  
+                                         cuLaunchKernel         0.58%       2.467ms         6.93%      29.255ms      51.779us       0.000us         0.00%      15.839ms      28.033us           565  
+                                            attn.o_proj         0.34%       1.419ms         1.07%       4.521ms      56.510us       0.000us         0.00%      15.264ms     190.803us            80  
+                                            attn.o_proj         0.00%       0.000us         0.00%       0.000us       0.000us      15.264ms         3.56%      15.264ms     190.803us            80  
+                                            attn.q_proj         0.29%       1.234ms         0.97%       4.115ms      51.432us       0.000us         0.00%      14.842ms     185.528us            80  
+                                            attn.q_proj         0.00%       0.000us         0.00%       0.000us       0.000us      14.842ms         3.46%      14.842ms     185.528us            80  
+                                      post_attn_rmsnorm         0.00%       0.000us         0.00%       0.000us       0.000us      14.788ms         3.45%      14.788ms     184.852us            80  
+                                          input_rmsnorm         0.00%       0.000us         0.00%       0.000us       0.000us      14.120ms         3.30%      14.120ms     176.505us            80  
+                                             aten::silu         0.17%     727.644us         0.27%       1.135ms      14.190us      13.201ms         3.08%      13.201ms     165.009us            80  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      13.201ms         3.08%      13.201ms     165.009us            80  
+                                            aten::clone         0.19%     795.826us         1.45%       6.133ms      19.165us       0.000us         0.00%      12.064ms      37.699us           320  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      11.421ms         2.67%      11.421ms      35.689us           320  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 422.427ms
+Self CUDA time total: 428.373ms

@@ -11,12 +11,17 @@ DEV = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 class HadamardTransform(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, u):
-        return hadamard_transform(u)
+    def forward(ctx, u, scale=1.0):
+        # `scale` is applied INSIDE the fast_hadamard_transform CUDA kernel
+        # (free fused multiply), so a caller that wants H(x)/sqrt(n) can pass
+        # scale=1/sqrt(n) and avoid a separate elementwise div kernel. Default
+        # 1.0 keeps every existing caller byte-identical.
+        ctx.scale = scale
+        return hadamard_transform(u, scale)
 
     @staticmethod
     def backward(ctx, grad):
-        return hadamard_transform(grad)
+        return hadamard_transform(grad, ctx.scale), None
 
 
 def cleanup_memory(verbose=True):
