@@ -1,0 +1,72 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SM120 融合 GEMM — TFLOPS vs ratio (公平 best-config)</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--ink:#e6e9ef;--muted:#9aa4b2;--grid:#242a34;--cd:#4e8cff;--fp4:#35c4b5;--fp8:#c08bff;--accentbg:#1d2430;}
+[data-theme=light]{--bg:#f7f8fa;--panel:#fff;--ink:#1a1f29;--muted:#5a6472;--grid:#e9ecf1;--cd:#1f6feb;--fp4:#128577;--fp8:#7b3ff2;--accentbg:#eef1f6;}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+header{padding:20px 24px 6px}h1{margin:0 0 4px;font-size:20px}.sub{color:var(--muted);font-size:13px;max-width:920px}
+.controls{display:flex;gap:16px;align-items:center;padding:10px 24px;border-bottom:1px solid var(--grid)}
+.legend{display:flex;gap:16px;flex-wrap:wrap}.lg{display:inline-flex;gap:6px;align-items:center;font-size:12.5px;color:var(--muted)}
+.sw{width:16px;height:3px;border-radius:2px;display:inline-block}.sw.dot{width:9px;height:9px;border-radius:50%}
+.seg{display:inline-flex;border:1px solid var(--grid);border-radius:8px;overflow:hidden;margin-left:auto}
+.seg button{background:transparent;color:var(--muted);border:0;padding:6px 12px;cursor:pointer}.seg button.on{background:var(--accentbg);color:var(--ink);font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px 24px 40px}
+.panel{background:var(--panel);border:1px solid var(--grid);border-radius:10px;padding:10px 12px 6px}
+.ptitle{font-size:13px;font-weight:600}.pmeta{font-size:11px;color:var(--muted);margin-bottom:2px}
+svg{width:100%;height:auto;display:block;overflow:visible}.gl{stroke:var(--grid);stroke-width:1}
+.ax{fill:var(--muted);font-size:10px}.axt{fill:var(--muted);font-size:10.5px}
+.ser{fill:none;stroke-width:2.4}.refl{stroke-dasharray:5 4;stroke-width:1.4;fill:none}
+.tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 6px 24px rgba(0,0,0,.35);display:none}
+.tip .row{display:flex;justify-content:space-between;gap:14px}.tip .k{color:var(--muted)}
+.foot{color:var(--muted);font-size:12px;padding:0 24px 40px;max-width:920px}
+.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px;background:var(--accentbg);color:var(--muted);margin-left:6px}
+</style></head><body data-theme="dark">
+<header><h1>SM120 融合 GEMM — TFLOPS vs ratio <span class="badge">公平 best-config · 锁时钟 2430MHz · GEMM-only</span></h1>
+<div class="sub">横轴 r = K_high/K_total。纵轴 = GEMM 吞吐 TFLOPS(2·M·N·K / 时间)。<b style="color:var(--fp4)">●FP4</b> / <b style="color:var(--fp8)">●FP8</b> 是<b>各自 grid 搜出的最优配置</b>固定端点(公平 bound,不再是旧的偏弱基线),虚线 = 二者线性参照。<b style="color:var(--cd)">co-design</b> 用它每个 shape 的最优配置。行=M,列=结构。(本轮公平重测只到 r=0.5;r=1 即 FP8 端点。)</div></header>
+<div class="controls"><div class="legend">
+<span class="lg"><span class="sw" style="background:var(--cd)"></span>co-design (best-config)</span>
+<span class="lg"><span class="sw dot" style="background:var(--fp4)"></span>FP4 端点 (best)</span>
+<span class="lg"><span class="sw dot" style="background:var(--fp8)"></span>FP8 端点 (best)</span>
+<span class="lg"><span class="sw" style="background:var(--muted)"></span>FP4–FP8 线性参照</span></div>
+<div class="seg" id="theme"><button data-t="dark" class="on">暗</button><button data-t="light">亮</button></div></div>
+<div class="grid" id="grid"></div>
+<div class="foot">co-design 线高于虚线 = 比公平纯格式线性插值还快。端点已是 best-config,所以现在的高下是真实的(round-24:co-design 对 FP4 的优势 ~93% 是真本事,仅 ~7% 曾来自旧基线偏弱)。</div>
+<div class="tip" id="tip"></div>
+<script>
+const DATA={"qkv|512": {"cd": [{"r": 0.0, "tf": 104.4, "cfg": "128x64_nv4mx2", "pct": 5.8}, {"r": 0.125, "tf": 105.8, "cfg": "128x64_nv4mx2", "pct": 6.6}, {"r": 0.5, "tf": 101.2, "cfg": "128x64_nv4mx2", "pct": 8.5}], "fp4": 102.3, "fp8": 94.63333333333333, "fp4cfg": "128x64_auto", "fp8cfg": "128x64_auto", "N": 2048, "Kt": 2048}, "qkv|2048": {"cd": [{"r": 0.0, "tf": 302.8, "cfg": "128x128_nv4mx2", "pct": 16.9}, {"r": 0.125, "tf": 285.3, "cfg": "128x128_nv4mx2", "pct": 17.9}, {"r": 0.5, "tf": 261.3, "cfg": "128x64_nv4mx2", "pct": 21.8}], "fp4": 309.7, "fp8": 239.9333333333333, "fp4cfg": "256x128_s3", "fp8cfg": "128x64_auto", "N": 2048, "Kt": 2048}, "qkv|4096": {"cd": [{"r": 0.0, "tf": 501.7, "cfg": "128x128_nv4mx2", "pct": 27.9}, {"r": 0.125, "tf": 461.2, "cfg": "128x128_nv4mx2", "pct": 28.9}, {"r": 0.5, "tf": 413.6, "cfg": "128x128_nv4mx2", "pct": 34.5}], "fp4": 432.23333333333335, "fp8": 327.23333333333335, "fp4cfg": "128x128_pp", "fp8cfg": "128x128_pp", "N": 2048, "Kt": 2048}, "qkv|8192": {"cd": [{"r": 0.0, "tf": 699.1, "cfg": "128x128_nv4mx2", "pct": 38.9}, {"r": 0.125, "tf": 614.4, "cfg": "128x128_nv4mx2", "pct": 38.5}, {"r": 0.5, "tf": 530.6, "cfg": "128x128_nv4mx2", "pct": 44.3}], "fp4": 544.7666666666667, "fp8": 395.1666666666667, "fp4cfg": "128x128_pp", "fp8cfg": "128x128_pp", "N": 2048, "Kt": 2048}, "gate|512": {"cd": [{"r": 0.0, "tf": 301.6, "cfg": "128x128_nv4mx2", "pct": 16.8}, {"r": 0.125, "tf": 289.7, "cfg": "128x128_nv4mx2", "pct": 18.2}, {"r": 0.5, "tf": 259.1, "cfg": "128x64_nv4mx2", "pct": 21.6}], "fp4": 318.1666666666667, "fp8": 239.76666666666665, "fp4cfg": "128x128_auto", "fp8cfg": "128x64_auto", "N": 8192, "Kt": 2048}, "gate|2048": {"cd": [{"r": 0.0, "tf": 703.2, "cfg": "128x128_nv4mx2", "pct": 39.2}, {"r": 0.125, "tf": 609.4, "cfg": "128x128_nv4mx2", "pct": 38.2}, {"r": 0.5, "tf": 520.1, "cfg": "128x128_nv4mx2", "pct": 43.4}], "fp4": 741.1, "fp8": 480.6000000000001, "fp4cfg": "256x128_s3", "fp8cfg": "128x128_pp", "N": 8192, "Kt": 2048}, "gate|4096": {"cd": [{"r": 0.0, "tf": 887.6, "cfg": "128x128_nv4mx2", "pct": 49.4}, {"r": 0.125, "tf": 769.7, "cfg": "128x128_nv4mx2", "pct": 48.2}, {"r": 0.5, "tf": 629.4, "cfg": "128x128_nv4mx2", "pct": 52.6}], "fp4": 891.9333333333334, "fp8": 560.7666666666668, "fp4cfg": "128x128_pp", "fp8cfg": "128x128_pp", "N": 8192, "Kt": 2048}, "gate|8192": {"cd": [{"r": 0.0, "tf": 1006.0, "cfg": "128x128_nv4mx2", "pct": 56.0}, {"r": 0.125, "tf": 865.0, "cfg": "128x128_nv4mx2", "pct": 54.2}, {"r": 0.5, "tf": 692.5, "cfg": "128x128_nv4mx2", "pct": 57.8}], "fp4": 982.0333333333334, "fp8": 587.0666666666667, "fp4cfg": "256x128_s3", "fp8cfg": "128x128_pp", "N": 8192, "Kt": 2048}, "down|512": {"cd": [{"r": 0.0, "tf": 311.4, "cfg": "128x64_nv4mx2", "pct": 17.3}, {"r": 0.125, "tf": 303.5, "cfg": "128x64_nv4mx2", "pct": 19.0}, {"r": 0.5, "tf": 261.0, "cfg": "128x64_nv4mx2", "pct": 21.8}], "fp4": 305.03333333333336, "fp8": 238.96666666666667, "fp4cfg": "128x64_auto", "fp8cfg": "128x64_auto", "N": 2048, "Kt": 8192}, "down|2048": {"cd": [{"r": 0.0, "tf": 650.8, "cfg": "128x128_nv4mx2", "pct": 36.2}, {"r": 0.125, "tf": 596.0, "cfg": "128x128_nv4mx2", "pct": 37.3}, {"r": 0.5, "tf": 485.9, "cfg": "128x128_nv4mx2", "pct": 40.6}], "fp4": 525.7333333333332, "fp8": 353.9333333333334, "fp4cfg": "256x128_s3", "fp8cfg": "128x64_auto", "N": 2048, "Kt": 8192}, "down|4096": {"cd": [{"r": 0.0, "tf": 973.7, "cfg": "128x128_nv4mx2", "pct": 54.2}, {"r": 0.125, "tf": 872.3, "cfg": "128x128_nv4mx2", "pct": 54.6}, {"r": 0.5, "tf": 686.6, "cfg": "128x128_nv4mx2", "pct": 57.4}], "fp4": 628.1666666666666, "fp8": 431.1666666666667, "fp4cfg": "128x128_auto", "fp8cfg": "128x128_pp", "N": 2048, "Kt": 8192}, "down|8192": {"cd": [{"r": 0.0, "tf": 1108.1, "cfg": "128x128_nv4mx2", "pct": 61.7}, {"r": 0.125, "tf": 967.4, "cfg": "128x128_nv4mx2", "pct": 60.6}, {"r": 0.5, "tf": 753.5, "cfg": "128x128_nv4mx2", "pct": 62.9}], "fp4": 710.0333333333333, "fp8": 452.6333333333334, "fp4cfg": "256x128_s3", "fp8cfg": "128x128_pp", "N": 2048, "Kt": 8192}};const shapes=['qkv','gate','down'],Ms=[512,2048,4096,8192];
+const smeta={qkv:'K=2048 N=2048',gate:'K=2048 N=8192',down:'K=8192 N=2048'};
+function cssv(v){return getComputedStyle(document.body).getPropertyValue(v).trim();}
+const W=360,H=220,PL=46,PR=16,PT=14,PB=30;
+function panel(shape,M){const o=DATA[shape+'|'+M];const cd=o.cd;const NS='http://www.w3.org/2000/svg';
+const el=document.createElement('div');el.className='panel';el.innerHTML=`<div class="ptitle">${shape} · M=${M}</div><div class="pmeta">${smeta[shape]} · cd:${cd[0]?cd[0].cfg:''} · fp4:${o.fp4cfg} · fp8:${o.fp8cfg}</div>`;
+const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+const Ln=(a,b,c,d,cl,st)=>{const l=document.createElementNS(NS,'line');l.setAttribute('x1',a);l.setAttribute('y1',b);l.setAttribute('x2',c);l.setAttribute('y2',d);l.setAttribute('class',cl);if(st)l.setAttribute('stroke',st);return l;};
+const Tx=(x,y,s,cl,an)=>{const t=document.createElementNS(NS,'text');t.setAttribute('x',x);t.setAttribute('y',y);t.setAttribute('class',cl);if(an)t.setAttribute('text-anchor',an);t.textContent=s;return t;};
+let vals=[o.fp4,o.fp8];cd.forEach(p=>{if(p.tf!=null)vals.push(p.tf);});
+let ymax=Math.max(...vals.filter(v=>v!=null))*1.1,ymin=0;
+const x=r=>PL+r*(W-PL-PR),y=v=>PT+(1-(v-ymin)/(ymax-ymin))*(H-PT-PB);
+for(let i=0;i<=4;i++){const v=ymax*i/4;svg.appendChild(Ln(PL,y(v),W-PR,y(v),'gl'));svg.appendChild(Tx(PL-5,y(v)+3,v.toFixed(0),'ax','end'));}
+[0,.25,.5,.75,1].forEach(r=>svg.appendChild(Tx(x(r),H-PB+14,r.toFixed(2),'ax','middle')));
+svg.appendChild(Tx((PL+W-PR)/2,H-3,'r = K_high / K_total','axt','middle'));svg.appendChild(Tx(10,PT+4,'TFLOPS','axt','start'));
+if(o.fp4!=null&&o.fp8!=null)svg.appendChild(Ln(x(0),y(o.fp4),x(1),y(o.fp8),'refl',cssv('--muted')));
+// co-design line
+{const col=cssv('--cd');let d='',st=false;cd.forEach(p=>{if(p.tf==null){st=false;return;}const X=x(p.r),Y=y(p.tf);d+=(st?'L':'M')+X.toFixed(1)+' '+Y.toFixed(1)+' ';st=true;});
+ if(d){const pa=document.createElementNS(NS,'path');pa.setAttribute('d',d);pa.setAttribute('class','ser');pa.setAttribute('stroke',col);svg.appendChild(pa);}
+ cd.forEach(p=>{if(p.tf==null)return;const c=document.createElementNS(NS,'circle');c.setAttribute('cx',x(p.r));c.setAttribute('cy',y(p.tf));c.setAttribute('r',3);c.setAttribute('fill',col);svg.appendChild(c);});}
+const dot=(X,Y,col,lab,an)=>{const c=document.createElementNS(NS,'circle');c.setAttribute('cx',X);c.setAttribute('cy',Y);c.setAttribute('r',4.5);c.setAttribute('fill',col);svg.appendChild(c);svg.appendChild(Tx(an==='start'?X+6:X-6,Y-6,lab,'ax',an));};
+if(o.fp4!=null)dot(x(0),y(o.fp4),cssv('--fp4'),'FP4 '+o.fp4.toFixed(0),'start');
+if(o.fp8!=null)dot(x(1),y(o.fp8),cssv('--fp8'),'FP8 '+o.fp8.toFixed(0),'end');
+const hv=document.createElementNS(NS,'rect');hv.setAttribute('x',PL);hv.setAttribute('y',PT);hv.setAttribute('width',W-PL-PR);hv.setAttribute('height',H-PT-PB);hv.setAttribute('fill','transparent');
+hv.addEventListener('mousemove',e=>{const rc=svg.getBoundingClientRect();let rr=((e.clientX-rc.left)/rc.width*W-PL)/(W-PL-PR);rr=Math.max(0,Math.min(1,rr));
+ let b=cd[0],bd=9;cd.forEach(p=>{const dd=Math.abs(p.r-rr);if(dd<bd){bd=dd;b=p;}});
+ const tip=document.getElementById('tip');tip.innerHTML=`<div class="row"><b>${shape} M=${M}</b><span class="k">r=${b.r.toFixed(3)}</span></div>`+
+  `<div class="row"><span class="k" style="color:var(--cd)">co-design</span><b>${b.tf!=null?b.tf.toFixed(0)+' TF ('+(b.pct?b.pct.toFixed(0)+'%peak':'')+')':'—'}</b></div>`+
+  `<div class="row"><span class="k" style="color:var(--fp4)">FP4 端点</span><b>${o.fp4.toFixed(0)} TF</b></div>`+
+  `<div class="row"><span class="k" style="color:var(--fp8)">FP8 端点</span><b>${o.fp8.toFixed(0)} TF</b></div>`;
+ tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-180)+'px';tip.style.top=(e.clientY+14)+'px';});
+hv.addEventListener('mouseleave',()=>document.getElementById('tip').style.display='none');svg.appendChild(hv);
+el.appendChild(svg);return el;}
+function render(){const g=document.getElementById('grid');g.innerHTML='';Ms.forEach(M=>shapes.forEach(sh=>g.appendChild(panel(sh,M))));}
+document.getElementById('theme').addEventListener('click',e=>{if(!e.target.dataset.t)return;document.body.dataset.theme=e.target.dataset.t;[...e.currentTarget.children].forEach(b=>b.classList.toggle('on',b===e.target));render();});
+render();
+</script></body></html>
