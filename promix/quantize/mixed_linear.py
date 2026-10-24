@@ -34,7 +34,7 @@ from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
 
 class MixedQuantLinear(nn.Module):
-    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None):
+    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -77,17 +77,18 @@ class MixedQuantLinear(nn.Module):
         self._mx = mx
         self._cd = cd
         self._qpf = qpf
+        self._qpfm = qpfm
         self._dg = dg
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
         bias = getattr(linear, "bias", None)
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
-        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg)
+        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm)
 
     def _decode_gemv(self, x2d):
         """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
@@ -102,6 +103,13 @@ class MixedQuantLinear(nn.Module):
     def _pack_activation(self, x2d):
         """x2d: (M, K) fp (any dtype) -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi)."""
         M = x2d.shape[0]
+        if self._qpfm is not None:
+            # LEVER 1 (pack fusion): one fused launch for BOTH the NVFP4 (low) and
+            # MXFP8 (high) segments -> halves the pack launch count. Bit-exact to the
+            # two-launch qpf path (same quant math, probe-verified torch.equal).
+            x2d = x2d.contiguous()
+            a = self._qpfm.quant_pack_float_mixed(x2d, M, self.N, self.K_low, self.K_high)
+            return a[0], a[1], a[2], a[3]
         if self._qpf is not None:
             # FAST PATH: fused float->packed-codes + interleaved-SF, one CUDA kernel each,
             # reading the low/high column slices of x2d IN PLACE (row_stride=K, col_off) —

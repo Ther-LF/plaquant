@@ -170,17 +170,19 @@ def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
     return packed
 
 
-def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16):
+def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None):
     """Replace each target Linear's inner module with MixedQuantLinear (real
     packed fused kernel) and disable the wrapper's fake-quant input quantizer
     (MixedQuantLinear quantizes the activation itself). Keeps Hadamard / o_proj
     reorder / out_quantizer intact. When `dg` (decode_gemv_ext) is given, each
-    MixedQuantLinear uses the memory-bound W4A4 GEMV at M==1 (decode). Returns
-    the number of Linears wired."""
+    MixedQuantLinear uses the memory-bound W4A4 GEMV at M==1 (decode). When
+    `qpfm` (quant_pack_fused_ext) is given, the per-forward activation pack uses
+    the single-launch fused fp4+fp8 pack (lever 1; bit-exact). Returns the number
+    of Linears wired."""
     n = 0
     for name, short, wrapper in iter_target_wrappers(model):
         pk = packed[name]
-        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg)
+        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm)
         wrapper.module = mql
         wrapper.quantizer.bits = 16  # disable fake-quant; real quant is inside mql
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
@@ -204,8 +206,21 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
             wrapper.fold_had_scale = True
         n += 1
     print(f"wire_real_kernel: wired {n} Linears (qpf={'on' if qpf else 'off'}, "
-          f"decode_gemv={'on' if dg else 'off'})", flush=True)
+          f"qpfm={'on' if qpfm else 'off'}, decode_gemv={'on' if dg else 'off'})", flush=True)
     return n
+
+
+def wire_lmhead_mxfp8(model, lmh, qpf, out_dtype=torch.float16):
+    """Replace the FP16 lm_head with a pure MXFP8 (W8A8) MxFp8Linear (lever 2).
+
+    lm_head is the shared ~10 ms FP16 vocab GEMM. W8 MXFP8 holds wikitext-2 PPL
+    at +0.048 (14.898 <= 14.95 gate); W4A4-mixed fails (+0.295). Returns the
+    MxFp8Linear so the caller can restore the FP16 head if needed."""
+    from promix.quantize.lmhead_linear import MxFp8Linear
+    orig = model.lm_head
+    model.lm_head = MxFp8Linear.from_linear(orig, lmh, qpf, out_dtype=out_dtype)
+    print("wire_lmhead_mxfp8: lm_head -> MXFP8 W8A8", flush=True)
+    return orig
 
 
 def wire_fake_mixed(model, packed, out_dtype=torch.float16):
