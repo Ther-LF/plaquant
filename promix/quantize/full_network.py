@@ -170,7 +170,36 @@ def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
     return packed
 
 
-def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None):
+def _fused_mlp_forward(mlp, x):
+    """LlamaMLP.forward replacement that hands the un-materialized gate/up GEMM
+    outputs to the down_proj wrapper (fused silu*up -> Hadamard -> pack).  Falls
+    back to the identical reference computation when fusion is disabled, so the
+    fake-quant / pre-fusion paths are bit-identical to transformers' own."""
+    g = mlp.gate_proj(x)
+    u = mlp.up_proj(x)
+    down = mlp.down_proj
+    if getattr(down, "fused_swiglu_had", False) and \
+            hasattr(down.module, "forward_swiglu_pack"):
+        return down(x, mlp_gate=g, mlp_up=u)
+    return down(mlp.act_fn(g) * u)
+
+
+def wire_fused_mlp(model):
+    """Install `_fused_mlp_forward` on every decoder-layer MLP (no-op unless the
+    down_proj wrapper has `fused_swiglu_had` set).  Returns the count."""
+    import types
+    n = 0
+    for layer in model.model.layers:
+        mlp = layer.mlp
+        if not hasattr(mlp, "act_fn"):
+            continue
+        mlp.forward = types.MethodType(_fused_mlp_forward, mlp)
+        n += 1
+    print(f"wire_fused_mlp: installed on {n} MLPs", flush=True)
+    return n
+
+
+def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None, hpk=None):
     """Replace each target Linear's inner module with MixedQuantLinear (real
     packed fused kernel) and disable the wrapper's fake-quant input quantizer
     (MixedQuantLinear quantizes the activation itself). Keeps Hadamard / o_proj
@@ -182,10 +211,18 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
     n = 0
     for name, short, wrapper in iter_target_wrappers(model):
         pk = packed[name]
-        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm)
+        mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg,
+                               qpfm=qpfm, hpk=hpk)
         wrapper.module = mql
         wrapper.quantizer.bits = 16  # disable fake-quant; real quant is inside mql
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
+        # Fused down_proj producer path (SwiGLU + Hadamard + pack, one kernel):
+        # the MLP hands the un-materialized gate/up GEMM outputs to this wrapper.
+        # (prefill only: with `dg` wired, M==1 takes the decode GEMV, whose
+        # input is the materialized h — do not reroute it.)
+        if (hpk is not None and short == "down_proj" and dg is None
+                and hasattr(mql, "forward_swiglu_pack")):
+            wrapper.fused_swiglu_had = True
         # Prefill-fusion lever (down_proj online Hadamard only): fold 1/sqrt(n)
         # into the transform kernel (kills the separate /sqrt(n) div kernel).
         # VALIDATED numerics-safe: it is a constant fold (reciprocal-multiply vs

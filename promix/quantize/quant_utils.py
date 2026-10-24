@@ -359,6 +359,12 @@ class ActQuantWrapper(nn.Module):
         # the quantizer sees the contiguous [low|main|high] layout whose
         # segment lengths align to the FP block grid (NVFP4 16 / MXFP8 32).
         self.reorder_before_quant = False
+        # Fused down_proj producer path (real kernel only): the wrapper receives
+        # the un-materialized SwiGLU operands via `mlp_gate`/`mlp_up` kwargs and
+        # the single fused kernel does silu*up -> Hadamard/sqrt(I) -> fp16 ->
+        # NVFP4+MXFP8 pack.  Set by full_network.wire_real_kernel; only enabled
+        # when the inner module exposes forward_swiglu_pack.
+        self.fused_swiglu_had = False
         # Cache which extra kwargs the inner module's forward accepts so we
         # can route training-time R1/R2 args through wrappers around
         # QuantizeLinear without erroring on plain nn.Linear (e.g. lm_head).
@@ -370,6 +376,24 @@ class ActQuantWrapper(nn.Module):
 
     def forward(self, x, column_order=None, **kwargs):
         x_dtype = x.dtype
+
+        # Fused SwiGLU + Hadamard + pack producer path (down_proj, real kernel).
+        # `x` is unused here: the MLP hands us the two un-materialized GEMM
+        # outputs, so the [M, I] bf16 intermediate is never written to HBM.
+        gate = kwargs.pop("mlp_gate", None)
+        up = kwargs.pop("mlp_up", None)
+        # The fused kernel's interleaved-SFA atom layout is defined for M>=128;
+        # below that (decode / tiny smoke tests) fall through to the reference
+        # path, which packs `h` exactly as before.
+        if self.fused_swiglu_had and gate is not None and up is not None \
+                and gate.reshape(-1, gate.shape[-1]).shape[0] >= 128 \
+                and hasattr(self.module, "forward_swiglu_pack"):
+            x = self.module.forward_swiglu_pack(gate, up).to(x_dtype)
+            if _quant_enabled(self.out_quantizer.bits):
+                self.out_quantizer.find_params(x)
+                x = self.out_quantizer(x).to(x_dtype)
+                self.out_quantizer.free()
+            return x
 
         # Disambiguate the second positional arg: PTQ paths pass an int index
         # tensor (column_order); training paths in modeling_llama_train pass

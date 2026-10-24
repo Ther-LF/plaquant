@@ -34,7 +34,8 @@ from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
 
 class MixedQuantLinear(nn.Module):
-    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None):
+    def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
+                 qpfm=None, hpk=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -79,16 +80,17 @@ class MixedQuantLinear(nn.Module):
         self._qpf = qpf
         self._qpfm = qpfm
         self._dg = dg
+        self._hpk = hpk
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
         bias = getattr(linear, "bias", None)
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
-        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm)
+        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm, hpk=hpk)
 
     def _decode_gemv(self, x2d):
         """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
@@ -143,6 +145,31 @@ class MixedQuantLinear(nn.Module):
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 M, self.N, self.K_low, self.K_high,
             )
+        D = D.to(self.out_dtype)
+        if self.bias is not None:
+            D = D + self.bias.to(D.dtype)
+        return D.reshape(*in_shape[:-1], self.N)
+
+    def forward_swiglu_pack(self, gate, up):
+        """down_proj FUSED entry: gate/up are the two [M, I] bf16 outputs of the
+        gate_proj / up_proj GEMMs.  One kernel does silu*up -> Hadamard/sqrt(I)
+        (fp32 in SMEM) -> fp16 -> NVFP4+MXFP8 pack; then the packed GEMM.
+        Bit-exact to `self.forward(h)` where h = silu(gate)*up (probe-verified),
+        minus the fp32 [M, I] HBM round-trips."""
+        in_shape = gate.shape
+        I = in_shape[-1]
+        g2d = gate.reshape(-1, I).contiguous()
+        u2d = up.reshape(-1, I).contiguous()
+        M = g2d.shape[0]
+        assert I == self.K, f"fused down_proj: I={I} != K={self.K}"
+        assert self._hpk is not None, "fused path needs the hpk kernel module"
+        A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk.hadamard_swiglu_pack_mixed(
+            g2d, u2d, M, self.N, self.K_low, self.K_high)
+        D = self._cd.fused_gemm_prepacked(
+            A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+            A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+            M, self.N, self.K_low, self.K_high,
+        )
         D = D.to(self.out_dtype)
         if self.bias is not None:
             D = D + self.bias.to(D.dtype)

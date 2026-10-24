@@ -128,7 +128,7 @@ PARTITION = {
 # Internal drill-down of the Linear totals (sum of these == Linear-total minus
 # per-Linear python/reshape glue). Reported separately, excluded from partition.
 LIN_INTERNAL = {
-    "lin.pack", "lin.gemm", "lin.cast_bias", "lin.down_hadamard",
+    "lin.pack", "lin.gemm", "lin.cast_bias", "lin.down_hadamard", "lin.down_fused",
     "lin.o_reorder", "lin.fakequant", "lin.out_quant",
 }
 
@@ -316,16 +316,44 @@ def _mixed_forward(self, x):
 _ORIG = {}
 
 
-def install_patches(eager_attn=False):
+def _mlp_forward_fused(self, x):
+    """Fused down_proj producer: hand gate/up to the wrapper's fused kernel."""
+    with PROF.region("mlp.gate_proj"):
+        g = self.gate_proj(x)
+    with PROF.region("mlp.up_proj"):
+        u = self.up_proj(x)
+    d = self.down_proj
+    if getattr(d, "fused_swiglu_had", False) and hasattr(d.module, "forward_swiglu_pack"):
+        with PROF.region("mlp.down_proj"):
+            return d(x, mlp_gate=g, mlp_up=u)
+    with PROF.region("mlp.silu_mul"):
+        h = self.act_fn(g) * u
+    with PROF.region("mlp.down_proj"):
+        return d(h)
+
+
+def _wrapper_forward_fused(self, x, column_order=None, **kwargs):
+    gate = kwargs.pop("mlp_gate", None); up = kwargs.pop("mlp_up", None)
+    if self.fused_swiglu_had and gate is not None and up is not None \
+            and hasattr(self.module, "forward_swiglu_pack"):
+        with PROF.region("lin.down_fused"):
+            return self.module.forward_swiglu_pack(gate, up).to(x.dtype)
+    return _wrapper_forward_orig(self, x, column_order=column_order, **kwargs)
+
+
+def install_patches(eager_attn=False, fused=False):
+    global _wrapper_forward_orig
+    _wrapper_forward_orig = _wrapper_forward
+    _ORIG["mlp"] = ml.LlamaMLP.forward
     _ORIG["mlp"] = ml.LlamaMLP.forward
     _ORIG["attn"] = ml.LlamaAttention.forward
     _ORIG["dec"] = ml.LlamaDecoderLayer.forward
     _ORIG["wrap"] = ActQuantWrapper.forward
     _ORIG["mixed"] = MixedQuantLinear.forward
-    ml.LlamaMLP.forward = _mlp_forward
+    ml.LlamaMLP.forward = _mlp_forward_fused if fused else _mlp_forward
     ml.LlamaAttention.forward = _attn_forward_eager if eager_attn else _attn_forward
     ml.LlamaDecoderLayer.forward = _decoder_forward
-    ActQuantWrapper.forward = _wrapper_forward
+    ActQuantWrapper.forward = _wrapper_forward_fused if fused else _wrapper_forward
     MixedQuantLinear.forward = _mixed_forward
 
 
@@ -419,7 +447,7 @@ def time_clean(fn_, iters, warmup):
 
 
 @torch.no_grad()
-def profile_model(model, label, M, vocab, iters, warmup, eager_attn=False):
+def profile_model(model, label, M, vocab, iters, warmup, eager_attn=False, fused=False):
     ids = torch.randint(0, vocab, (1, M), device=DEV)
 
     def fwd():
@@ -436,7 +464,7 @@ def profile_model(model, label, M, vocab, iters, warmup, eager_attn=False):
     # the same way min-of-N does for the whole-model number).
     PROF.clear()
     _ONCE_EVENTS.clear()
-    install_patches(eager_attn=eager_attn)
+    install_patches(eager_attn=eager_attn, fused=fused)
     hooks = install_once_hooks(model)
     PROF.enabled = True
     PROF.record_fn = False
@@ -581,6 +609,8 @@ def main():
     ap.add_argument("--eager-attn", action="store_true", default=False,
                     help="also run a forced-eager-attention pass to split QK^T/softmax/PV")
     ap.add_argument("--profiler", action="store_true", default=False)
+    ap.add_argument("--fused", action="store_true", default=False,
+                    help="use the fused SwiGLU+Hadamard+pack down_proj producer")
     ap.add_argument("--cross-check", action="store_true", default=False,
                     help="also run isolated dense pack/GEMM/Hadamard cross-check")
     ap.add_argument("--out", type=str, default=os.path.join(KERN, "prefill_stage_profile.json"))
@@ -606,7 +636,12 @@ def main():
         model.to(DEV)
         model.config.use_cache = False
         packed = fn.pack_all_targets(model, nv, mx, cd, high_fraction=HIGH_FRACTION, verbose=False)
-        fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf)
+        hpk_arg = None
+        if args.fused:
+            from promix.eval.hadamard_swiglu_fusion import load_hpk, load_qpfm
+            hpk_arg = load_hpk()
+            fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf,
+                                qpfm=load_qpfm(), hpk=hpk_arg)
         model.to(DEV).eval()
         n_moved = 0
         for m in model.modules():
@@ -628,7 +663,7 @@ def main():
     for M in Ms:
         if model is not None:
             results["runs"].append(
-                profile_model(model, "real", M, vocab, args.iters, args.warmup))
+                profile_model(model, "real", M, vocab, args.iters, args.warmup, fused=args.fused))
             if args.eager_attn:
                 results["runs"].append(
                     profile_model(model, "real_eagerattn", M, vocab,
