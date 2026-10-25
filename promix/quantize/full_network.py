@@ -184,6 +184,142 @@ def _fused_mlp_forward(mlp, x):
     return down(mlp.act_fn(g) * u)
 
 
+def _norm_pack_input(layer, hidden_states, attention_mask=None, position_ids=None,
+                     past_key_value=None, output_attentions=False, use_cache=False,
+                     cache_position=None, position_embeddings=None, **kwargs):
+    """LlamaDecoderLayer.forward, with the fused norm->pack producer hook.
+
+    This replacement changes NO arithmetic in the fallback: the two RMSNorms are
+    the original modules, the residual adds and the attention/MLP calls are the
+    reference's. It exists so the MLP's gate/up wrappers can receive the pre-norm
+    tensor through `norm_residual` (round-26 lever B): with `norm_pack` enabled
+    those wrappers replace add+RMSNorm+quant+pack with one fused kernel per group."""
+    residual = hidden_states
+
+    hidden_states = layer.input_layernorm(hidden_states)
+    hidden_states = layer.self_attn(
+        hidden_states=hidden_states,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_value=past_key_value,
+        output_attentions=output_attentions,
+        use_cache=use_cache,
+        cache_position=cache_position,
+        position_embeddings=position_embeddings,
+        **kwargs,
+    )
+    if isinstance(hidden_states, tuple):
+        hidden_states = hidden_states[0]
+    hidden_states = residual + hidden_states
+
+    residual = hidden_states
+    hidden_states = layer.post_attention_layernorm(hidden_states)
+    hidden_states = layer.mlp(hidden_states)
+    hidden_states = residual + hidden_states
+
+    return (hidden_states,)
+
+def wire_norm_pack_layers(model):
+    """Install `_norm_pack_input` on every decoder layer whose Linears own a
+    norm->pack group, and replace that layer's two RMSNorms with `_NormProducer`
+    adapters. The adapters return the SAME tensor the reference RMSNorm returns
+    (the layer forward's arithmetic is unchanged); they additionally run the
+    fused RMSNorm + quantize + pack (round-26 lever B) once per norm and stash
+    the packed activation in the group's shared context for the consumer Linears.
+
+    NOTE on the residual add: Llama is a *pre-norm* decoder — the tensor fed to
+    each RMSNorm IS the residual stream (`hidden_states = residual + attn_out`
+    happened before the call), so the fused producer's "residual add" is the
+    identity and the layer keeps the reference `residual + attn_out` itself.
+    """
+    import types
+    n = 0
+    for layer in model.model.layers:
+        targets = [getattr(layer.self_attn, "q_proj", None),
+                   getattr(layer.mlp, "gate_proj", None)]
+        if not any(getattr(t, "norm_pack", False) for t in targets if t is not None):
+            continue
+        layer.forward = types.MethodType(_norm_pack_input, layer)
+        for nm in ("input_layernorm", "post_attention_layernorm"):
+            mod = getattr(layer, nm)
+            if not isinstance(mod, _NormProducer):
+                setattr(layer, nm, _NormProducer(mod))
+        n += 1
+    print(f"wire_norm_pack_layers: installed on {n} layers", flush=True)
+    return n
+
+
+class _NormProducer(nn.Module):
+    """RMSNorm adapter that ALSO runs the fused RMSNorm + quantize + pack producer
+    (round-26 lever B) and publishes the packed activation to the consumer Linears
+    of its norm->pack group.
+
+    `forward(x)` returns exactly what the reference RMSNorm returns
+    (`norm(x)`), so the decoder layer's arithmetic is unchanged. When the group's
+    Linears are norm_pack-enabled and `arn` is present, it additionally packs the
+    (identical) fp16 norm output once for the group: the packed CODES are shared
+    and each consumer's SFA atom layout is derived from them
+    (`norm_pack_for_n`), which removes the per-Linear quantize entirely and the
+    duplicate packs for q/k/v and gate/up.
+    """
+
+    def __init__(self, norm):
+        super().__init__()
+        self.norm = norm
+        self.producer = None     # _NormPackGroup or None
+
+    def forward(self, hidden_states, **kwargs):
+        x = self.norm(hidden_states)
+        if self.producer is not None:
+            self.producer.publish(hidden_states, x)
+        return x
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.norm, name)
+
+
+class _NormPackGroup:
+    """Shared state for one (layer, norm) norm->pack group: the fused producer's
+    result for the current forward (packed codes + per-N SFA layouts)."""
+
+    def __init__(self, arn, N_gemm, K_low, K_high, eps):
+        self.arn = arn
+        self.N_gemm = int(N_gemm)
+        self.K_low = int(K_low)
+        self.K_high = int(K_high)
+        self.eps = float(eps)
+        self.res5 = None            # raw add_rmsnorm_pack_mixed result
+        self.by_n = {}              # consumer N -> (code_lo, sfa_lo, code_hi, sfa_hi)
+
+    def publish(self, x, normed):
+        if self.arn is None:
+            return
+        x2d = x.reshape(-1, x.shape[-1]).contiguous()
+        # to_add=None: Llama's norm input IS the residual stream (pre-norm), so
+        # the fused producer's "residual add" is the identity.
+        res = self.arn.add_rmsnorm_pack_mixed(
+            x2d, None, self.N_gemm, self.K_low, self.K_high, self.eps)
+        self.res5 = res[1:]
+        self.by_n = {self.N_gemm: (res[1], res[2], res[3], res[4])}
+
+    def get(self, N_gemm):
+        if self.res5 is None:
+            return None
+        packed = self.by_n.get(int(N_gemm))
+        if packed is None:
+            packed = self.arn.norm_pack_for_n(self.res5, int(N_gemm),
+                                               self.K_low, self.K_high)
+            self.by_n[int(N_gemm)] = packed
+        return packed
+
+    def clear(self):
+        self.res5 = None
+        self.by_n = {}
+
+
 def wire_fused_mlp(model):
     """Install `_fused_mlp_forward` on every decoder-layer MLP (no-op unless the
     down_proj wrapper has `fused_swiglu_had` set).  Returns the count."""
@@ -199,20 +335,27 @@ def wire_fused_mlp(model):
     return n
 
 
-def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None, hpk=None):
+def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None, hpk=None,
+                     cd_bias=None, arn=None, norm_pack=False):
     """Replace each target Linear's inner module with MixedQuantLinear (real
     packed fused kernel) and disable the wrapper's fake-quant input quantizer
     (MixedQuantLinear quantizes the activation itself). Keeps Hadamard / o_proj
     reorder / out_quantizer intact. When `dg` (decode_gemv_ext) is given, each
     MixedQuantLinear uses the memory-bound W4A4 GEMV at M==1 (decode). When
     `qpfm` (quant_pack_fused_ext) is given, the per-forward activation pack uses
-    the single-launch fused fp4+fp8 pack (lever 1; bit-exact). Returns the number
-    of Linears wired."""
+    the single-launch fused fp4+fp8 pack (lever 1; bit-exact). `cd_bias`
+    (codesign_fused_bias_ext, round-26 lever A) folds the output cast + bias into
+    the GEMM epilogue; `arn` (add_rmsnorm_pack_ext, round-26 lever B) is handed to
+    each Linear for the fused norm->pack producer (enabled per wrapper by
+    `wire_norm_pack`). Returns the number of Linears wired."""
     n = 0
     for name, short, wrapper in iter_target_wrappers(model):
         pk = packed[name]
         mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg,
-                               qpfm=qpfm, hpk=hpk)
+                               qpfm=qpfm, hpk=hpk, cd_bias=cd_bias, arn=arn)
+        # Lever A is only legal where the prefill GEMM runs (decode M=1 GEMV has
+        # its own bias handling) — the decision is per forward, see MixedQuantLinear.
+        mql.bias_in_epilogue = bool(cd_bias is not None)
         wrapper.module = mql
         wrapper.quantizer.bits = 16  # disable fake-quant; real quant is inside mql
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
@@ -223,6 +366,17 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
         if (hpk is not None and short == "down_proj" and dg is None
                 and hasattr(mql, "forward_swiglu_pack")):
             wrapper.fused_swiglu_had = True
+        # round-26 lever B: fused residual-add + RMSNorm + quant/pack producer.
+        # Requires the prefill GEMM path (not decode: M==1 uses the GEMV whose
+        # activation is packed inside the GEMV kernel) and no Hadamard (the
+        # down_proj has its own fused producer above).
+        # round-26 lever B is DEFAULT-OFF: the fused producer does not reproduce
+        # the reference RMSNorm bit-exactly (reduction order) -> whole-model logit
+        # cos 0.9889 < 0.99999 gate. Kept available behind `norm_pack=True` for
+        # further work (see docs/edge_fusion_report.md).
+        if (norm_pack and arn is not None and dg is None and not wrapper.online_full_had
+                and short in ("q_proj", "k_proj", "v_proj", "gate_proj", "up_proj")):
+            wrapper.norm_pack = True
         # Prefill-fusion lever (down_proj online Hadamard only): fold 1/sqrt(n)
         # into the transform kernel (kills the separate /sqrt(n) div kernel).
         # VALIDATED numerics-safe: it is a constant fold (reciprocal-multiply vs
@@ -239,12 +393,73 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
         #   - fp16-output GEMM epilogue (codesign_fused_fp16_ext.cu, cd16): the
         #     bf16->fp16 accumulator-store change -> logit cos 0.983, PPL 14.914
         #     (+0.064). FAIL. Production keeps the bf16-output `cd`.
+        #     (round-26 lever A revisits this WITH the bf16 round reproduced
+        #     inside the epilogue + bias folded; see codesign_bias_epilogue.hpp.)
         if getattr(wrapper, "online_full_had", False):
             wrapper.fold_had_scale = True
         n += 1
     print(f"wire_real_kernel: wired {n} Linears (qpf={'on' if qpf else 'off'}, "
-          f"qpfm={'on' if qpfm else 'off'}, decode_gemv={'on' if dg else 'off'})", flush=True)
+          f"qpfm={'on' if qpfm else 'off'}, decode_gemv={'on' if dg else 'off'}, "
+          f"bias_epilogue={'on' if cd_bias else 'off'}, "
+          f"norm_pack={'on' if arn else 'off'})", flush=True)
+    if norm_pack and arn is not None and model is not None:
+        wire_norm_pack(model)
     return n
+
+
+NORM_PACK_GROUPS = (
+    # group id,              member projections (all read the SAME norm output), norm module
+    ("input",   ("q_proj", "k_proj", "v_proj"),   "input_layernorm"),
+    ("postattn", ("gate_proj", "up_proj"),        "post_attention_layernorm"),
+)
+
+
+def wire_norm_pack(model):
+    """Assign each norm->Linear group (q/k/v, gate/up) a shared producer context
+    and attach it to the layer's norm adapter.
+
+    One fused `add_rmsnorm_pack_mixed` call per (layer, norm) computes the
+    RMSNorm and packs the activation ONCE for every member: the packed CODES are
+    shared and each consumer's SFA atom layout is derived from them, replacing
+    3 packs (q/k/v) + 2 packs (gate/up) with 2 packs per layer, and folding the
+    ~6 elementwise RMSNorm kernels into the producer.
+    """
+    by_layer = {}
+    for name, short, wrapper in iter_target_wrappers(model):
+        # names look like "model.layers.7.self_attn.q_proj" / "...mlp.gate_proj"
+        layer_idx = int(re.search(r"layers\.(\d+)\.", name).group(1))
+        by_layer.setdefault(layer_idx, {})[short] = wrapper
+    n_groups = 0
+    for layer_idx, members in sorted(by_layer.items()):
+        layer = model.model.layers[layer_idx]
+        for gid, shorts, norm_name in NORM_PACK_GROUPS:
+            present = [s for s in shorts if s in members
+                       and getattr(members[s], "norm_pack", False)]
+            if not present:
+                continue
+            wrappers = [members[s] for s in present]
+            # K_low/K_high come from the Quantizer config (identical for the
+            # group); N_gemm is only the SFA atom layout seed, any member's N
+            # works because per-N layouts are derived on demand.
+            w0 = wrappers[0]
+            m0 = w0.module
+            arn = getattr(m0, "_arn", None)
+            if arn is None:
+                continue
+            grp = _NormPackGroup(arn, m0.N, m0.K_low, m0.K_high,
+                                 float(getattr(model.config, "rms_norm_eps", 1e-5)))
+            norm_mod = getattr(layer, norm_name)
+            if not isinstance(norm_mod, _NormProducer):
+                norm_mod = _NormProducer(norm_mod)
+                setattr(layer, norm_name, norm_mod)
+            norm_mod.producer = grp
+            for w in wrappers:
+                w._norm_pack_group_obj = grp
+            n_groups += 1
+    print(f"wire_norm_pack: {n_groups} shared norm->pack groups", flush=True)
+    if n_groups:
+        wire_norm_pack_layers(model)
+    return n_groups
 
 
 def wire_lmhead_mxfp8(model, lmh, qpf, out_dtype=torch.float16):

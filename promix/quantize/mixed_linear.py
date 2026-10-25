@@ -35,7 +35,7 @@ from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
-                 qpfm=None, hpk=None):
+                 qpfm=None, hpk=None, cd_bias=None, arn=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -55,6 +55,17 @@ class MixedQuantLinear(nn.Module):
                 128x128 fused GEMM is ~1/128-utilized and bandwidth-wasteful at
                 M=1. Bit-faithful to the fused path (dequant identical to W_deq).
                 For M>1 the fused prefill GEMM is used regardless.
+            cd_bias: optional codesign_fused_bias_ext module (round-26 lever A).
+                When provided and this Linear has a bias, the prefill GEMM runs
+                `fused_gemm_prepacked_bias`, folding `D.to(fp16)` AND `D + bias`
+                into the GEMM epilogue with the reference arithmetic
+                half(float(bf16(acc)) + float(bias)). Bit-identical to the
+                two-pass path (probe-verified); removes 2 elementwise launches
+                and ~8 B/element of HBM traffic per Linear per forward.
+            arn: optional add_rmsnorm_pack_ext module (round-26 lever B). Used by
+                `forward_norm_pack`, the fused residual-add + RMSNorm + quant/pack
+                producer entry called by ActQuantWrapper when the wrapper has
+                `norm_pack` enabled.
         """
         super().__init__()
         self.N = packed.N
@@ -81,16 +92,25 @@ class MixedQuantLinear(nn.Module):
         self._qpfm = qpfm
         self._dg = dg
         self._hpk = hpk
+        self._cd_bias = cd_bias
+        self._arn = arn
+        # Set by wire_real_kernel when cd_bias is wired AND the epilogue-eligible
+        # prefill path may use it (i.e. a real fp16 bias exists to fold).
+        self.bias_in_epilogue = (cd_bias is not None)
+        # A bias-less Linear never needed the extra pass anyway.
+        if self.bias is None:
+            self.bias_in_epilogue = True
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None, cd_bias=None, arn=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
         bias = getattr(linear, "bias", None)
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
-        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm, hpk=hpk)
+        return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm, hpk=hpk,
+                   cd_bias=cd_bias, arn=arn)
 
     def _decode_gemv(self, x2d):
         """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
@@ -131,6 +151,24 @@ class MixedQuantLinear(nn.Module):
         a_hi = self._cd.quant_pack_fp8(bytes_hi, SFA_hi, M, self.N, self.K_high, True)
         return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
 
+    def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
+        """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
+        available, else the validated bf16 GEMM + torch cast/bias."""
+        if self.bias_in_epilogue and self._cd_bias is not None:
+            return self._cd_bias.fused_gemm_prepacked_bias(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                self.bias, M, self.N, self.K_low, self.K_high)
+        D = self._cd.fused_gemm_prepacked(
+            A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+            A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+            M, self.N, self.K_low, self.K_high,
+        )
+        D = D.to(self.out_dtype)
+        if self.bias is not None:
+            D = D + self.bias.to(D.dtype)
+        return D
+
     def forward(self, x):
         """x: (..., K) -> (..., N). Flattens leading dims to M for the GEMM."""
         in_shape = x.shape
@@ -140,15 +178,20 @@ class MixedQuantLinear(nn.Module):
             D = self._decode_gemv(x2d)             # memory-bound W4A4 GEMV (decode)
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
-            D = self._cd.fused_gemm_prepacked(
-                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
-                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                M, self.N, self.K_low, self.K_high,
-            )
+            return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
         D = D.to(self.out_dtype)
         if self.bias is not None:
             D = D + self.bias.to(D.dtype)
         return D.reshape(*in_shape[:-1], self.N)
+
+    def forward_norm_pack(self, packed):
+        """round-26 lever B entry: the activation was produced (residual-add +
+        RMSNorm + quantize+pack, ONE launch) by a norm producer, and `packed` is
+        the (A_lo, pSFA_lo, A_hi, pSFA_hi) tuple for THIS Linear's N_gemm. Runs
+        only the packed fused GEMM (plus the epilogue bias/cast when wired)."""
+        A_lo, pSFA_lo, A_hi, pSFA_hi = packed
+        M = A_hi.shape[0]
+        return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M)
 
     def forward_swiglu_pack(self, gate, up):
         """down_proj FUSED entry: gate/up are the two [M, I] bf16 outputs of the
@@ -165,15 +208,7 @@ class MixedQuantLinear(nn.Module):
         assert self._hpk is not None, "fused path needs the hpk kernel module"
         A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk.hadamard_swiglu_pack_mixed(
             g2d, u2d, M, self.N, self.K_low, self.K_high)
-        D = self._cd.fused_gemm_prepacked(
-            A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
-            A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-            M, self.N, self.K_low, self.K_high,
-        )
-        D = D.to(self.out_dtype)
-        if self.bias is not None:
-            D = D + self.bias.to(D.dtype)
-        return D.reshape(*in_shape[:-1], self.N)
+        return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
 
     def pack_only(self, x):
         """Timing seam: run just the per-forward activation quant+pack (no GEMM)."""

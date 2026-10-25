@@ -365,6 +365,16 @@ class ActQuantWrapper(nn.Module):
         # NVFP4+MXFP8 pack.  Set by full_network.wire_real_kernel; only enabled
         # when the inner module exposes forward_swiglu_pack.
         self.fused_swiglu_had = False
+        # round-26 lever B: activation quant/pack fused into the RMSNorm producer.
+        # `norm_pack` marks this Linear as a member of a norm->pack group; the
+        # layer's norm adapter (full_network._NormProducer) then runs ONE
+        # add_rmsnorm_pack_mixed launch per norm and publishes the packed codes +
+        # per-N SFA layouts on `_norm_pack_group_obj` (a _NormPackGroup).
+        # DEFAULT-OFF: the fused RMSNorm is not bit-exact to LlamaRMSNorm (fp32
+        # reduction order), whole-model logit cos 0.9889 < 0.99999 -> see
+        # docs/edge_fusion_report.md §2.
+        self.norm_pack = False
+        self._norm_pack_group_obj = None
         # Cache which extra kwargs the inner module's forward accepts so we
         # can route training-time R1/R2 args through wrappers around
         # QuantizeLinear without erroring on plain nn.Linear (e.g. lm_head).

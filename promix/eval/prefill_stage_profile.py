@@ -300,6 +300,20 @@ def _mixed_forward(self, x):
     M = x2d.shape[0]
     with PROF.region("lin.pack"):
         A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
+    # round-26 lever A: when the epilogue carries the bias + output cast, the
+    # GEMM region includes them and `lin.cast_bias` disappears (the separate
+    # `.to(fp16) + bias` pass is gone). The shipped MixedQuantLinear._gemm does
+    # exactly this; this profiling copy mirrors it so the stage breakdown is
+    # honest for both wirings.
+    if getattr(self, "bias_in_epilogue", False) and getattr(self, "_cd_bias", None) is not None:
+        with PROF.region("lin.gemm"):
+            D = self._cd_bias.fused_gemm_prepacked_bias(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                self.bias, M, self.N, self.K_low, self.K_high)
+        with PROF.region("lin.cast_bias"):
+            D = D.reshape(*in_shape[:-1], self.N)
+        return D
     with PROF.region("lin.gemm"):
         D = self._cd.fused_gemm_prepacked(
             A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
@@ -609,6 +623,8 @@ def main():
     ap.add_argument("--eager-attn", action="store_true", default=False,
                     help="also run a forced-eager-attention pass to split QK^T/softmax/PV")
     ap.add_argument("--profiler", action="store_true", default=False)
+    ap.add_argument("--bias-epilogue", action="store_true", default=False,
+                    help="round-26 lever A: fold the output cast + bias into the GEMM epilogue")
     ap.add_argument("--fused", action="store_true", default=False,
                     help="use the fused SwiGLU+Hadamard+pack down_proj producer")
     ap.add_argument("--cross-check", action="store_true", default=False,
@@ -642,6 +658,14 @@ def main():
             hpk_arg = load_hpk()
             fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf,
                                 qpfm=load_qpfm(), hpk=hpk_arg)
+        if args.bias_epilogue:
+            from promix.eval.edge_fusion import load_new
+            cd_bias, _ = load_new()
+            for _, _, w in fn.iter_target_wrappers(model):
+                m = w.module
+                m._cd_bias = cd_bias
+                m.bias_in_epilogue = True
+            print("lever A: bias+cast epilogue wired", flush=True)
         model.to(DEV).eval()
         n_moved = 0
         for m in model.modules():

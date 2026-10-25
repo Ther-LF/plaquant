@@ -70,6 +70,12 @@
 
 #include "codesign_sm120_bs_mma.hpp"
 #include "codesign_fused_kernel.hpp"
+#ifdef CD_EPI_BIAS
+// round-26 lever A: GEMM-out bias + output-cast fold (non-protected epilogue
+// fusion tree; needs only CUTLASS headers). Selected by
+// codesign_fused_bias_ext.cu, which also defines CD_OUT_FP16.
+#include "codesign_bias_epilogue.hpp"
+#endif
 
 using namespace cute;
 
@@ -295,7 +301,15 @@ struct StockBuilder {
       ElementAccumulator, ElementAccumulator,
       ElementC, LayoutCTag, AlignmentC,
       ElementD, LayoutDTag, AlignmentD,
-      cutlass::epilogue::collective::EpilogueScheduleAuto>::CollectiveOp;
+#ifdef CD_EPI_BIAS
+      cutlass::epilogue::collective::EpilogueScheduleAuto,
+      // round-26 lever A: dense fp16 output whose epilogue performs the
+      // reference chain half(float(bf16(acc)) + float(bias[n])).
+      cutlass::epilogue::fusion::LinCombBiasBFRoundHalf<ElementD, ElementD, AlignmentD>
+#else
+      cutlass::epilogue::collective::EpilogueScheduleAuto
+#endif
+      >::CollectiveOp;
 
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
       ArchTag, OperatorClass,
@@ -655,6 +669,7 @@ static std::string cd_compat_report() {
   return s;
 }
 
+#ifndef CD_NO_PYBIND
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("prepack_sf_fp4_b", &cd_prepack_sf_fp4_b, "prepack NVFP4 weight SF (load-time, efficient)");
   m.def("prepack_sf_fp8_b", &cd_prepack_sf_fp8_b, "prepack MXFP8 weight SF (load-time, efficient)");
@@ -672,3 +687,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("fused_gemm_prepacked", &cd_fused_gemm_prepacked, "dual-format fused GEMM, activation SF pre-interleaved (GEMM-only ceiling)");
   m.def("compat_report", &cd_compat_report, "build/smem report");
 }
+#endif  // CD_NO_PYBIND
