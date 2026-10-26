@@ -298,6 +298,99 @@ __global__ void gemv_w4a4_v3(
   if (lane == 0) D[n] = acc;
 }
 
+// ========================================================================================
+// v4 (PERF round-2): warp-per-row, 128-bit (uint4) weight loads, NO shared-memory
+// activation staging.  v2/v3 stage the whole K-vector in shared (K floats); on
+// large-K shapes (8B down_proj K=14336 -> 57 KB) that caps occupancy at ~1 block/SM
+// and starves HBM (the 28-44% ceiling).  The activation is tiny and read-only, so it
+// stays resident in L2 across all rows -> read it straight from global.  Freeing the
+// shared budget lets many more warps co-reside, raising in-flight memory parallelism.
+// uint4 loads = 16 B/lane/instr (vs uint32's 4 B) -> 4x fewer load instructions and
+// full 512 B/warp coalesced transactions.  Bit-identical dequant to v2 (same grid).
+// WARPS rows per block (tunable); requires Klow%32==0 (8 nibbles/uint4 * 4 =32... here
+// each uint4 = 8 bytes*2 = 16 codes-pairs; we require Klow%32==0 and Khigh%16==0,
+// always true since Klow%16==0 with high_fraction splits giving multiples of 32/16).
+template <int WARPS>
+__global__ void gemv_w4a4_v4(
+    const float* __restrict__ xq,
+    const uint8_t* __restrict__ Wlo, const float* __restrict__ Slo,
+    const uint8_t* __restrict__ Whi, const float* __restrict__ Shi,
+    float* __restrict__ D, int N, int Klow, int Khigh) {
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  int n = blockIdx.x * WARPS + warp;
+  if (n >= N) return;
+  const uint4* wl = reinterpret_cast<const uint4*>(Wlo + (size_t)n * (Klow / 2));
+  const float* sl = Slo + (size_t)n * (Klow / 16);
+  const uint4* wh = reinterpret_cast<const uint4*>(Whi + (size_t)n * Khigh);
+  const float* sh = Shi + (size_t)n * (Khigh / 32);
+  float acc = 0.f;
+
+  // NVFP4 low: each uint4 = 16 bytes = 32 codes (k0..k0+31), spanning two 16-elem
+  // scale blocks (first 16 codes -> sl[(k0)/16], next 16 -> sl[(k0+16)/16]).
+  int nwl = Klow / 32;                                  // uint4 words in the low segment
+  for (int w = lane; w < nwl; w += 32) {
+    uint4 v = wl[w];
+    int k0 = 32 * w;
+    const uint32_t* vv = reinterpret_cast<const uint32_t*>(&v);
+    float sc0 = sl[(k0) >> 4];                          // scale for first 16 codes
+    float sc1 = sl[(k0 + 16) >> 4];                     // scale for next 16 codes
+    #pragma unroll
+    for (int q = 0; q < 4; q++) {                       // 4 uint32 -> 8 codes each
+      uint32_t word = vv[q];
+      float sc = (q < 2) ? sc0 : sc1;                   // codes 0..15 vs 16..31
+      int kb = k0 + 8 * q;
+      #pragma unroll
+      for (int c = 0; c < 8; c++)
+        acc += xq[kb + c] * (fp4_decode((word >> (4 * c)) & 0xF) * sc);
+    }
+  }
+  // MXFP8 high: each uint4 = 16 FP8 bytes (k0..k0+15), spanning scale blocks of 32.
+  int nwh = Khigh / 16;
+  for (int w = lane; w < nwh; w += 32) {
+    uint4 v = wh[w];
+    int k0 = Klow + 16 * w;
+    const uint8_t* vb = reinterpret_cast<const uint8_t*>(&v);
+    float sc = sh[(16 * w) >> 5];                       // 16 bytes within one 32-block
+    #pragma unroll
+    for (int c = 0; c < 16; c++) {
+      __nv_fp8_e4m3 f; f.__x = vb[c];
+      acc += xq[k0 + c] * (float(f) * sc);
+    }
+  }
+  #pragma unroll
+  for (int o = 16; o > 0; o >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, o);
+  if (lane == 0) D[n] = acc;
+}
+
+template <int WARPS>
+static torch::Tensor launch_v4(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor Slo,
+                               torch::Tensor Whi, torch::Tensor Shi,
+                               int64_t N, int64_t Klow, int64_t Khigh) {
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({N}, torch::dtype(torch::kFloat32).device(xq.device()));
+  int blocks = ((int)N + WARPS - 1) / WARPS;
+  gemv_w4a4_v4<WARPS><<<blocks, WARPS * 32, 0, stream>>>(
+      xq.data_ptr<float>(), Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      D.data_ptr<float>(), (int)N, (int)Klow, (int)Khigh);
+  CUDA_CHECK(cudaGetLastError());
+  return D;
+}
+
+torch::Tensor decode_gemv_v4(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor Slo,
+                             torch::Tensor Whi, torch::Tensor Shi,
+                             int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
+  TORCH_CHECK(xq.is_cuda() && xq.scalar_type() == torch::kFloat32, "xq must be cuda fp32");
+  TORCH_CHECK(Klow % 32 == 0 && Khigh % 16 == 0, "v4 needs Klow%32==0, Khigh%16==0");
+  switch (warps) {
+    case 4:  return launch_v4<4>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 8:  return launch_v4<8>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 16: return launch_v4<16>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 32: return launch_v4<32>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    default: return launch_v4<8>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+  }
+}
+
 torch::Tensor decode_gemv(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor Slo,
                           torch::Tensor Whi, torch::Tensor Shi,
                           int64_t N, int64_t Klow, int64_t Khigh) {
@@ -331,6 +424,49 @@ torch::Tensor decode_gemv_v2(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor 
   return D;
 }
 
+// v5 (PERF round-2): the WINNING shared-staged design (same body as v2) but with
+// (a) a smem opt-in so it runs when Klow+Khigh floats exceed 48 KB (8B down_proj,
+// K=14336 -> 57 KB — v2 crashed with "invalid argument" there), and (b) a tunable
+// rows-per-block (WARPS) so the HBM roof can be swept per shape.  v4's no-shared /
+// uint4 variant was tried and LOST on every shape (shared staging of the reused
+// activation beats re-reading it from L2), so this keeps shared staging.
+template <int WARPS>
+static torch::Tensor launch_v5(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor Slo,
+                               torch::Tensor Whi, torch::Tensor Shi,
+                               int64_t N, int64_t Klow, int64_t Khigh) {
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({N}, torch::dtype(torch::kFloat32).device(xq.device()));
+  int blocks = ((int)N + WARPS - 1) / WARPS;
+  size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
+  static size_t attr_smem = 0;
+  if (smem > 48 * 1024 && smem > attr_smem) {
+    CUDA_CHECK(cudaSetDevice(xq.get_device()));
+    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a4_v2<WARPS>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
+    attr_smem = smem;
+  }
+  gemv_w4a4_v2<WARPS><<<blocks, WARPS * 32, smem, stream>>>(
+      xq.data_ptr<float>(), Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      D.data_ptr<float>(), (int)N, (int)Klow, (int)Khigh);
+  CUDA_CHECK(cudaGetLastError());
+  return D;
+}
+
+torch::Tensor decode_gemv_v5(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor Slo,
+                             torch::Tensor Whi, torch::Tensor Shi,
+                             int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
+  TORCH_CHECK(xq.is_cuda() && xq.scalar_type() == torch::kFloat32, "xq must be cuda fp32");
+  switch (warps) {
+    case 4:  return launch_v5<4>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 8:  return launch_v5<8>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 16: return launch_v5<16>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 24: return launch_v5<24>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    case 32: return launch_v5<32>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+    default: return launch_v5<8>(xq, Wlo, Slo, Whi, Shi, N, Klow, Khigh);
+  }
+}
+
 torch::Tensor decode_gemv_fused(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
                                 torch::Tensor Whi, torch::Tensor Shi,
                                 int64_t N, int64_t Klow, int64_t Khigh) {
@@ -342,6 +478,24 @@ torch::Tensor decode_gemv_fused(torch::Tensor x, torch::Tensor Wlo, torch::Tenso
   constexpr int WARPS = 8;
   int blocks = ((int)N + WARPS - 1) / WARPS;
   size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
+  // The activation staging buffer is (K_low + K_high) floats: 8 KB at 1B/3B
+  // (K=2048/3072) but 57,344 B at 8B down_proj (K=14336), above the 48 KB
+  // default dynamic-SMEM ceiling. Opt in once per device (the launch would
+  // otherwise fail with "CUDA: invalid argument"). Re-run whenever the model
+  // size grows; keyed on the largest K seen so a bigger call lifts the limit.
+  static size_t attr_smem = 0;
+  if (smem > attr_smem) {
+    // Pin the device first: the attribute applies to the CURRENT device, and
+    // this host fn may run before any tensor op has established a context.
+    CUDA_CHECK(cudaSetDevice(x.get_device()));
+    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a4_v3<WARPS>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
+    int maxs = 0;
+    cudaDeviceGetAttribute(&maxs, cudaDevAttrMaxSharedMemoryPerBlockOptin, x.get_device());
+    TORCH_CHECK((size_t)maxs >= smem,
+                "decode_gemv_fused: smem ", smem, " B exceeds device opt-in max ", maxs, " B");
+    attr_smem = smem;
+  }
   gemv_w4a4_v3<WARPS><<<blocks, WARPS * 32, smem, stream>>>(
       xf.data_ptr<float>(), Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
       Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
@@ -361,6 +515,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("xq"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"));
+  m.def("decode_gemv_v4", &decode_gemv_v4,
+        "PERF-r2 W4A4 decode GEMV (v4: warp-per-row, uint4/128-bit loads, NO shared "
+        "activation staging -> high occupancy on large-K). warps = rows/block (4/8/16/32)",
+        pybind11::arg("xq"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 8);
+  m.def("decode_gemv_v5", &decode_gemv_v5,
+        "PERF-r2 W4A4 decode GEMV (v5: shared-staged, uint32, smem opt-in for large K, "
+        "tunable rows/block). warps in {4,8,16,24,32}",
+        pybind11::arg("xq"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 8);
   m.def("decode_gemv_fused", &decode_gemv_fused,
         "SINGLE-LAUNCH W4A4 decode GEMV: quant activation (raw x) + weight-stream GEMV",
         pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
