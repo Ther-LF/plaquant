@@ -178,6 +178,133 @@ def select_block_scales_nvfp4_2level(W, block_size=16):
 
 
 # ---------------------------------------------------------------------------
+# Round-5: WEIGHT-ONLY two-level NVFP4 scale (llm-compressor / vLLM recipe).
+# Patches ONLY select_block_scales_nvfp4 (the frozen GPTQ weight-scale source),
+# leaving the activation NVFP4 quantizer (fake_quantize_nvfp4) single-level.
+# per="tensor" uses ONE FP32 global amax over the whole segment (the true
+# nvfp4-pack-quantized layout); per="row" reproduces round-1's per-row variant.
+# rounding="nearest" casts the normalized micro-scale to the NEAREST E4M3 value
+# (llm-compressor); "ceil" rounds UP (our stock single-level behavior lifted
+# into the two-level frame). mse=True additionally searches a few LOWER E4M3
+# micro steps per block and keeps the argmin-dequant-MSE one (weight-A2 inside
+# the two-level frame). global_scale = amax / (448*6) per the reference recipe.
+# ---------------------------------------------------------------------------
+def _weight_2level_scales(W, block_size=16, per="tensor", rounding="nearest",
+                          mse=False, mse_steps=3):
+    Wf = W.to(torch.float32)
+    *p, k = Wf.shape
+    nb = k // block_size
+    Wblk = Wf.reshape(*p, nb, block_size)
+    bmax = Wblk.abs().amax(-1)                                    # (..., nb)
+    e4 = torch.tensor(qu._FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
+    if per == "tensor":
+        gamax = Wf.abs().amax()                                   # scalar
+    elif per == "row":
+        gamax = Wf.abs().amax(-1, keepdim=True)                   # (..., 1)
+    else:
+        raise ValueError(per)
+    gs = (gamax / (_E4M3_MAX * qu.FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
+    micro_ideal = (bmax / qu.FP4_E2M1_MAX) / gs                   # (..., nb)
+    if rounding == "ceil":
+        micro = qu._ceil_to_value(micro_ideal.clamp_min(2.0 ** -9), e4)
+    elif rounding == "nearest":
+        micro = qu._round_to_nearest_value(micro_ideal, e4).abs()
+        micro = torch.clamp(micro, min=float(e4[1]))              # avoid 0 scale
+    else:
+        raise ValueError(rounding)
+    if not mse:
+        return (micro * gs)                                       # (..., nb)
+    # weight-A2 inside the two-level frame: try lower E4M3 micro steps, keep
+    # argmin per-block dequant MSE. Effective scale stays global * E4M3.
+    fp4 = torch.tensor(qu.FP4_E2M1_POS, device=Wf.device, dtype=torch.float32)
+    cur = micro
+    cands = [cur]
+    for _ in range(mse_steps):
+        cur = _next_lower_grid(cur, e4)
+        cands.append(cur)
+    eff_cands = [(c * gs).unsqueeze(-1) for c in cands]           # (..., nb, 1)
+    best = _mse_best(Wblk, eff_cands, qu.FP4_E2M1_MAX, fp4)       # (..., nb, 1)
+    return best.squeeze(-1)
+
+
+def make_weight_2level(per, rounding, mse):
+    def nv_w2l(W, block_size=16):
+        return _weight_2level_scales(W, block_size, per=per, rounding=rounding, mse=mse)
+    return nv_w2l
+
+
+# ---------------------------------------------------------------------------
+# Round-5: ACTIVATION two-level NVFP4 (vLLM static-global recipe), with the
+# NEAREST-E4M3 micro rounding that the r=0 weight ladder showed is the real
+# lever (round-2's per-token two-level used CEIL and lost). per="token" uses a
+# per-token FP32 global (amax over K per row); per="tensor" uses one FP32 global
+# over the whole activation tensor per forward (a dynamic proxy for vLLM's
+# calibrated static-per-tensor global). Patches fake_quantize_nvfp4, so it is
+# active at EVAL forward time (the activation path), not restored after GPTQ.
+# ---------------------------------------------------------------------------
+def _act_2level_effscale(x, block, per, rounding):
+    xf = x.to(torch.float32)
+    *p, k = xf.shape
+    nb = k // block
+    blk = xf.reshape(*p, nb, block)
+    bmax = blk.abs().amax(-1)                                    # (..., nb)
+    e4 = torch.tensor(qu._FP8_E4M3_POS, device=xf.device, dtype=torch.float32)
+    if per == "token":
+        gamax = xf.abs().amax(-1, keepdim=True)                  # (..., 1) per row/token
+    elif per == "tensor":
+        gamax = xf.abs().amax()                                  # scalar (per forward)
+    else:
+        raise ValueError(per)
+    gs = (gamax / (_E4M3_MAX * qu.FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
+    micro_ideal = (bmax / qu.FP4_E2M1_MAX) / gs                  # (..., nb)
+    if rounding == "ceil":
+        micro = qu._ceil_to_value(micro_ideal.clamp_min(2.0 ** -9), e4)
+    else:
+        micro = qu._round_to_nearest_value(micro_ideal, e4).abs()
+        micro = torch.clamp(micro, min=float(e4[1]))
+    return micro * gs                                            # (..., nb)
+
+
+def make_act_2level(per, rounding):
+    def fq(x, block_size=16):
+        orig_dtype = x.dtype
+        eff = _act_2level_effscale(x, block_size, per, rounding)  # (..., nb)
+        *pp, k = x.shape
+        xb = x.to(torch.float32).reshape(*pp, k // block_size, block_size)
+        sc = eff.unsqueeze(-1)
+        fp4 = torch.tensor(qu.FP4_E2M1_POS, device=x.device, dtype=torch.float32)
+        q = qu._round_to_nearest_value((xb / sc).clamp(-qu.FP4_E2M1_MAX, qu.FP4_E2M1_MAX), fp4)
+        return (q * sc).reshape(*pp, k).to(orig_dtype)
+    return fq
+
+
+# ---------------------------------------------------------------------------
+# Round-5: RTN weights (no GPTQ Hessian error feedback) at r=0. Applies the
+# frozen-scale NVFP4 round-to-nearest to each target Linear's weight directly,
+# using select_block_scales_nvfp4 (whatever variant is patched in) so the ONLY
+# difference vs the GPTQ path is the absence of error feedback. r=0 only
+# (whole-matrix NVFP4; no MXFP8 high segment).
+# ---------------------------------------------------------------------------
+def apply_rtn_weights(model):
+    n = 0
+    for name, w in find_qlayers(model, layers=[ActQuantWrapper]).items():
+        if name.split(".")[-1] not in TARGETS:
+            continue
+        W = w.module.weight.data
+        scales = qu.select_block_scales_nvfp4(W, block_size=16)   # (out, nb)
+        Wf = W.to(torch.float32)
+        out, k = Wf.shape
+        nb = k // 16
+        Wblk = Wf.reshape(out, nb, 16)
+        sc = scales.reshape(out, nb, 1)
+        fp4 = torch.tensor(qu.FP4_E2M1_POS, device=Wf.device, dtype=torch.float32)
+        q = qu._round_to_nearest_value((Wblk / sc).clamp(-qu.FP4_E2M1_MAX, qu.FP4_E2M1_MAX), fp4)
+        w.module.weight.data = (q * sc).reshape(out, k).to(W.dtype)
+        n += 1
+    print(f"rtn: round-to-nearest quantized {n} target Linears (no GPTQ feedback)", flush=True)
+
+
+# ---------------------------------------------------------------------------
 # per-channel error scores (on rotated weight)
 # ---------------------------------------------------------------------------
 def _col_err(W, fq):
@@ -337,6 +464,12 @@ def build_model(config, args):
         qu.fake_quantize_nvfp4 = fake_quantize_nvfp4_2level
         qu.select_block_scales_nvfp4 = select_block_scales_nvfp4_2level
         print("[nvfp4_2level] patched NVFP4 to two-level (global*micro) scale", flush=True)
+    if args.act_2level != "none":
+        # Persistent patch: the activation path calls fake_quantize_nvfp4 at
+        # eval-forward time, so this stays active (not restored after GPTQ).
+        qu.fake_quantize_nvfp4 = make_act_2level(args.act_2level, args.a2l_round)
+        print(f"[act_2level] per={args.act_2level} round={args.a2l_round} (activation scale only)",
+              flush=True)
     if args.weights_only:
         config["quantize"]["a_bits"] = 16
         config["quantize"]["k_bits"] = 16
@@ -376,13 +509,29 @@ def build_model(config, args):
         a2_restore = (qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8)
         qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8 = make_scale_search(args.scale_search)
 
+    # Round-5: WEIGHT-only two-level NVFP4 scale patch (active during GPTQ
+    # find_params AND the optional RTN pass; isolated to weights because the
+    # activation quantizer uses fake_quantize_nvfp4, not select_block_scales).
+    w2l_restore = None
+    if args.weight_2level != "none":
+        w2l_restore = qu.select_block_scales_nvfp4
+        qu.select_block_scales_nvfp4 = make_weight_2level(
+            args.weight_2level, args.w2l_round, args.w2l_mse)
+        print(f"[weight_2level] per={args.weight_2level} round={args.w2l_round} "
+              f"mse={args.w2l_mse} (weight scale only)", flush=True)
+
     try:
-        ptqmod.run_gptq_if_enabled(model, config, DEV)
+        if args.rtn:
+            apply_rtn_weights(model)
+        else:
+            ptqmod.run_gptq_if_enabled(model, config, DEV)
     finally:
         if gptq_restore is not None:
             gptqmod.GPTQ.__init__ = gptq_restore
         if a2_restore is not None:
             qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8 = a2_restore
+        if w2l_restore is not None:
+            qu.select_block_scales_nvfp4 = w2l_restore
 
     ptqmod.configure_quantizers(model, config)
 
@@ -432,6 +581,21 @@ def main():
     ap.add_argument("--weights_only", action="store_true")
     ap.add_argument("--nvfp4_2level", action="store_true",
                     help="use vLLM-style two-level NVFP4 scale (per-row FP32 global * per-16 E4M3 micro)")
+    ap.add_argument("--weight_2level", choices=["none", "tensor", "row"], default="none",
+                    help="round-5: WEIGHT-only two-level NVFP4 scale (patches the frozen "
+                         "GPTQ weight scale; activations stay single-level). 'tensor' = one "
+                         "FP32 global amax per segment (llm-compressor recipe).")
+    ap.add_argument("--w2l_round", choices=["ceil", "nearest"], default="nearest",
+                    help="E4M3 micro-scale rounding for --weight_2level (nearest = llm-compressor).")
+    ap.add_argument("--w2l_mse", action="store_true",
+                    help="search lower E4M3 micro steps inside the two-level frame (weight-A2).")
+    ap.add_argument("--rtn", action="store_true",
+                    help="round-5: RTN weights (skip GPTQ error feedback); r=0 only.")
+    ap.add_argument("--act_2level", choices=["none", "token", "tensor"], default="none",
+                    help="round-5: ACTIVATION two-level NVFP4 global (patches fake_quantize_nvfp4 "
+                         "at eval). 'token'=per-token FP32 global, 'tensor'=per-forward global.")
+    ap.add_argument("--a2l_round", choices=["ceil", "nearest"], default="nearest",
+                    help="E4M3 micro rounding for --act_2level (nearest = the r=0-ladder winner).")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--out", default="/home/luofan/ablation_results")
     ap.add_argument("--model_path", default=None,
@@ -463,7 +627,12 @@ def main():
                 bits_per_weight=round(bits_per_weight(args.rw), 4),
                 criterion=args.criterion, scale_search=args.scale_search,
                 rotation=args.rotation, weights_only=args.weights_only,
-                edriven_signal=args.edriven_signal, nvfp4_2level=args.nvfp4_2level, tag=args.tag)
+                edriven_signal=args.edriven_signal, nvfp4_2level=args.nvfp4_2level,
+                weight_2level=args.weight_2level, w2l_round=args.w2l_round,
+                w2l_mse=args.w2l_mse, rtn=args.rtn,
+                act_2level=args.act_2level, a2l_round=args.a2l_round,
+                act_mse=qu.ACT_MSE_SCALE_SEARCH, weight_mse=qu.WEIGHT_MSE_SCALE_SEARCH,
+                tag=args.tag)
     print(f"START {json.dumps(meta)}", flush=True)
 
     model = build_model(config, args)
