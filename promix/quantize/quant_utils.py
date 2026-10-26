@@ -592,6 +592,62 @@ def _ceil_to_value(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
     return chosen
 
 
+# ---------------------------------------------------------------------------
+# Round-3 integration: MSE-optimal block-scale search on the native FP grid.
+#
+# The default block scale is a round-UP (ceil to E4M3 / power-of-2) that
+# over-allocates headroom so the FP4/FP8 element grid under-resolves the bulk
+# of each block. The MSE search tries the base scale plus a few LOWER grid
+# steps and keeps, per block, the one minimizing dequant MSE (trading a little
+# outlier clipping for much finer bulk resolution). The chosen scale STAYS on
+# the native grid (E4M3 for NVFP4, power-of-2/E8M0 for MXFP8) so the packed
+# layout, SFA/SFB interleave and the fused kernel are all unchanged — it is a
+# re-pack (weights) / producer-kernel (activations) change only.
+#
+# Flags are module-level so a gate/ablation can toggle each lever; both default
+# ON (the shipped round-3 "full stack": activation-MSE + weight-A2). Env
+# overrides PROMIX_ACT_MSE / PROMIX_WEIGHT_MSE ("0" disables) let a detached
+# baseline run reproduce the pre-integration numbers without code edits.
+import os as _os
+# Win 1 (activation NVFP4 MSE search) is DEFAULT-OFF in the shipped path: round-3
+# measured it ~5.3x the fused-producer pack cost (8B pack 9.2->48.7 ms/forward),
+# sinking 8B prefill 1.29x->0.78x (prefill gate FAIL). It is a real ACCURACY win
+# (3B r=1/8 8.647->8.428) kept opt-in (PROMIX_ACT_MSE=1 + CUDA -DPROMIX_ACT_MSE=1)
+# for the accuracy-max research config; ship needs a cheaper producer (deferred).
+ACT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_ACT_MSE", "0") != "0"      # Win 1 (opt-in)
+# Win 2 (weight-A2) is DEFAULT-ON: it is a re-pack-only change (GPTQ frozen block
+# scales), zero forward cost, free accuracy win.
+WEIGHT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_WEIGHT_MSE", "1") != "0"  # Win 2 (shipped)
+_MSE_STEPS = 3
+
+
+def _next_lower_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+    """Per-element, the largest grid value strictly below `sc` (or `sc` itself if
+    none is lower). `grid` is 1D ascending. Matches the CUDA byte-decrement over
+    the full E4M3 positive representable set (sorted==byte order)."""
+    g = grid.view(*([1] * sc.dim()), -1)
+    masked = torch.where(g < sc.unsqueeze(-1), g, torch.full_like(g, -1.0))
+    best = masked.max(dim=-1).values
+    return torch.where(best < 0, sc, best)
+
+
+def _mse_best_scale(blk: torch.Tensor, cands, max_fmt: float,
+                    elem_grid: torch.Tensor) -> torch.Tensor:
+    """blk: (..., block). cands: list of (..., 1) candidate scales. Returns the
+    per-block (..., 1) scale minimizing sum-squared dequant error on `elem_grid`."""
+    best_err = best_sc = None
+    for sc in cands:
+        q = _round_to_nearest_value((blk / sc).clamp(-max_fmt, max_fmt), elem_grid)
+        err = ((q * sc - blk) ** 2).sum(-1, keepdim=True)
+        if best_err is None:
+            best_err, best_sc = err, sc
+        else:
+            take = err < best_err
+            best_err = torch.where(take, err, best_err)
+            best_sc = torch.where(take, sc, best_sc)
+    return best_sc
+
+
 def _e8m0_round_up(scale: torch.Tensor) -> torch.Tensor:
     """Round positive scale UP to nearest power-of-2 (E8M0 representation).
 
@@ -641,7 +697,15 @@ def select_block_scales_mxfp8(
     Wf_blk = Wf.reshape(*prefix, num_blocks, block_size)
     block_max = Wf_blk.abs().amax(dim=-1).clamp_min(0.0)
     ideal = block_max / FP8_E4M3_MAX
-    return _e8m0_round_up(ideal.clamp_min(2.0 ** -127))
+    base = _e8m0_round_up(ideal.clamp_min(2.0 ** -127))        # (..., nb)
+    if not WEIGHT_MSE_SCALE_SEARCH:
+        return base
+    # Win 2 (weight-A2), high segment: the power-of-2 candidates base/2, base/4
+    # stay on the E8M0 grid; keep the min-MSE one per block (re-pack only).
+    e4m3 = torch.tensor(_FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
+    bk = base.unsqueeze(-1)                                    # (..., nb, 1)
+    cands = [bk, bk / 2.0, bk / 4.0]
+    return _mse_best_scale(Wf_blk, cands, FP8_E4M3_MAX, e4m3).squeeze(-1)
 
 
 def select_block_scales_nvfp4(
@@ -670,7 +734,18 @@ def select_block_scales_nvfp4(
     block_max = Wf_blk.abs().amax(dim=-1)
     ideal = (block_max / FP4_E2M1_MAX).clamp_min(2.0 ** -9)
     fp8_e4m3_values = torch.tensor(_FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
-    return _ceil_to_value(ideal, fp8_e4m3_values)
+    base = _ceil_to_value(ideal, fp8_e4m3_values)              # (..., nb)
+    if not WEIGHT_MSE_SCALE_SEARCH:
+        return base
+    # Win 2 (weight-A2): keep the base scale or a lower E4M3 grid step, whichever
+    # minimizes per-block dequant MSE. Re-pack only; still on the E4M3 grid.
+    fp4_values_pos = torch.tensor(FP4_E2M1_POS, device=Wf.device, dtype=torch.float32)
+    cur = base.unsqueeze(-1)                                   # (..., nb, 1)
+    cands = [cur]
+    for _ in range(_MSE_STEPS):
+        cur = _next_lower_grid(cur, fp8_e4m3_values)
+        cands.append(cur)
+    return _mse_best_scale(Wf_blk, cands, FP4_E2M1_MAX, fp4_values_pos).squeeze(-1)
 
 
 def quantize_column_with_frozen_scale(
@@ -800,10 +875,22 @@ def fake_quantize_nvfp4(
     block_max = x_blk.abs().amax(dim=-1, keepdim=True)
     ideal_scale = (block_max / FP4_E2M1_MAX).clamp_min(2.0 ** -9)
     fp8_e4m3_values = torch.tensor(_FP8_E4M3_POS, device=x.device, dtype=torch.float32)
-    block_scale = _ceil_to_value(ideal_scale, fp8_e4m3_values)
+    base_scale = _ceil_to_value(ideal_scale, fp8_e4m3_values)
+    fp4_values_pos = torch.tensor(FP4_E2M1_POS, device=x.device, dtype=torch.float32)
+
+    if ACT_MSE_SCALE_SEARCH:
+        # Win 1: per-block argmin-MSE over {base, 3 lower E4M3 steps}. The fake
+        # twin of the CUDA producer's 4-candidate search (quant_pack_float_ext.cu).
+        cur = base_scale
+        cands = [cur]
+        for _ in range(_MSE_STEPS):
+            cur = _next_lower_grid(cur, fp8_e4m3_values)
+            cands.append(cur)
+        block_scale = _mse_best_scale(x_blk, cands, FP4_E2M1_MAX, fp4_values_pos)
+    else:
+        block_scale = base_scale
 
     # Element: round to nearest FP4 E2M1 representable value
-    fp4_values_pos = torch.tensor(FP4_E2M1_POS, device=x.device, dtype=torch.float32)
     x_scaled = x_blk / block_scale
     x_scaled = x_scaled.clamp(-FP4_E2M1_MAX, FP4_E2M1_MAX)
     q = _round_to_nearest_value(x_scaled, fp4_values_pos)

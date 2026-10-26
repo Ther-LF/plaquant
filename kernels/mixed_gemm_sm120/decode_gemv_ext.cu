@@ -467,41 +467,52 @@ torch::Tensor decode_gemv_v5(torch::Tensor xq, torch::Tensor Wlo, torch::Tensor 
   }
 }
 
+template <int WARPS>
+static torch::Tensor launch_v3(torch::Tensor xf, torch::Tensor Wlo, torch::Tensor Slo,
+                               torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                               int N, int Klow, int Khigh, int devid, cudaStream_t stream) {
+  int blocks = (N + WARPS - 1) / WARPS;
+  size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
+  // SMEM opt-in (keyed on largest K seen): required for 8B down_proj K=14336
+  // whose staging buffer (57,344 B) exceeds the 48 KB default dynamic ceiling.
+  static size_t attr_smem[33] = {0};
+  if (smem > attr_smem[WARPS]) {
+    CUDA_CHECK(cudaSetDevice(devid));
+    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a4_v3<WARPS>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
+    int maxs = 0;
+    cudaDeviceGetAttribute(&maxs, cudaDevAttrMaxSharedMemoryPerBlockOptin, devid);
+    TORCH_CHECK((size_t)maxs >= smem,
+                "decode_gemv_fused: smem ", smem, " B exceeds device opt-in max ", maxs, " B");
+    attr_smem[WARPS] = smem;
+  }
+  gemv_w4a4_v3<WARPS><<<blocks, WARPS * 32, smem, stream>>>(
+      xf.data_ptr<float>(), Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      D.data_ptr<float>(), N, Klow, Khigh);
+  CUDA_CHECK(cudaGetLastError());
+  return D;
+}
+
 torch::Tensor decode_gemv_fused(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
                                 torch::Tensor Whi, torch::Tensor Shi,
-                                int64_t N, int64_t Klow, int64_t Khigh) {
+                                int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
   TORCH_CHECK(x.is_cuda(), "x must be cuda");
   init_fp4_once();
   auto xf = x.reshape({-1}).to(torch::kFloat32).contiguous();
   auto stream = at::cuda::getCurrentCUDAStream();
   auto D = torch::empty({N}, torch::dtype(torch::kFloat32).device(x.device()));
-  constexpr int WARPS = 8;
-  int blocks = ((int)N + WARPS - 1) / WARPS;
-  size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
-  // The activation staging buffer is (K_low + K_high) floats: 8 KB at 1B/3B
-  // (K=2048/3072) but 57,344 B at 8B down_proj (K=14336), above the 48 KB
-  // default dynamic-SMEM ceiling. Opt in once per device (the launch would
-  // otherwise fail with "CUDA: invalid argument"). Re-run whenever the model
-  // size grows; keyed on the largest K seen so a bigger call lifts the limit.
-  static size_t attr_smem = 0;
-  if (smem > attr_smem) {
-    // Pin the device first: the attribute applies to the CURRENT device, and
-    // this host fn may run before any tensor op has established a context.
-    CUDA_CHECK(cudaSetDevice(x.get_device()));
-    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a4_v3<WARPS>,
-                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
-    int maxs = 0;
-    cudaDeviceGetAttribute(&maxs, cudaDevAttrMaxSharedMemoryPerBlockOptin, x.get_device());
-    TORCH_CHECK((size_t)maxs >= smem,
-                "decode_gemv_fused: smem ", smem, " B exceeds device opt-in max ", maxs, " B");
-    attr_smem = smem;
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh, dev = x.get_device();
+  // Win 4 (round-3): tunable rows/block. Large N saturates HBM with more warps;
+  // bit-identical to the fixed-8-warp v3 (same kernel, same FP32 accumulate).
+  switch (warps) {
+    case 4:  return launch_v3<4>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
+    case 8:  return launch_v3<8>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
+    case 16: return launch_v3<16>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
+    case 24: return launch_v3<24>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
+    case 32: return launch_v3<32>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
+    default: return launch_v3<8>(xf, Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream);
   }
-  gemv_w4a4_v3<WARPS><<<blocks, WARPS * 32, smem, stream>>>(
-      xf.data_ptr<float>(), Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
-      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
-      D.data_ptr<float>(), (int)N, (int)Klow, (int)Khigh);
-  CUDA_CHECK(cudaGetLastError());
-  return D;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -530,10 +541,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
         pybind11::arg("warps") = 8);
   m.def("decode_gemv_fused", &decode_gemv_fused,
-        "SINGLE-LAUNCH W4A4 decode GEMV: quant activation (raw x) + weight-stream GEMV",
+        "SINGLE-LAUNCH W4A4 decode GEMV: quant activation (raw x) + weight-stream GEMV "
+        "(round-3: tunable rows/block via warps in {4,8,16,24,32})",
         pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
         pybind11::arg("Whi"), pybind11::arg("Shi"),
-        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"));
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 8);
   m.def("quant_act", &quant_act,
         "fast in-kernel activation quantize -> dequantized fp32 (K,), bit-exact to "
         "fake_quantize_nvfp4/mxfp8 (M=1)",

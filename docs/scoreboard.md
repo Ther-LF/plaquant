@@ -9,15 +9,18 @@
 |---|---|---|---|---|
 | BF16(FP16 参照) | 16 | 13.16 | 7.82 | 6.14 |
 | **vLLM NVFP4 W4A4** | **≈4.25** | 15.65 | 8.63 | 6.87 |
-| **我们 ProMix W4A4(r=1/8)** | **4.97** | 14.85* | **8.615** | **6.823** |
+| **ProMix W4A4 — SHIPPED(r=1/8, weight-A2)** | **4.97** | 14.85* | **8.533** | **6.799** |
+| **ProMix W4A4 — 精度最大(act-MSE+weight-A2)** | **4.97** | 14.76* | **8.376** | **6.715** |
+| ProMix W4A4 r=1/16 精度最大 | 4.73 | 14.83* | **8.463** | — |
 | GPTQ W4A16 | 4.0 | 14.22 | 8.20 | 6.52 |
 | AWQ W4A16 | 4.0 | 14.53 | ~8.35 | 6.59 |
 | FP8 W8A8 | 8.0 | 13.30 | — | — |
 
-\* 1B 用的是 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。
+\* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。
+SHIPPED = round-3 真·kernel,weight-A2 默认(1B 关:+0.08;3B −0.08;8B −0.02)+ hadamard28 + decode-v5;
+act-MSE 默认关(它 5.3× 生产端 pack → 8B prefill 1.32→0.78x),精度最大行为其 opt-in 配置(fake-quant,real OOM 时以 fake 代入,round2 已验)。
 
-**判定:我们多花 0.72 bit/weight,3B 打平(+0.00 vs NVFP4)、8B 领先 0.05 —— 精度效率输给 NVFP4。必须查这 0.72 bit 花在哪、值不值。**
-**目标:在 4.25–4.5 bit(≤NVFP4)下 PPL ≤ NVFP4;或在 4.97 bit 下 PPL 显著优于 NVFP4(差距 >0.1)。**
+**判定(round-3):精度最大配置在 W4A4 的绝对 PPL 上已超过 NVFP4(3B 8.38<8.63、8B 6.72<6.87),但多花 0.72 bit,精度/bit 仍不压 NVFP4;weight-A2 是免费小赢(3B/8B),act-MSE 是大赢但代价是 prefill(未 ship)。**
 
 ## 轴 2:性能(统一为"对同 stack FP16/BF16 的加速比")
 
@@ -27,10 +30,12 @@
 | vLLM AWQ W4A16 | 0.91 / 0.89 / 0.89 | 1.55 / 1.75 / 2.53 | 1.58 / 1.99 / 2.45 |
 | vLLM GPTQ W4A16 | 0.86 / 0.39 / 0.89 | 1.52 / 0.92 / 2.51 | 1.57 / 1.01 / 2.47 |
 | vLLM FP8 W8A8 | 1.31 / — / — | 1.23 / — / — | 1.40 / — / — |
-| **我们 ProMix** | **1.22 / 1.39 / 1.29×**(M2048,待对齐到 8192) | **0.71 / 0.86 / 0.81×** | 未测 |
+| **ProMix SHIPPED (round-3)** | **1.29 / 1.35 / 1.32×**(M8192;M2048 1.22/1.39/1.32) | **0.72 / 0.85 / 1.06×** | **0.71 / 0.83 / 1.03×** |
 
-**判定:当前没有任何一栏赢。** prefill 落后 NVFP4 约 30–45%;decode 落后 Marlin 一倍。
-**目标:prefill ≥ NVFP4(8B ≥2.2×)、decode ≥1.0×;并补齐 decode b8。**
+(对 FP16-graph,idle GPU。round-3 vs 上一轮:8B prefill 1.22→1.32×(hadamard28 融合生产端),8B decode b1 0.81→1.06×、b8 1.01→1.03×(decode-GEMV v5 可调 warps);1B/3B 基本持平——perf 杠杆主要作用于 8B。act-MSE **默认关**:开它 8B prefill 掉到 0.78×。)
+
+**判定(round-3):8B 首次在 prefill(1.32×)与 decode b1/b8(1.06/1.03×)同时赢过 FP16;但三项仍全面落后 NVFP4(2.21× / 1.61× / 1.45×)。1B/3B decode 仍 <1(M=1 launch-bound / GEMV 占比小)。**
+**目标:prefill ≥ NVFP4(8B ≥2.2×)、decode 全面 ≥ NVFP4;并把 act-MSE 做成便宜生产端以同时拿精度。**
 
 ## loop 规则(KDA 式,controller 串行调度)
 

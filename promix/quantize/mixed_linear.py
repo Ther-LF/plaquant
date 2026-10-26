@@ -35,7 +35,7 @@ from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
-                 qpfm=None, hpk=None, cd_bias=None, arn=None):
+                 qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -94,6 +94,14 @@ class MixedQuantLinear(nn.Module):
         self._hpk = hpk
         self._cd_bias = cd_bias
         self._arn = arn
+        # 8B non-power-of-two (I=14336) fused SwiGLU+Hadamard+pack producer + its
+        # 28x28 +-1 Hadamard matrix (kept on CPU; the kernel caches it to constant
+        # memory on first call). Only used by forward_swiglu_pack when K==14336.
+        self._hpk28 = hpk28
+        self._had28 = had28
+        # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
+        # saturates HBM with more warps/block; small N stays launch-bound at 8.
+        self._dec_warps = 24 if self.N >= 4096 else 8
         # Set by wire_real_kernel when cd_bias is wired AND the epilogue-eligible
         # prefill path may use it (i.e. a real fp16 bias exists to fold).
         self.bias_in_epilogue = (cd_bias is not None)
@@ -102,7 +110,7 @@ class MixedQuantLinear(nn.Module):
             self.bias_in_epilogue = True
 
     @classmethod
-    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None, cd_bias=None, arn=None):
+    def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
         """Build from a rotated+reordered nn.Linear (or ActQuantWrapper.module)."""
         W = linear.weight.data
         K_low, K_high = split_k(W.shape[1], high_fraction)
@@ -110,7 +118,7 @@ class MixedQuantLinear(nn.Module):
         bias = None if bias is None else bias.data
         packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias)
         return cls(packed, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg, qpfm=qpfm, hpk=hpk,
-                   cd_bias=cd_bias, arn=arn)
+                   cd_bias=cd_bias, arn=arn, hpk28=hpk28, had28=had28)
 
     def _decode_gemv(self, x2d):
         """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
@@ -119,7 +127,8 @@ class MixedQuantLinear(nn.Module):
         fused kernel (same dequantized weight, FP32 accumulate)."""
         D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
                                        self.W_hi_dec, self.S_hi_dec,
-                                       self.N, self.K_low, self.K_high)
+                                       self.N, self.K_low, self.K_high,
+                                       self._dec_warps)
         return D.unsqueeze(0)      # (1, N)
 
     def _pack_activation(self, x2d):
@@ -205,9 +214,15 @@ class MixedQuantLinear(nn.Module):
         u2d = up.reshape(-1, I).contiguous()
         M = g2d.shape[0]
         assert I == self.K, f"fused down_proj: I={I} != K={self.K}"
-        assert self._hpk is not None, "fused path needs the hpk kernel module"
-        A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk.hadamard_swiglu_pack_mixed(
-            g2d, u2d, M, self.N, self.K_low, self.K_high)
+        if I == 14336:
+            # 8B (Win 3): non-power-of-two width uses the 28x512 fused producer.
+            assert self._hpk28 is not None, "I=14336 fused path needs the hpk28 kernel module"
+            A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk28.hadamard28_swiglu_pack_mixed(
+                g2d, u2d, self._had28, M, self.N, self.K_low, self.K_high)
+        else:
+            assert self._hpk is not None, "fused path needs the hpk kernel module"
+            A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk.hadamard_swiglu_pack_mixed(
+                g2d, u2d, M, self.N, self.K_low, self.K_high)
         return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
 
     def pack_only(self, x):

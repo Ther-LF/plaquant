@@ -1,0 +1,60 @@
+{
+  "config": "promix/configs/llama-3.2-1b-fp-perhead.yaml",
+  "gpu": 0,
+  "phases": "ppl",
+  "model": {
+    "hidden_size": 2048,
+    "intermediate_size": 8192,
+    "num_layers": 16,
+    "num_heads": 32,
+    "num_kv_heads": 8,
+    "head_dim": 64,
+    "vocab_size": 128256,
+    "fused_producer": true
+  },
+  "shapes": [
+    [
+      "q_proj",
+      2048,
+      2048
+    ],
+    [
+      "k_proj",
+      512,
+      2048
+    ],
+    [
+      "v_proj",
+      512,
+      2048
+    ],
+    [
+      "o_proj",
+      2048,
+      2048
+    ],
+    [
+      "gate_proj",
+      8192,
+      2048
+    ],
+    [
+      "up_proj",
+      8192,
+      2048
+    ],
+    [
+      "down_proj",
+      2048,
+      8192
+    ]
+  ],
+  "ppl": {
+    "real_kernel": 14.93181324005127,
+    "baseline_fakequant": 14.9195,
+    "delta": 0.012313240051270213,
+    "gate_pass": true,
+    "fused_producer": true,
+    "seconds": 6.576528549194336
+  }
+}

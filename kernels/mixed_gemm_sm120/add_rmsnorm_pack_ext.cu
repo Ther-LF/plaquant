@@ -136,6 +136,33 @@ __device__ __forceinline__ void pack_fp4_block_a(const float* xf, uint8_t* code_
   float ideal = fmaxf(bmax / 6.0f, 0.001953125f);
   unsigned char sfb; float scale;
   e4m3_ceil_a(ideal, sfb, scale);
+#if defined(PROMIX_ACT_MSE) && (PROMIX_ACT_MSE)
+  // Win 1 (round-3): per-block argmin-MSE block scale (twin of fake_quantize_nvfp4).
+  {
+    float best_err = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+      float xs = fminf(fmaxf(xf[j] / scale, -6.0f), 6.0f);
+      int ii = rtn_idx_a(fabsf(xs), cFP4_val_a, 8);
+      float dq = (xs < 0.0f ? -1.0f : 1.0f) * cFP4_val_a[ii] * scale;
+      float e = dq - xf[j]; best_err += e * e;
+    }
+    unsigned char cb = sfb;
+    for (int s = 0; s < 3 && cb > 1; ++s) {
+      cb = (unsigned char)(cb - 1);
+      float csc = e4m3_to_float_a(cb); if (!(csc > 0.0f)) break;
+      float err = 0.0f;
+#pragma unroll
+      for (int j = 0; j < 16; ++j) {
+        float xs = fminf(fmaxf(xf[j] / csc, -6.0f), 6.0f);
+        int ii = rtn_idx_a(fabsf(xs), cFP4_val_a, 8);
+        float dq = (xs < 0.0f ? -1.0f : 1.0f) * cFP4_val_a[ii] * csc;
+        float e = dq - xf[j]; err += e * e;
+      }
+      if (err < best_err) { best_err = err; scale = csc; sfb = cb; }
+    }
+  }
+#endif
   sf_out[layout(make_coord(r, b * 16, 0))] = sfb;
   int obase = r * (K_low / 2) + b * 8;
 #pragma unroll

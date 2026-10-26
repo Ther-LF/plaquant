@@ -40,6 +40,23 @@ def load_hpk():
                 extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
 
 
+def load_hpk28():
+    """Fused SwiGLU + 28x512 Hadamard + pack producer for the 8B non-power-of-two
+    intermediate (I=14336). Returns (module, had28) where had28 is the 28x28 +-1
+    matrix (CPU float32) the kernel caches to constant memory on first call."""
+    from torch.utils.cpp_extension import load
+    from promix.quantize.hadamard import get_hadK
+    inc = [KERN, os.path.join(REPO, "third_party/cutlass/include"),
+           os.path.join(REPO, "third_party/cutlass/tools/util/include"),
+           os.path.join(REPO, "third_party/cutlass/examples/common")]
+    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    mod = load(name="hadamard28_pack_ext",
+               sources=[os.path.join(KERN, "hadamard28_pack_ext.cu")],
+               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
+    had28, _ = get_hadK(14336)
+    return mod, had28.to("cpu").float().contiguous()
+
+
 def pick_free_gpu(util_max=8, timeout_s=1800):
     t0 = time.time()
     while True:

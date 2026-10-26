@@ -187,6 +187,35 @@ __global__ void qpf4_kernel(uint8_t* __restrict__ data_out, uint8_t* __restrict_
   float ideal = fmaxf(bmax / 6.0f, 0.001953125f);                   // / FP4_E2M1_MAX, clamp_min 2^-9
   unsigned char sfb; float scale;
   e4m3_ceil(ideal, sfb, scale);                                     // round UP to E4M3 (hw)
+#if defined(PROMIX_ACT_MSE) && (PROMIX_ACT_MSE)
+  // Win 1 (round-3): per-block argmin-MSE block scale over {base, up to 3 lower
+  // E4M3 grid steps}. Bit-exact twin of quant_utils.fake_quantize_nvfp4's search
+  // (byte-decrement == next-lower E4M3 representable; the 0.0 step never wins).
+  {
+    float best_err = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+      float xs = fminf(fmaxf(xf[j] / scale, -6.0f), 6.0f);
+      int ii = rtn_idx(fabsf(xs), cFP4_val, 8);
+      float dq = (xs < 0.0f ? -1.0f : 1.0f) * cFP4_val[ii] * scale;
+      float e = dq - xf[j]; best_err += e * e;
+    }
+    unsigned char cb = sfb;
+    for (int s = 0; s < 3 && cb > 1; ++s) {
+      cb = (unsigned char)(cb - 1);
+      float csc = e4m3_to_float(cb); if (!(csc > 0.0f)) break;
+      float err = 0.0f;
+#pragma unroll
+      for (int j = 0; j < 16; ++j) {
+        float xs = fminf(fmaxf(xf[j] / csc, -6.0f), 6.0f);
+        int ii = rtn_idx(fabsf(xs), cFP4_val, 8);
+        float dq = (xs < 0.0f ? -1.0f : 1.0f) * cFP4_val[ii] * csc;
+        float e = dq - xf[j]; err += e * e;
+      }
+      if (err < best_err) { best_err = err; scale = csc; sfb = cb; }
+    }
+  }
+#endif
   sf_out[layout(make_coord(r, b * 16, 0))] = sfb;
   int obase = r * (K / 2) + b * 8;
 #pragma unroll

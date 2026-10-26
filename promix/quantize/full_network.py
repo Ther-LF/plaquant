@@ -336,7 +336,7 @@ def wire_fused_mlp(model):
 
 
 def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=torch.float16, qpfm=None, hpk=None,
-                     cd_bias=None, arn=None, norm_pack=False):
+                     cd_bias=None, arn=None, norm_pack=False, hpk28=None, had28=None):
     """Replace each target Linear's inner module with MixedQuantLinear (real
     packed fused kernel) and disable the wrapper's fake-quant input quantizer
     (MixedQuantLinear quantizes the activation itself). Keeps Hadamard / o_proj
@@ -352,7 +352,8 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
     for name, short, wrapper in iter_target_wrappers(model):
         pk = packed[name]
         mql = MixedQuantLinear(pk, nv, mx, cd, out_dtype=out_dtype, qpf=qpf, dg=dg,
-                               qpfm=qpfm, hpk=hpk, cd_bias=cd_bias, arn=arn)
+                               qpfm=qpfm, hpk=hpk, cd_bias=cd_bias, arn=arn,
+                               hpk28=hpk28, had28=had28)
         # Lever A is only legal where the prefill GEMM runs (decode M=1 GEMV has
         # its own bias handling) — the decision is per forward, see MixedQuantLinear.
         mql.bias_in_epilogue = bool(cd_bias is not None)
@@ -361,9 +362,11 @@ def wire_real_kernel(model, packed, nv, mx, cd, qpf=None, dg=None, out_dtype=tor
         wrapper._inner_kwargs = set()  # MixedQuantLinear.forward(x) only
         # Fused down_proj producer path (SwiGLU + Hadamard + pack, one kernel):
         # the MLP hands the un-materialized gate/up GEMM outputs to this wrapper.
+        # hpk handles the power-of-two intermediate (I=8192, 1B/3B); hpk28 handles
+        # the non-power-of-two I=14336 (8B) via the 28x512 Hadamard decomposition.
         # (prefill only: with `dg` wired, M==1 takes the decode GEMV, whose
         # input is the materialized h — do not reroute it.)
-        if (hpk is not None and short == "down_proj" and dg is None
+        if ((hpk is not None or hpk28 is not None) and short == "down_proj" and dg is None
                 and hasattr(mql, "forward_swiglu_pack")):
             wrapper.fused_swiglu_had = True
         # round-26 lever B: fused residual-add + RMSNorm + quant/pack producer.
