@@ -1,0 +1,94 @@
+{
+  "config": "promix/configs/llama-3-8b-fp-perhead.yaml",
+  "gpu": 0,
+  "phases": "decode",
+  "model": {
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "num_layers": 32,
+    "num_heads": 32,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "vocab_size": 128256,
+    "fused_producer": false
+  },
+  "shapes": [
+    [
+      "q_proj",
+      4096,
+      4096
+    ],
+    [
+      "k_proj",
+      1024,
+      4096
+    ],
+    [
+      "v_proj",
+      1024,
+      4096
+    ],
+    [
+      "o_proj",
+      4096,
+      4096
+    ],
+    [
+      "gate_proj",
+      14336,
+      4096
+    ],
+    [
+      "up_proj",
+      14336,
+      4096
+    ],
+    [
+      "down_proj",
+      4096,
+      14336
+    ]
+  ],
+  "decode": [
+    {
+      "batch": 1,
+      "prompt": 32,
+      "gen": 128,
+      "real_eager_ms": 30.773386999499053,
+      "real_graph_ms": 16.69122657040134,
+      "fp16_eager_ms": 19.53386695822701,
+      "fp16_graph_ms": 13.444335490930825,
+      "speedup_graph_vs_fp16_eager": 1.1703074591813727,
+      "speedup_graph_vs_fp16_graph": 0.8054731888171569,
+      "tokens_s_real": 59.911714443641095,
+      "tokens_s_fp16": 51.19314072008838,
+      "prefill_real_ms": 45.207105926238,
+      "prefill_fp16_ms": 20.310907973907888
+    },
+    {
+      "batch": 8,
+      "prompt": 32,
+      "gen": 128,
+      "real_eager_ms": 45.22134503349662,
+      "real_graph_ms": 14.87422251375392,
+      "fp16_eager_ms": 20.01516445307061,
+      "fp16_graph_ms": 14.958539512008429,
+      "speedup_graph_vs_fp16_eager": 1.3456276073968205,
+      "speedup_graph_vs_fp16_graph": 1.0056686659202887,
+      "tokens_s_real": 537.8432380316044,
+      "tokens_s_fp16": 399.69694072499544,
+      "prefill_real_ms": 46.89361900091171,
+      "prefill_fp16_ms": 22.32168591581285
+    }
+  ],
+  "weight_memory": {
+    "packed_bytes": 4334813184,
+    "fp16_bytes": 13958643712,
+    "sf_bytes": 408944640,
+    "compression": 3.220125786163522,
+    "bits_per_weight": 4.96875,
+    "hbm_tbps": 1.4403536097813876,
+    "weight_floor_ms": 3.009547901683618,
+    "fp16_weight_floor_ms": 9.691122802905738
+  }
+}
