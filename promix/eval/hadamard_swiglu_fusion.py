@@ -25,7 +25,7 @@ from promix.quantize import full_network as fn
 from promix.quantize.hadamard import matmul_hadU_cuda
 from promix.eval.data import get_wikitext2
 from promix.eval.full_network_realkernel import (
-    load_kernels, _build_fp16_model, cosine, HIGH_FRACTION)
+    load_kernels, _build_fp16_model, cosine, HIGH_FRACTION, act_mse_cflags)
 from promix.eval.prefill_graph import capture_forward, time_eager, time_graph
 
 
@@ -37,7 +37,7 @@ def load_hpk():
     flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     return load(name="hadamard_pack_ext",
                 sources=[os.path.join(KERN, "hadamard_pack_ext.cu")],
-                extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
+                extra_include_paths=inc, extra_cuda_cflags=flags + act_mse_cflags(), verbose=False)
 
 
 def load_hpk28():
@@ -52,7 +52,7 @@ def load_hpk28():
     flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     mod = load(name="hadamard28_pack_ext",
                sources=[os.path.join(KERN, "hadamard28_pack_ext.cu")],
-               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
+               extra_include_paths=inc, extra_cuda_cflags=flags + act_mse_cflags(), verbose=False)
     had28, _ = get_hadK(14336)
     return mod, had28.to("cpu").float().contiguous()
 
@@ -280,7 +280,7 @@ def load_qpfm():
     flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     return load(name="quant_pack_fused_ext",
                 sources=[os.path.join(KERN, "quant_pack_fused_ext.cu")],
-                extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
+                extra_include_paths=inc, extra_cuda_cflags=flags + act_mse_cflags(), verbose=False)
 
 
 if __name__ == "__main__":

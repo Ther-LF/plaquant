@@ -1,0 +1,264 @@
+{
+  "config": "promix/configs/llama-3-8b-fp-perhead.yaml",
+  "gpu": 0,
+  "phases": "prefill,decode",
+  "model": {
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "num_layers": 32,
+    "num_heads": 32,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "vocab_size": 128256,
+    "fused_producer": false
+  },
+  "shapes": [
+    [
+      "q_proj",
+      4096,
+      4096
+    ],
+    [
+      "k_proj",
+      1024,
+      4096
+    ],
+    [
+      "v_proj",
+      1024,
+      4096
+    ],
+    [
+      "o_proj",
+      4096,
+      4096
+    ],
+    [
+      "gate_proj",
+      14336,
+      4096
+    ],
+    [
+      "up_proj",
+      14336,
+      4096
+    ],
+    [
+      "down_proj",
+      4096,
+      14336
+    ]
+  ],
+  "prefill": [
+    {
+      "M": 2048,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 78.79770104773343,
+      "t_fp16_eager_ms": 101.28953598905355,
+      "t_fp16_graph_ms": 100.37679201923311,
+      "speedup_vs_fp16_eager": 1.2854377049362797,
+      "speedup_vs_fp16_graph": 1.2738543216943305,
+      "tokens_s_real": 25990.60597921987,
+      "tokens_s_fp16": 20219.265297269496,
+      "pack_ms": 14.423906803131104,
+      "gemm_ms": 35.27334704995155,
+      "fp16_linear_ms": 78.78861203789711,
+      "fp16_rest_ms": 22.500923951156437,
+      "zero_overhead_ideal_ms": 72.1981778042391,
+      "overhead_graph_ms": 6.599523243494332,
+      "linear_share_of_fp16_time": 0.7778553951161536,
+      "gemm_step_tflops": 362.79360872290704,
+      "cosine_graph_vs_eager": 1.0000004768371582
+    },
+    {
+      "M": 4096,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 160.07617104332894,
+      "t_fp16_eager_ms": 208.19317700807005,
+      "t_fp16_graph_ms": 208.35630397778004,
+      "speedup_vs_fp16_eager": 1.3005881865559925,
+      "speedup_vs_fp16_graph": 1.3016072449745364,
+      "tokens_s_real": 25587.81843233436,
+      "tokens_s_fp16": 19674.035714634538,
+      "pack_ms": 23.889828473329544,
+      "gemm_ms": 61.79625913500786,
+      "fp16_linear_ms": 150.06838738918304,
+      "fp16_rest_ms": 58.12478961888701,
+      "zero_overhead_ideal_ms": 143.8108772272244,
+      "overhead_graph_ms": 16.26529381610453,
+      "linear_share_of_fp16_time": 0.7208131867999019,
+      "gemm_step_tflops": 357.1712408643017,
+      "cosine_graph_vs_eager": 1.0000004768371582
+    },
+    {
+      "M": 8192,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 367.0785139547661,
+      "t_fp16_eager_ms": 470.06696299649775,
+      "t_fp16_graph_ms": 472.00397204142064,
+      "speedup_vs_fp16_eager": 1.2805624549695724,
+      "speedup_vs_fp16_graph": 1.2858392798756513,
+      "tokens_s_real": 22316.751562880832,
+      "tokens_s_fp16": 17427.304288263786,
+      "pack_ms": 43.963488191366196,
+      "gemm_ms": 108.30473527312279,
+      "fp16_linear_ms": 296.6541722416878,
+      "fp16_rest_ms": 173.41279075480998,
+      "zero_overhead_ideal_ms": 325.68101421929896,
+      "overhead_graph_ms": 41.397499735467136,
+      "linear_share_of_fp16_time": 0.6310891757859997,
+      "gemm_step_tflops": 311.51158387547275,
+      "cosine_graph_vs_eager": 1.0000014305114746
+    }
+  ],
+  "decode": [
+    {
+      "batch": 1,
+      "prompt": 32,
+      "gen": 128,
+      "real_eager_ms": 30.373861955013126,
+      "real_graph_ms": 12.474577932152897,
+      "fp16_eager_ms": 18.830493499990553,
+      "fp16_graph_ms": 13.268515467643738,
+      "speedup_graph_vs_fp16_eager": 1.5095094681684942,
+      "speedup_graph_vs_fp16_graph": 1.0636444407024375,
+      "tokens_s_real": 80.16303280470325,
+      "tokens_s_fp16": 53.10535276202409,
+      "prefill_real_ms": 44.15932600386441,
+      "prefill_fp16_ms": 18.962019006721675
+    },
+    {
+      "batch": 8,
+      "prompt": 32,
+      "gen": 128,
+      "real_eager_ms": 44.01058750227094,
+      "real_graph_ms": 14.755943964701146,
+      "fp16_eager_ms": 19.29550850763917,
+      "fp16_graph_ms": 14.901966962497681,
+      "speedup_graph_vs_fp16_eager": 1.3076431134326258,
+      "speedup_graph_vs_fp16_graph": 1.0098958764106076,
+      "tokens_s_real": 542.1544036177847,
+      "tokens_s_fp16": 414.60425864562046,
+      "prefill_real_ms": 44.602912035770714,
+      "prefill_fp16_ms": 21.448915940709412
+    }
+  ],
+  "weight_memory": {
+    "packed_bytes": 4334813184,
+    "fp16_bytes": 13958643712,
+    "sf_bytes": 408944640,
+    "compression": 3.220125786163522,
+    "bits_per_weight": 4.96875,
+    "hbm_tbps": 1.440894771097841,
+    "weight_floor_ms": 3.008417596447543,
+    "fp16_weight_floor_ms": 9.68748307786882
+  }
+}

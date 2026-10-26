@@ -69,6 +69,22 @@ LAYER_SHAPES = [
 HIGH_FRACTION = 0.125
 
 
+def act_mse_cflags():
+    """round-4: activation NVFP4 block-scale MSE search in the real pack
+    producers. DEFAULT ON (cheap fast variant). Env override:
+      PROMIX_ACT_MSE=0        -> off (reproduces pre-round-3 baseline)
+      PROMIX_ACT_MSE_FAST=0   -> round-3 true-division search (bit-identical anchor)
+      PROMIX_ACT_MSE_STEPS=N  -> N lower E4M3 grid steps (default 3)
+    Must stay coupled with promix.quantize.quant_utils (the fake-quant twin reads
+    the same env), so the real kernel and the PPL twin pick the same scales."""
+    if os.environ.get("PROMIX_ACT_MSE", "1") == "0":
+        return []
+    fast = 0 if os.environ.get("PROMIX_ACT_MSE_FAST", "1") == "0" else 1
+    steps = int(os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
+    return ["-DPROMIX_ACT_MSE=1", f"-DPROMIX_ACT_MSE_FAST={fast}",
+            f"-DPROMIX_ACT_MSE_STEPS={steps}"]
+
+
 def load_kernels():
     from torch.utils.cpp_extension import load
     import nvfp4_gemm as nv
@@ -83,7 +99,7 @@ def load_kernels():
               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
     qpf = load(name="quant_pack_float_ext",
                sources=[os.path.join(KERN, "quant_pack_float_ext.cu")],
-               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
+               extra_include_paths=inc, extra_cuda_cflags=flags + act_mse_cflags(), verbose=False)
     return nv, mx, cd, qpf
 
 

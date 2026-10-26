@@ -609,12 +609,22 @@ def _ceil_to_value(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
 # overrides PROMIX_ACT_MSE / PROMIX_WEIGHT_MSE ("0" disables) let a detached
 # baseline run reproduce the pre-integration numbers without code edits.
 import os as _os
-# Win 1 (activation NVFP4 MSE search) is DEFAULT-OFF in the shipped path: round-3
-# measured it ~5.3x the fused-producer pack cost (8B pack 9.2->48.7 ms/forward),
-# sinking 8B prefill 1.29x->0.78x (prefill gate FAIL). It is a real ACCURACY win
-# (3B r=1/8 8.647->8.428) kept opt-in (PROMIX_ACT_MSE=1 + CUDA -DPROMIX_ACT_MSE=1)
-# for the accuracy-max research config; ship needs a cheaper producer (deferred).
-ACT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_ACT_MSE", "0") != "0"      # Win 1 (opt-in)
+# Win 1 (activation NVFP4 MSE search) is DEFAULT-ON as of round-4: the round-3
+# search cost ~2.1x the fused-producer pack (8B isolated 2.595->5.541 ms) which
+# sank 8B prefill 1.32->0.78x. round-4 made it CHEAP (reciprocal-multiply +
+# branchless nearest, see kernels/.../act_mse.cuh): 8B producer overhead drops to
+# 1.10x (<1.15x gate) at the SAME 3-step depth, so the accuracy win (3B
+# 8.53->8.38, 8B 6.80->6.71) now ships in the prefill path. PROMIX_ACT_MSE=0
+# reproduces the pre-round-3 baseline.
+ACT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_ACT_MSE", "1") != "0"      # Win 1 (round-4: SHIPPED, cheap)
+# round-4: the activation search is now CHEAP (reciprocal-multiply + branchless
+# nearest, see kernels/.../act_mse.cuh). PROMIX_ACT_MSE_FAST (default 1) selects
+# the fast selection; "0" reproduces the round-3 true-division search bit-for-bit
+# (the accuracy-max PPL anchor). PROMIX_ACT_MSE_STEPS (default 3) = lower E4M3
+# grid steps tried below the ceil base. These ONLY affect the ACTIVATION NVFP4
+# scale SELECTION; the weight-A2 path (_mse_best_scale) is untouched.
+ACT_MSE_FAST = _os.environ.get("PROMIX_ACT_MSE_FAST", "1") != "0"
+ACT_MSE_STEPS = int(_os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
 # Win 2 (weight-A2) is DEFAULT-ON: it is a re-pack-only change (GPTQ frozen block
 # scales), zero forward cost, free accuracy win.
 WEIGHT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_WEIGHT_MSE", "1") != "0"  # Win 2 (shipped)
@@ -646,6 +656,43 @@ def _mse_best_scale(blk: torch.Tensor, cands, max_fmt: float,
             best_err = torch.where(take, err, best_err)
             best_sc = torch.where(take, sc, best_sc)
     return best_sc
+
+
+def _fp4_nearest_val(a: torch.Tensor) -> torch.Tensor:
+    """Branchless nearest FP4 E2M1 grid VALUE for a >= 0. Mirrors the CUDA
+    `promix_fp4_nearest_val` (`<` cascade over {0,.5,1,1.5,2,3,4,6}); used only
+    inside the fast ACTIVATION scale selection."""
+    v = torch.full_like(a, 6.0)
+    v = torch.where(a < 5.00, torch.full_like(a, 4.0), v)
+    v = torch.where(a < 3.50, torch.full_like(a, 3.0), v)
+    v = torch.where(a < 2.50, torch.full_like(a, 2.0), v)
+    v = torch.where(a < 1.75, torch.full_like(a, 1.5), v)
+    v = torch.where(a < 1.25, torch.full_like(a, 1.0), v)
+    v = torch.where(a < 0.75, torch.full_like(a, 0.5), v)
+    v = torch.where(a < 0.25, torch.zeros_like(a), v)
+    return v
+
+
+def _mse_best_scale_act_fast(blk: torch.Tensor, cands) -> torch.Tensor:
+    """Fast activation NVFP4 scale selection — the torch twin of the CUDA
+    `promix_act_mse_select` fast path: reciprocal-multiply + branchless nearest
+    (selection only). `cands` is a list of (..., 1) candidate scales. Returns the
+    per-block (..., 1) argmin-MSE scale."""
+    best_err = best_sc = None
+    for sc in cands:
+        inv = 1.0 / sc
+        xs = (blk * inv).clamp(-FP4_E2M1_MAX, FP4_E2M1_MAX)
+        g = _fp4_nearest_val(xs.abs())
+        dq = torch.where(xs < 0, -g, g) * sc
+        err = ((dq - blk) ** 2).sum(-1, keepdim=True)
+        if best_err is None:
+            best_err, best_sc = err, sc
+        else:
+            take = err < best_err
+            best_err = torch.where(take, err, best_err)
+            best_sc = torch.where(take, sc, best_sc)
+    return best_sc
+
 
 
 def _e8m0_round_up(scale: torch.Tensor) -> torch.Tensor:
@@ -879,14 +926,19 @@ def fake_quantize_nvfp4(
     fp4_values_pos = torch.tensor(FP4_E2M1_POS, device=x.device, dtype=torch.float32)
 
     if ACT_MSE_SCALE_SEARCH:
-        # Win 1: per-block argmin-MSE over {base, 3 lower E4M3 steps}. The fake
-        # twin of the CUDA producer's 4-candidate search (quant_pack_float_ext.cu).
+        # Win 1: per-block argmin-MSE over {base, N lower E4M3 steps}. round-4
+        # makes this CHEAP (ACT_MSE_FAST, default): reciprocal-multiply +
+        # branchless nearest, the twin of the CUDA producer's fast search. Set
+        # PROMIX_ACT_MSE_FAST=0 to reproduce the round-3 true-division anchor.
         cur = base_scale
         cands = [cur]
-        for _ in range(_MSE_STEPS):
+        for _ in range(ACT_MSE_STEPS):
             cur = _next_lower_grid(cur, fp8_e4m3_values)
             cands.append(cur)
-        block_scale = _mse_best_scale(x_blk, cands, FP4_E2M1_MAX, fp4_values_pos)
+        if ACT_MSE_FAST:
+            block_scale = _mse_best_scale_act_fast(x_blk, cands)
+        else:
+            block_scale = _mse_best_scale(x_blk, cands, FP4_E2M1_MAX, fp4_values_pos)
     else:
         block_scale = base_scale
 

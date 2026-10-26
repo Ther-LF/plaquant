@@ -1,0 +1,222 @@
+{
+  "config": "promix/configs/llama-3-8b-fp-perhead.yaml",
+  "gpu": 6,
+  "phases": "prefill",
+  "model": {
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "num_layers": 32,
+    "num_heads": 32,
+    "num_kv_heads": 8,
+    "head_dim": 128,
+    "vocab_size": 128256,
+    "fused_producer": false
+  },
+  "shapes": [
+    [
+      "q_proj",
+      4096,
+      4096
+    ],
+    [
+      "k_proj",
+      1024,
+      4096
+    ],
+    [
+      "v_proj",
+      1024,
+      4096
+    ],
+    [
+      "o_proj",
+      4096,
+      4096
+    ],
+    [
+      "gate_proj",
+      14336,
+      4096
+    ],
+    [
+      "up_proj",
+      14336,
+      4096
+    ],
+    [
+      "down_proj",
+      4096,
+      14336
+    ]
+  ],
+  "prefill": [
+    {
+      "M": 2048,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 79.35946702491492,
+      "t_fp16_eager_ms": 101.93977796006948,
+      "t_fp16_graph_ms": 101.26438597217202,
+      "speedup_vs_fp16_eager": 1.2845320386043604,
+      "speedup_vs_fp16_graph": 1.2760214977298177,
+      "tokens_s_real": 25806.624928025663,
+      "tokens_s_fp16": 20090.29292571361,
+      "pack_ms": 14.401335269212723,
+      "gemm_ms": 35.61033681035042,
+      "fp16_linear_ms": 79.77848872542381,
+      "fp16_rest_ms": 22.161289234645665,
+      "zero_overhead_ideal_ms": 72.1729613142088,
+      "overhead_graph_ms": 7.186505710706115,
+      "linear_share_of_fp16_time": 0.7826041053049341,
+      "gemm_step_tflops": 360.2254827795279,
+      "cosine_graph_vs_eager": 1.0000004768371582
+    },
+    {
+      "M": 4096,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 160.0686019519344,
+      "t_fp16_eager_ms": 210.0226329639554,
+      "t_fp16_graph_ms": 209.7505839774385,
+      "speedup_vs_fp16_eager": 1.3120788861954404,
+      "speedup_vs_fp16_graph": 1.3103793087442763,
+      "tokens_s_real": 25589.028391901316,
+      "tokens_s_fp16": 19502.659985711947,
+      "pack_ms": 23.807737976312637,
+      "gemm_ms": 61.90255284309387,
+      "fp16_linear_ms": 150.87735280394554,
+      "fp16_rest_ms": 59.14528016000986,
+      "zero_overhead_ideal_ms": 144.85557097941637,
+      "overhead_graph_ms": 15.213030972518027,
+      "linear_share_of_fp16_time": 0.718386159980384,
+      "gemm_step_tflops": 357.1881302588028,
+      "cosine_graph_vs_eager": 1.0000004768371582
+    },
+    {
+      "M": 8192,
+      "shapes": [
+        [
+          "q_proj",
+          4096,
+          4096
+        ],
+        [
+          "k_proj",
+          1024,
+          4096
+        ],
+        [
+          "v_proj",
+          1024,
+          4096
+        ],
+        [
+          "o_proj",
+          4096,
+          4096
+        ],
+        [
+          "gate_proj",
+          14336,
+          4096
+        ],
+        [
+          "up_proj",
+          14336,
+          4096
+        ],
+        [
+          "down_proj",
+          4096,
+          14336
+        ]
+      ],
+      "t_real_graph_ms": 367.86211701110005,
+      "t_fp16_eager_ms": 472.8025629883632,
+      "t_fp16_graph_ms": 475.45344196259975,
+      "speedup_vs_fp16_eager": 1.285271141344779,
+      "speedup_vs_fp16_graph": 1.2924773168427484,
+      "tokens_s_real": 22269.21343942793,
+      "tokens_s_fp16": 17326.471219238345,
+      "pack_ms": 43.5032993555069,
+      "gemm_ms": 108.9550070464611,
+      "fp16_linear_ms": 299.7255325317383,
+      "fp16_rest_ms": 173.07703045662493,
+      "zero_overhead_ideal_ms": 325.5353368585929,
+      "overhead_graph_ms": 42.326780152507126,
+      "linear_share_of_fp16_time": 0.6339338150734924,
+      "gemm_step_tflops": 310.84801614745663,
+      "cosine_graph_vs_eager": 1.0000014305114746
+    }
+  ]
+}
