@@ -1,0 +1,87 @@
+{
+  "config": "promix/configs/llama-3.2-1b-fp-perhead.yaml",
+  "prompt": 32,
+  "gen": 128,
+  "merge_info": {
+    "n_qkv": 16,
+    "n_gu": 16,
+    "prefill_ok_qkv": 16,
+    "prefill_ok_gu": 15,
+    "worst_probe_cos": 0.9999889731407166,
+    "probes": [
+      {
+        "kind": "qkv",
+        "max_abs": 0.03125,
+        "rel": 0.0036231884053770217,
+        "cos": 0.9999977350234985,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.01171875,
+        "rel": 0.004777070061746927,
+        "cos": 0.9999889731407166,
+        "ok": false
+      },
+      {
+        "kind": "qkv",
+        "max_abs": 0.0234375,
+        "rel": 0.00412087912015457,
+        "cos": 0.9999979138374329,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.01953125,
+        "rel": 0.002920560747226832,
+        "cos": 0.9999948143959045,
+        "ok": true
+      },
+      {
+        "kind": "qkv",
+        "max_abs": 0.02734375,
+        "rel": 0.0022321428569606412,
+        "cos": 0.9999974966049194,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.0078125,
+        "rel": 0.0029585798805363958,
+        "cos": 0.9999935626983643,
+        "ok": true
+      }
+    ]
+  },
+  "decode": [
+    {
+      "batch": 1,
+      "real_graph_merge_off_ms": 4.532687016762793,
+      "real_graph_merge_on_ms": 3.8695334806106985,
+      "fp16_graph_ms": 3.279878990724683,
+      "speedup_off_vs_fp16g": 0.7236058829111799,
+      "speedup_on_vs_fp16g": 0.8476161292205812,
+      "merge_gain": 1.1713781621156651,
+      "tokens_s_on": 258.4290858344448
+    },
+    {
+      "batch": 8,
+      "real_graph_merge_off_ms": 5.800208484288305,
+      "real_graph_merge_on_ms": 4.782530944794416,
+      "fp16_graph_ms": 3.8126539438962936,
+      "speedup_off_vs_fp16g": 0.6573305001404811,
+      "speedup_on_vs_fp16g": 0.7972042393256664,
+      "merge_gain": 1.2127905812301305,
+      "tokens_s_on": 1672.754466692508
+    }
+  ],
+  "attn_impl": "sdpa",
+  "numerics": {
+    "decode_m1_maxabs": 0.0,
+    "decode_m1_argmax_match": true,
+    "decode_bit_exact": true,
+    "prefill_worst_probe_cos": 0.9999889731407166,
+    "gate_pass": true
+  },
+  "prefill": []
+}

@@ -1,0 +1,77 @@
+{
+  "config": "promix/configs/llama-3.2-1b-fp-perhead.yaml",
+  "merge_info": {
+    "n_qkv": 16,
+    "n_gu": 16,
+    "prefill_ok_qkv": 16,
+    "prefill_ok_gu": 15,
+    "worst_probe_cos": 0.9999889731407166,
+    "probes": [
+      {
+        "kind": "qkv",
+        "max_abs": 0.03125,
+        "rel": 0.0036231884053770217,
+        "cos": 0.9999977350234985,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.01171875,
+        "rel": 0.004777070061746927,
+        "cos": 0.9999889731407166,
+        "ok": false
+      },
+      {
+        "kind": "qkv",
+        "max_abs": 0.0234375,
+        "rel": 0.00412087912015457,
+        "cos": 0.9999979138374329,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.01953125,
+        "rel": 0.002920560747226832,
+        "cos": 0.9999948143959045,
+        "ok": true
+      },
+      {
+        "kind": "qkv",
+        "max_abs": 0.02734375,
+        "rel": 0.0022321428569606412,
+        "cos": 0.9999974966049194,
+        "ok": true
+      },
+      {
+        "kind": "gate_up",
+        "max_abs": 0.0078125,
+        "rel": 0.0029585798805363958,
+        "cos": 0.9999935626983643,
+        "ok": true
+      }
+    ]
+  },
+  "decode": [
+    {
+      "batch": 1,
+      "merge_only_ms": 3.8538535591214895,
+      "merge_lmhead_ms": 3.808728011790663,
+      "fp16_graph_ms": 3.2707149512134492,
+      "capture_ok": true,
+      "speedup_mergeonly": 0.8486868795188548,
+      "speedup_lmhead": 0.8587420632526951,
+      "lmhead_gain": 1.0118479311704935
+    },
+    {
+      "batch": 8,
+      "merge_only_ms": 4.7698080306872725,
+      "merge_lmhead_ms": 4.692393937148154,
+      "fp16_graph_ms": 3.811647475231439,
+      "capture_ok": true,
+      "speedup_mergeonly": 0.7991196816954971,
+      "speedup_lmhead": 0.8123033842184195,
+      "lmhead_gain": 1.0164977822783072
+    }
+  ],
+  "ppl": null
+}
