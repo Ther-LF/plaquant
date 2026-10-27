@@ -5,17 +5,32 @@
 
 ## 轴 1:精度效率(同 bit 比 PPL;低 bit 高精度为赢)
 
+> **口径分层(2026-10-27 修正)**:我们的工作是 **W4A4(权重+激活同时量化)**。因此:
+> **主对比组 = 同为 W4A4 / 激活也量化的方法**(vLLM NVFP4、以及论文口径下的 QuaRot/SpinQuant/Atom/QServe/ResQ W4A4KV4)。
+> **W4A16(GPTQ/AWQ)只作参考**:它们的激活是 FP16、不付激活量化成本,与 W4A4 不构成同条件比较,不应作为"我们精度更差"的依据。
+> **bit/weight 已纠正**:NVFP4 含 E4M3 scale 是 **4.50 bits/weight**(不是 4.25);我们 r=1/8 是 4.97(+0.47),r=1/16 是 4.73(+0.23),r=0 与 NVFP4 **完全同 bit(4.50)**。
+
+### 主对比组 —— W4A4(激活也量化)
+
 | 方法 | bit/weight | 1B PPL | 3B PPL | 8B PPL |
 |---|---|---|---|---|
-| BF16(FP16 参照) | 16 | 13.16 | 7.82 | 6.14 |
-| **vLLM NVFP4 W4A4** | **≈4.25** | 15.65 | 8.63 | 6.87 |
-| **ProMix W4A4 — SHIPPED(r=1/8, act-MSE快+weight两级scale)** | **4.97** | **14.563** | **8.296** | **6.599** |
-| ProMix W4A4 r=1/16(两级 weight scale) | 4.73 | — | **8.361** | — |
-| ProMix W4A4 r=0(两级 weight scale, 4.5b) | 4.50 | — | 8.859 | — |
-| ProMix W4A4 r=1/8(单级 weight-A2, round-4 旧) | 4.97 | 14.76 | 8.376 | 6.713 |
+| BF16 参照 | 16 | 13.16 | 7.82 | 6.14 |
+| **vLLM NVFP4 W4A4** | **4.50** | 15.65 | 8.63 | 6.87 |
+| **ProMix W4A4 — SHIPPED(r=1/8)** | **4.97** | **14.563** | **8.296** | **6.599** |
+| ProMix W4A4 r=1/16 | 4.73 | — | **8.361** | — |
+| ProMix W4A4 r=0(纯 NVFP4,**同 bit**) | **4.50** | — | 8.859 | — |
+| *(论文口径,待同协议复测)* QuaRot W4A4 | ≈4.0 | — | — | — |
+| *(论文口径,待同协议复测)* SpinQuant W4A4 | ≈4.0 | — | — | — |
+| *(论文口径,待同协议复测)* Atom W4A4(+outlier INT8) | ≈4.25 | — | — | — |
+| *(论文口径,待同协议复测)* QServe W4A8KV4 | 4/8 | — | — | — |
+
+### 参考组 —— W4A16(**激活不量化**;不可作为同条件对比)
+
+| 方法 | bit/weight | 1B PPL | 3B PPL | 8B PPL |
+|---|---|---|---|---|
 | GPTQ W4A16 | 4.0 | 14.22 | 8.20 | 6.52 |
 | AWQ W4A16 | 4.0 | 14.53 | ~8.35 | 6.59 |
-| FP8 W8A8 | 8.0 | 13.30 | — | — |
+| FP8 W8A8(参考) | 8.0 | 13.30 | — | — |
 
 \* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。**round-7:1B base 模型已恢复,两级 scale A/B 实测 real-kernel 14.7604(单级)→14.5629(两级),Δ−0.198(远超预期 −0.05..−0.1),real-vs-twin 门 |Δ|=0.014 PASS → 1B 默认翻 ON,三档全部两级。**
 SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tensor FP32 global g × per-block E4M3/E8M0 micro,NEAREST+micro-MSE)**。g 搭在 fused-GEMM epilogue 的 alpha 上(零 GEMM 代价,epilogue 本就乘 alpha);decode 把 g 折进 FP32 scale。
