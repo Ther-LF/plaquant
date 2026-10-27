@@ -24,6 +24,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include <cuda_fp8.h>
 #include <vector>
 
@@ -494,6 +495,128 @@ static torch::Tensor launch_v3(torch::Tensor xf, torch::Tensor Wlo, torch::Tenso
   return D;
 }
 
+// ========================================================================================
+// W4A16 DECODE GEMV (round-12): weight-only path for M=1.  At decode the GEMV is
+// bandwidth/latency-bound, NOT compute-bound, so quantizing the activation (W4A4)
+// buys no tensor-core throughput and only costs an extra quantize pass + loses
+// accuracy.  This kernel keeps the activation in its native fp16/bf16/fp32 and
+// dequantizes ONLY the packed 4-bit(NVFP4)/8-bit(MXFP8) weights in-register
+// (Marlin-style), dotting against the EXACT activation.  Weight HBM traffic is
+// identical to the W4A4 decode GEMV (same packed bytes), but there is no activation
+// quantization — a single launch, exact activations.
+//
+// Body is gemv_w4a4_v2 verbatim EXCEPT the shared-staging loop reads the raw
+// activation (converted to fp32) instead of a pre-quantized xq vector.  Templated
+// on the activation C-type AT so fp16 / bf16 / fp32 activations all work with no
+// extra torch convert launch.
+__device__ __forceinline__ float a_to_f(const __half v)         { return __half2float(v); }
+__device__ __forceinline__ float a_to_f(const __nv_bfloat16 v)  { return __bfloat162float(v); }
+__device__ __forceinline__ float a_to_f(const float v)          { return v; }
+
+template <int WARPS, typename AT>
+__global__ void gemv_w4a16(
+    const AT* __restrict__ x,                // (K) raw activation, NOT quantized
+    const uint8_t* __restrict__ Wlo, const float* __restrict__ Slo,
+    const uint8_t* __restrict__ Whi, const float* __restrict__ Shi,
+    float* __restrict__ D, int N, int Klow, int Khigh) {
+  extern __shared__ float sx[];            // Klow+Khigh activation (fp32, exact)
+  int K = Klow + Khigh;
+  for (int i = threadIdx.x; i < K; i += blockDim.x) sx[i] = a_to_f(x[i]);
+  __syncthreads();
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  int n = blockIdx.x * WARPS + warp;
+  if (n >= N) return;
+
+  const uint32_t* wl = reinterpret_cast<const uint32_t*>(Wlo + (size_t)n * (Klow / 2));
+  const float*    sl = Slo + (size_t)n * (Klow / 16);
+  const uint32_t* wh = reinterpret_cast<const uint32_t*>(Whi + (size_t)n * Khigh);
+  const float*    sh = Shi + (size_t)n * (Khigh / 32);
+  float acc = 0.f;
+
+  int nwl = Klow / 8;
+  for (int w = lane; w < nwl; w += 32) {
+    uint32_t v = wl[w];
+    float sc = sl[w >> 1];
+    int k0 = 8 * w;
+    #pragma unroll
+    for (int c = 0; c < 8; c++)
+      acc += sx[k0 + c] * (fp4_decode((v >> (4 * c)) & 0xF) * sc);
+  }
+  int nwh = Khigh / 4;
+  for (int w = lane; w < nwh; w += 32) {
+    uint32_t v = wh[w];
+    float sc = sh[w >> 3];
+    int k0 = Klow + 4 * w;
+    #pragma unroll
+    for (int c = 0; c < 4; c++) {
+      __nv_fp8_e4m3 f; f.__x = (uint8_t)((v >> (8 * c)) & 0xFF);
+      acc += sx[k0 + c] * (float(f) * sc);
+    }
+  }
+  #pragma unroll
+  for (int o = 16; o > 0; o >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, o);
+  if (lane == 0) D[n] = acc;
+}
+
+template <int WARPS, typename AT>
+static void launch_w4a16(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                         torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                         int N, int Klow, int Khigh, int devid, cudaStream_t stream) {
+  int blocks = (N + WARPS - 1) / WARPS;
+  size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
+  static size_t attr_smem[33] = {0};
+  if (smem > 48 * 1024 && smem > attr_smem[WARPS]) {
+    CUDA_CHECK(cudaSetDevice(devid));
+    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a16<WARPS, AT>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
+    int maxs = 0;
+    cudaDeviceGetAttribute(&maxs, cudaDevAttrMaxSharedMemoryPerBlockOptin, devid);
+    TORCH_CHECK((size_t)maxs >= smem,
+                "decode_gemv_w4a16: smem ", smem, " B exceeds device opt-in max ", maxs, " B");
+    attr_smem[WARPS] = smem;
+  }
+  gemv_w4a16<WARPS, AT><<<blocks, WARPS * 32, smem, stream>>>(
+      xptr, Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      D.data_ptr<float>(), N, Klow, Khigh);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <typename AT>
+static torch::Tensor dispatch_w4a16(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                    torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                    int N, int Kl, int Kh, int dev, cudaStream_t stream,
+                                    int64_t warps) {
+  switch (warps) {
+    case 4:  launch_w4a16<4>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+    case 8:  launch_w4a16<8>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+    case 16: launch_w4a16<16>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+    case 24: launch_w4a16<24>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+    case 32: launch_w4a16<32>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+    default: launch_w4a16<8>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, dev, stream); break;
+  }
+  return D;
+}
+
+torch::Tensor decode_gemv_w4a16(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
+                                torch::Tensor Whi, torch::Tensor Shi,
+                                int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
+  TORCH_CHECK(x.is_cuda(), "x must be cuda");
+  auto xc = x.reshape({-1}).contiguous();
+  TORCH_CHECK(xc.numel() == Klow + Khigh, "x length must be Klow+Khigh");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({N}, torch::dtype(torch::kFloat32).device(x.device()));
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh, dev = x.get_device();
+  if (xc.scalar_type() == torch::kFloat16)
+    return dispatch_w4a16(reinterpret_cast<const __half*>(xc.data_ptr<at::Half>()),
+                          Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream, warps);
+  if (xc.scalar_type() == torch::kBFloat16)
+    return dispatch_w4a16(reinterpret_cast<const __nv_bfloat16*>(xc.data_ptr<at::BFloat16>()),
+                          Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream, warps);
+  TORCH_CHECK(xc.scalar_type() == torch::kFloat32, "x must be fp16/bf16/fp32");
+  return dispatch_w4a16(xc.data_ptr<float>(), Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, dev, stream, warps);
+}
+
 torch::Tensor decode_gemv_fused(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
                                 torch::Tensor Whi, torch::Tensor Shi,
                                 int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
@@ -543,6 +666,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("decode_gemv_fused", &decode_gemv_fused,
         "SINGLE-LAUNCH W4A4 decode GEMV: quant activation (raw x) + weight-stream GEMV "
         "(round-3: tunable rows/block via warps in {4,8,16,24,32})",
+        pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 8);
+  m.def("decode_gemv_w4a16", &decode_gemv_w4a16,
+        "WEIGHT-ONLY W4A16 decode GEMV (round-12): dequant packed 4/8-bit weights "
+        "in-register, dot against the EXACT fp16/bf16/fp32 activation (no activation "
+        "quantize). Single launch, tunable rows/block via warps in {4,8,16,24,32}",
         pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),

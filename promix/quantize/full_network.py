@@ -80,6 +80,12 @@ class FakeMixedLinear(nn.Module):
     in `out_dtype`. Numerically identical to MixedQuantLinear up to GEMM
     accumulation order."""
 
+    # round-12: class-level toggle for the W4A16 PPL A/B. When ACT_EXACT is True
+    # the activation is NOT fake-quantized (kept exact fp32) — the algorithm-level
+    # equivalent of the W4A16 decode kernel (exact activation, quantized weight).
+    # Default False reproduces the shipped W4A4 fake twin.
+    ACT_EXACT = False
+
     def __init__(self, W_deq, K_low, bias=None, out_dtype=torch.float16):
         super().__init__()
         self.K = W_deq.shape[1]
@@ -92,9 +98,12 @@ class FakeMixedLinear(nn.Module):
     def forward(self, x):
         in_shape = x.shape
         x2d = x.reshape(-1, in_shape[-1]).float()
-        xq_lo = fake_quantize_nvfp4(x2d[:, :self.K_low])
-        xq_hi = fake_quantize_mxfp8(x2d[:, self.K_low:])
-        xq = torch.cat([xq_lo, xq_hi], dim=-1)
+        if FakeMixedLinear.ACT_EXACT:
+            xq = x2d                                  # W4A16: exact activation
+        else:
+            xq_lo = fake_quantize_nvfp4(x2d[:, :self.K_low])
+            xq_hi = fake_quantize_mxfp8(x2d[:, self.K_low:])
+            xq = torch.cat([xq_lo, xq_hi], dim=-1)
         D = (xq @ self.W_deq.t()).to(self.out_dtype)
         if self.bias is not None:
             D = D + self.bias.to(D.dtype)

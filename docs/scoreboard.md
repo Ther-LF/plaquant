@@ -48,6 +48,7 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 | vLLM FP8 W8A8 | 1.31 / — / — | 1.23 / — / — | 1.40 / — / — |
 | **ProMix SHIPPED (round-4, act-MSE 开)** | **1.25 / 1.34 / 1.29×**(M8192;M2048 1.17/1.35/1.27) | **0.73 / 0.85 / 1.06×** | **0.70 / 0.82 / 1.01×** |
 | **ProMix + round-7 QKV/gate-up decode MERGE** | (prefill 不变;merge 伤 prefill 0.81–0.92×) | **0.85 / 0.96 / 1.23×** | **0.79 / 0.94 / 1.07×** |
+| **ProMix + round-12 W4A16 decode (M=1 weight-only, merged;新 decode 默认)** | (prefill 不变,仍 W4A4) | **1.09 / 1.28 / 1.45×** | 1.39 / 0.98 / 1.16×(b8 不变:M=8 走 GEMM) |
 
 (prefill/decode 均 graphed-vs-graphed,idle GPU,一卡一任务。round-4:act-MSE 现默认**开**且便宜(生产端 1.06–1.10×)。真·A/B(act-MSE 开 vs 关,同环境):1B/3B prefill+decode **开==关**(免费);8B prefill 仅 −0.03×(graph 1.29 vs 关 1.31),decode 不变——对比 round-3 旧搜索把 8B prefill 砸到 0.78×、decode-b8 到 0.80×。即:**精度最大与性能最大现为同一 operating point**。prefill cos 1.0000005–1.0000014,decode M=1 位精确保持。)
 
@@ -61,6 +62,8 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 **Task-2 FP8-KV 接入 graphed decode(e4m3 per-vector,写时量化、读时反量化 FP16 attention):显存 1.94×(1B)/1.97×(3B/8B);PPL Δ +0.058(1B opt-in)/+0.015(3B)/+0.012(8B)。decode 速度 0.90–0.99×(略慢)——FP16 attention 读回 fp16,无带宽收益 → FP8-KV 是显存/容量杠杆,非 decode 加速杠杆(要加速需 fp8-native attention)。**
 
 **判定(round-10,FP16 non-GEMM stack 攻坚):per-op profile(同 shape、同进程、median-of-50)定位到非-GEMM 差距几乎全在 RMSNorm+RoPE,attention 是平手(SDPA≈FlashAttention,8B 1.05×)。8B@M8192 model-level:RMSNorm ours 51.3ms vs vLLM 3.1ms(16.5×)、RoPE 17.3 vs 5.6ms(3.1×)、attn 59.7 vs 56.6ms。两个 Triton 融合 kernel(fused RMSNorm drop-in + fused RoPE)都过 PPL 门:RMSNorm 3B Δ+0.0032/8B −0.0062,norm+rope 3B +0.0062/8B −0.0100。prefill@M8192 ×our-FP16:3B 1.16→1.38、8B 1.28→1.52;×vLLM-BF16(forward-only,保守)3B 0.94→1.11、8B 1.05→1.25——从低于 BF16 翻到明确超过。另发现一个免费 TTFT 杠杆:我们 prefill 算全 [M,V] logits(8B lm_head 21.4ms)而 vLLM TTFT 只算末 token(0.7ms),切片(HF logits_to_keep=1)可省 16–21ms → 投影 8B ≈1.34× / 3B ≈1.23× vLLM-BF16(未接线)。fp16 Hadamard 已设为默认(PROMIX_HAD_MODE=fp16)。残余对 NVFP4 的差距不再是 FP16 stack(已追平/超过 vLLM),而是两段式 mixed-GEMM 结构 + down-Hadamard 税。**
+
+**判定(round-12,DECODE 相位自适应 = W4A16):设计级修复——decode(M=1)带宽/延迟受限,量化激活(W4A4)不占张量核、买不到吞吐,只多一遍 pass 且丢精度。新 `decode_gemv_w4a16`(体同 W4A4 GEMV,但不量化激活、仅在寄存器反量化 4/8-bit 权重,像 Marlin;权重 HBM 字节与 W4A4 完全相同),挂 `PROMIX_DECODE_MODE=w4a16|w4a4`(默认 w4a16),prefill 不动仍 W4A4。门全过:逐 shape kernel cos≥0.9999998(含 8B K=14336 smem-opt-in);graph==eager argmax 100%/cos 0.99999;全模型 W4A16-vs-exact 比 shipped W4A4-vs-自身 quant twin 更忠实(1B 0.978>0.889、3B 0.977>0.955)。精度(fake A/B,GPTQ 冻结 scale,wikitext-2):W4A16 关激活量化免费回收 PPL **1B 14.58→13.66(−0.918)、3B 8.29→7.97(−0.318)、8B 6.59→6.31(−0.284)**,逼近 BF16、超 GPTQ/AWQ 纯 W4A16 基线(但我们 4.97 bit vs 其 4.0,非同 bit)。decode b1 ×FP16-graph(graphed/median/同基线/merged)**1B/3B/8B=1.09/1.28/1.45×**(W4A4 0.85/0.96/1.17;首次 1B/3B b1 过 1.0),加速来自去掉每 token 激活量化那一遍(1B merged 4.22→3.27ms,权重流量不变)。merge 仍保留(量化去重理由消失但 7→4 launch 在 M=1 仍赢:1B 1.024→1.094、3B 1.172→1.276、8B 1.376→1.450)。b8 不变(M=8 走 prefill GEMM,非 M=1 GEMV)。仍落后 Marlin b1(1.55/1.75/2.53):残因 =(1)bit/weight 4.97 vs 4.0 +24% 权重带宽(ResQ 1/8 MXFP8 高精段,结构性);(2)M=1 launch/occupancy floor(1B 仍 ~8× 离权重-BW 天花板);(3)FP16 attention/norm Amdahl(~45% decode);(4)GEMV layout 不如 Marlin 交错-fp16。**
 
 ### 轴 2 协议对齐表(round-9,TTFT ms @M8192,b1,空闲 GPU;口径见下)
 

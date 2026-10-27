@@ -59,7 +59,7 @@ from promix.eval.ptq import (
     load_config, prepare_ptq_model, init_distributed_for_ptq_main_if_needed,
 )
 from promix.quantize import full_network as fn
-from promix.quantize.mixed_linear import MixedQuantLinear
+from promix.quantize.mixed_linear import MixedQuantLinear, decode_mode
 from promix.eval.full_network_realkernel import (
     load_kernels, _build_fp16_model, HIGH_FRACTION, cosine,
 )
@@ -128,10 +128,16 @@ class MergedQuantLinear(torch.nn.Module):
         x2d = x.reshape(-1, in_shape[-1])
         M = x2d.shape[0]
         if self._dg is not None and M == 1:
-            D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
-                                           self.W_hi_dec, self.S_hi_dec,
-                                           self.N, self.K_low, self.K_high,
-                                           self._dec_warps)
+            if decode_mode() == "w4a4":
+                D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
+                                               self.W_hi_dec, self.S_hi_dec,
+                                               self.N, self.K_low, self.K_high,
+                                               self._dec_warps)
+            else:
+                D = self._dg.decode_gemv_w4a16(x2d, self.W_lo_dec, self.S_lo_dec,
+                                               self.W_hi_dec, self.S_hi_dec,
+                                               self.N, self.K_low, self.K_high,
+                                               self._dec_warps)
             D = D.unsqueeze(0).to(torch.float16)
             return D.reshape(*in_shape[:-1], self.N)
         if self.prefill_merge_ok:

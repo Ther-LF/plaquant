@@ -32,6 +32,16 @@ import torch.nn as nn
 from promix.quantize.weight_pack import pack_weight_mixed, split_k, quantize_nvfp4_spec, quantize_mxfp8_spec
 from promix.quantize.quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
 
+import os
+
+# round-12 phase-adaptive decode: at M=1 the GEMV is bandwidth/latency-bound, so
+# quantizing the activation (W4A4) buys no tensor-core throughput and only adds a
+# pass + accuracy loss. "w4a16" (default) keeps the activation EXACT and dequantizes
+# only the packed weights in-register; "w4a4" is the legacy quantize+pack decode.
+# Prefill (M>1, compute-bound, tensor cores) is UNAFFECTED — it always runs W4A4.
+def decode_mode():
+    return os.environ.get("PROMIX_DECODE_MODE", "w4a16").strip().lower()
+
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
@@ -125,14 +135,24 @@ class MixedQuantLinear(nn.Module):
                    cd_bias=cd_bias, arn=arn, hpk28=hpk28, had28=had28)
 
     def _decode_gemv(self, x2d):
-        """Memory-bound SINGLE-LAUNCH W4A4 M=1 path: one kernel quantizes the
-        (tiny) activation to the spec grid (bit-exact to fake_quantize_*) and
-        streams the packed 4-bit/8-bit weights at HBM BW. Bit-faithful to the
-        fused kernel (same dequantized weight, FP32 accumulate)."""
-        D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
-                                       self.W_hi_dec, self.S_hi_dec,
-                                       self.N, self.K_low, self.K_high,
-                                       self._dec_warps)
+        """Memory-bound M=1 decode path. Two modes (PROMIX_DECODE_MODE):
+          * "w4a16" (default): WEIGHT-ONLY — stream the packed 4/8-bit weights at
+            HBM BW, dequant in-register, dot against the EXACT fp16 activation. No
+            activation quantize (decode is bandwidth-bound, not compute-bound).
+          * "w4a4": legacy SINGLE-LAUNCH quant-activation + weight-stream GEMV.
+        Both stream identical weight bytes; both are bit-faithful to the fused path
+        (same dequantized weight, FP32 accumulate). w4a16 additionally keeps the
+        activation exact, so it is strictly more accurate at decode."""
+        if decode_mode() == "w4a4":
+            D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
+                                           self.W_hi_dec, self.S_hi_dec,
+                                           self.N, self.K_low, self.K_high,
+                                           self._dec_warps)
+        else:
+            D = self._dg.decode_gemv_w4a16(x2d, self.W_lo_dec, self.S_lo_dec,
+                                           self.W_hi_dec, self.S_hi_dec,
+                                           self.N, self.K_low, self.K_high,
+                                           self._dec_warps)
         return D.unsqueeze(0)      # (1, N)
 
     def _pack_activation(self, x2d):
