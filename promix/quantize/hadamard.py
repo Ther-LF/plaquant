@@ -37,7 +37,7 @@ def get_hadK(n, transpose=False):
     raise ValueError(f"Cannot find Hadamard decomposition for n={n}")
 
 
-def matmul_hadU_cuda(X, had_K, K, fold_scale=False):
+def matmul_hadU_cuda(X, had_K, K, fold_scale=False, kmat_fp32=False):
     """Apply Hadamard rotation: X @ kron(had_K, H) / sqrt(n).
 
     The 1/sqrt(n) normalization is a constant that commutes with both the
@@ -48,6 +48,14 @@ def matmul_hadU_cuda(X, had_K, K, fold_scale=False):
     vs divide, <=1 ULP). Default ``False`` keeps every offline caller
     (rotation.py weight prep, etc.) byte-identical to the pre-fold path; only
     the hot online down_proj activation path opts in.
+
+    ``kmat_fp32`` (round-9 Task-3 mixed-precision Hadamard): for non-power-of-2
+    widths (K != 1, e.g. 8B down_proj I=14336 -> K=28) the fast WHT butterfly
+    runs in the input dtype (fp16/bf16, which the fast_hadamard_transform kernel
+    accumulates in fp32 internally) but the small ``had_K`` K×K matmul is done in
+    FP32 and cast back. This keeps the full-tensor cost at fp16 bandwidth while
+    giving the only non-WHT matmul an fp32-accumulate — the "fp16 butterfly with
+    fp32 accumulate" variant. No effect when K == 1 (pure WHT).
     """
     n = X.shape[-1]
     scale = (1.0 / math.sqrt(n)) if fold_scale else 1.0
@@ -58,6 +66,10 @@ def matmul_hadU_cuda(X, had_K, K, fold_scale=False):
     input = HadamardTransform.apply(input.contiguous(), scale)
     if not fold_scale:
         input = input / torch.tensor(n).sqrt()
+    if kmat_fp32:
+        out = (had_K.to(input.device).to(torch.float32)
+               @ input.to(torch.float32)).to(X.dtype)
+        return out.reshape(X.shape)
     input = had_K.to(input.device).to(input.dtype) @ input
     return input.reshape(X.shape)
 

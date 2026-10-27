@@ -425,8 +425,17 @@ class ActQuantWrapper(nn.Module):
                 # fp32 and this removes a full-tensor copy per down_proj.
                 x = xf if self.had_out_fp32 else xf.to(x_dtype)
             else:
-                x = matmul_hadU_cuda(x, self.had_K, self.K,
-                                     fold_scale=self.fold_had_scale)
+                # round-9 Task-3: low-precision online Hadamard. `had_mixed`
+                # runs the fp16/bf16 WHT butterfly but the small K×K had_K
+                # matmul in fp32 (fp32-accumulate variant); `had_dtype` optionally
+                # forces the butterfly dtype (e.g. bfloat16). Plain else = full
+                # fp16 Hadamard. PPL-gated, not bit-identical.
+                had_dtype = getattr(self, "had_dtype", None)
+                xin = x if had_dtype is None else x.to(had_dtype)
+                xo = matmul_hadU_cuda(xin, self.had_K, self.K,
+                                      fold_scale=self.fold_had_scale,
+                                      kmat_fp32=getattr(self, "had_mixed", False))
+                x = xo.to(x_dtype)
 
         order = col_order if col_order is not None else getattr(self, '_column_order', None)
         if order is not None and self.reorder_before_quant:

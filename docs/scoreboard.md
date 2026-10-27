@@ -41,6 +41,23 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 
 **判定(round-7):decode QKV+gate/up 融合(每层 7→4 launch,共享激活只量化一次)实测 1.16–1.22× decode 加速,b1 位精确(max|Δ|=0.0),b8/prefill 路径 +0.022 PPL。新 decode b1 1B/3B/8B=0.85/0.96/1.23×(8B 过 1.0,3B 近 1.0),b8=0.79/0.94/1.07×。此杠杆只对 decode(launch-bound)有效,prefill(compute-bound)被它拖慢 0.81–0.92× → decode 专用。prefill M=8192 stage-profile:3B 混合 GEMM 对 Linear 已 ~1.36×,NVFP4 2.21× 的差距是 FP16 attention(23%)+RMSNorm(13.6%)+RoPE/lm_head 的 Amdahl + 两段式混合 GEMM 结构性低于单段 NVFP4;8B 最大桶是 down_proj FP32 Hadamard(87ms/21.6%),已建的 bit-identical hpk28 融合 producer 实测无增益(occupancy-bound 1 CTA/SM)→ prefill 本轮无免费赢,加速比不变。**
 
+**判定(round-9,口径修正 + Hadamard 赢):同协议(同权重/同 prompt 长/b1/空闲 GPU)实测四路 TTFT。此前的 prefill "1.14–1.35× vs FP16" 是对我们自己的 HF-FP16 graphed forward,而那个基线只有 vLLM BF16 的 0.80–0.93× 快。归一到同一强基线(vLLM BF16)后:我们 real-kernel prefill @8192 = 0.85/0.85/0.92×(低于 BF16),vLLM NVFP4 = 1.72/1.81/2.19×。与 round-8 "GEMM 胜 1.37×" 不矛盾:全模型差距 = 我们未优化的 FP16 attention/RMSNorm/RoPE/lm_head(Amdahl,~45%)+ W4A4 down-Hadamard 税,GEMM 本身是盈余。**
+**Task-3 修复:FP32 online Hadamard 是多余的 `.float()` 上采样——fast-WHT 跑 fp16 数值位同(cos=1.000000)且 ~3× 快。8B down-Hadamard 92.8→31.5ms(−66%),全模型 8B prefill 421→370ms(−12.1%,此时已快过 vLLM BF16 388.8ms),8B prefill ×FP16 1.14→1.29×;3B 位同(PPL 不变 8.6816)36.3→10.7ms,prefill 1.05→1.17×。PPL 门过(隔离 twin Δ=−0.0005 8B / +0.0055 3B,<0.01;3B pow2 位同)。`mixed`(fp32 K-matmul)与纯 fp16 PPL 完全一致 → 纯 fp16 即可,radix-4 fp32 无必要。ship `PROMIX_HAD_MODE=fp16`。**
+**Task-2 FP8-KV 接入 graphed decode(e4m3 per-vector,写时量化、读时反量化 FP16 attention):显存 1.94×(1B)/1.97×(3B/8B);PPL Δ +0.058(1B opt-in)/+0.015(3B)/+0.012(8B)。decode 速度 0.90–0.99×(略慢)——FP16 attention 读回 fp16,无带宽收益 → FP8-KV 是显存/容量杠杆,非 decode 加速杠杆(要加速需 fp8-native attention)。**
+
+### 轴 2 协议对齐表(round-9,TTFT ms @M8192,b1,空闲 GPU;口径见下)
+
+| 口径 | 1B | 3B | 8B |
+|---|---|---|---|
+| our FP16(forward-only,graphed,无调度/采样) | 84.95 | 229.14 | 482.83 |
+| our real-kernel(forward-only,fp32-had) | 92.98 | 217.63 | 422.11 |
+| **our real-kernel(fp16-had,round-9 ship)** | — | **197.5** | **370.3** |
+| vLLM BF16(TTFT=调度+prefill+采样1 token) | 78.6 | 183.9 | 388.8 |
+| vLLM NVFP4(同 vLLM TTFT) | 45.7 | 101.5 | 177.9 |
+
+归一到同一强基线 vLLM BF16(×BF16):our real-kernel(fp16-had)= 0.85/0.93/**1.05×**;vLLM NVFP4 = 1.72/1.81/2.19×。**警告:our 为纯 forward(不含 vLLM 的调度+采样),对我们偏乐观,故"低于 BF16"是保守结论。**
+
+
 ## loop 规则(KDA 式,controller 串行调度)
 
 1. **每轮只动一条轴的一个杠杆**(算法或性能),先做数值门,再做测量,再提交;

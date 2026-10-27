@@ -371,7 +371,21 @@ def prepare_ptq_model(config, dev, *, run_gptq=True):
 
 
 def setup_down_proj_hadamard(model):
-    """Set online Hadamard rotation for down_proj layers."""
+    """Set online Hadamard rotation for down_proj layers.
+
+    PROMIX_HAD_MODE (round-9 Task-3) selects the online-Hadamard precision on
+    down_proj, default ``fp32`` (shipped, byte-identical):
+      fp32       : x.float() WHT + fp32 K-matmul (shipped)
+      fp16       : fp16 WHT + fp16 K-matmul
+      mixed      : fp16 WHT + fp32 K-matmul (fp32-accumulate butterfly)
+      bf16       : bf16 WHT + bf16 K-matmul
+      bf16mixed  : bf16 WHT + fp32 K-matmul
+    """
+    import torch as _torch
+    mode = os.environ.get("PROMIX_HAD_MODE", "fp32").lower()
+    fp32 = (mode == "fp32")
+    mixed = mode in ("mixed", "bf16mixed")
+    had_dtype = (_torch.bfloat16 if mode in ("bf16", "bf16mixed") else None)
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     for name in qlayers:
         if "down_proj" in name:
@@ -379,7 +393,9 @@ def setup_down_proj_hadamard(model):
             qlayers[name].online_full_had = True
             qlayers[name].had_K = had_K
             qlayers[name].K = K
-            qlayers[name].fp32_had = True
+            qlayers[name].fp32_had = fp32
+            qlayers[name].had_mixed = mixed
+            qlayers[name].had_dtype = had_dtype
 
 
 def main():
