@@ -73,6 +73,10 @@ class MixedQuantLinear(nn.Module):
         self.K_low = packed.K_low
         self.K_high = packed.K_high
         self.out_dtype = out_dtype
+        # Round-6 two-level weight global (per-tensor FP32, pow2-or-arbitrary):
+        # carried on the fused-GEMM epilogue alpha so D = g*(A@B). 1.0 = single-level.
+        # The decode-GEMV path folds g into its FP32 scales (S_*_dec) instead.
+        self.g_w = float(getattr(packed, "g_w", 1.0))
         # packed buffers (registered so .to(device) moves them)
         self.register_buffer("W_lo_packed", packed.W_lo_packed)
         self.register_buffer("physSFB_lo", packed.physSFB_lo)
@@ -167,11 +171,11 @@ class MixedQuantLinear(nn.Module):
             return self._cd_bias.fused_gemm_prepacked_bias(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                self.bias, M, self.N, self.K_low, self.K_high)
+                self.bias, M, self.N, self.K_low, self.K_high, self.g_w)
         D = self._cd.fused_gemm_prepacked(
             A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
             A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-            M, self.N, self.K_low, self.K_high,
+            M, self.N, self.K_low, self.K_high, self.g_w,
         )
         D = D.to(self.out_dtype)
         if self.bias is not None:

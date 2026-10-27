@@ -9,17 +9,19 @@
 |---|---|---|---|---|
 | BF16(FP16 参照) | 16 | 13.16 | 7.82 | 6.14 |
 | **vLLM NVFP4 W4A4** | **≈4.25** | 15.65 | 8.63 | 6.87 |
-| **ProMix W4A4 — SHIPPED(r=1/8, act-MSE快+weight-A2)** | **4.97** | 14.76* | **8.376** | **6.713** |
-| ProMix W4A4 r=1/16 精度最大 | 4.73 | 14.83* | **8.463** | — |
+| **ProMix W4A4 — SHIPPED(r=1/8, act-MSE快+weight两级scale)** | **4.97** | 14.76* | **8.296** | **6.599** |
+| ProMix W4A4 r=1/16(两级 weight scale) | 4.73 | — | **8.361** | — |
+| ProMix W4A4 r=0(两级 weight scale, 4.5b) | 4.50 | — | 8.859 | — |
+| ProMix W4A4 r=1/8(单级 weight-A2, round-4 旧) | 4.97 | 14.76 | 8.376 | 6.713 |
 | GPTQ W4A16 | 4.0 | 14.22 | 8.20 | 6.52 |
 | AWQ W4A16 | 4.0 | 14.53 | ~8.35 | 6.59 |
 | FP8 W8A8 | 8.0 | 13.30 | — | — |
 
-\* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。
-SHIPPED = round-4 真·kernel,**act-MSE 现默认开**(round-4 做成便宜生产端:fused producer 2.1×→**1.10×**、纯 pack 3.3×→**1.06×**,<1.15× 门;PPL 与 round-3 真除法搜索逐位相同)+ weight-A2(1B 关:+0.08;3B/8B 开)+ hadamard28 + decode-v5。
-act-MSE off 基线(weight-A2 only):3B 8.545、8B 6.809;act-MSE 再降 3B −0.17、8B −0.10。
+\* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。1B base 模型本轮离线不可用,两级 scale 1B 暂 gate 关(`PROMIX_WEIGHT_2LEVEL=0`,与 weight-A2 的 1B 关一致)。
+SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tensor FP32 global g × per-block E4M3/E8M0 micro,NEAREST+micro-MSE)**。g 搭在 fused-GEMM epilogue 的 alpha 上(零 GEMM 代价,epilogue 本就乘 alpha);decode 把 g 折进 FP32 scale。
+**round-6:两级 scale 相比单级 weight-A2:3B r=1/8 −0.08(真·kernel 8.2955,fake 8.293;与 round-5 fake 8.297 差 0.0015)、3B r=1/16 −0.10、8B r=1/8 −0.11、3B r=0 −0.18。real-vs-twin gate |Δ|=0.0095≤0.1、per-layer cos 0.999998。**
 
-**判定(round-4):act-MSE 便宜化后,精度最大即 SHIPPED——在 W4A4 绝对 PPL 上超过 NVFP4(3B 8.38<8.63、8B 6.71<6.87),但多花 0.72 bit,精度/bit 仍不压 NVFP4。**
+**判定(round-6):两级 weight scale 现可部署且零运行代价——在 W4A4 绝对 PPL 上 r=1/8 以 8.296(3B)/6.599(8B)明显超过 NVFP4(8.63/6.87,−0.33/−0.27),r=1/16 8.361 亦超;但 matched-bit(r=0 4.5b vs NVFP4 4.25b)3B 8.859>8.63(+0.23),仍多花 0.25 bit,精度/bit 未压 NVFP4。**
 
 ## 轴 2:性能(统一为"对同 stack FP16/BF16 的加速比")
 

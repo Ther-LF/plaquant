@@ -190,7 +190,7 @@ def select_block_scales_nvfp4_2level(W, block_size=16):
 # the two-level frame). global_scale = amax / (448*6) per the reference recipe.
 # ---------------------------------------------------------------------------
 def _weight_2level_scales(W, block_size=16, per="tensor", rounding="nearest",
-                          mse=False, mse_steps=3):
+                          mse=False, mse_steps=3, pow2=False):
     Wf = W.to(torch.float32)
     *p, k = Wf.shape
     nb = k // block_size
@@ -204,6 +204,15 @@ def _weight_2level_scales(W, block_size=16, per="tensor", rounding="nearest",
     else:
         raise ValueError(per)
     gs = (gamax / (_E4M3_MAX * qu.FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
+    if pow2:
+        # DEPLOYABLE global: round the per-tensor global UP to a power of 2 so a
+        # single epilogue-alpha scalar can carry it across BOTH the NVFP4 low and
+        # the MXFP8 high phases of the fused kernel (the high E8M0 micro = eff_hi/g
+        # stays exactly on grid iff g is pow2 -> high stays bit-identical to the
+        # stock single-level MXFP8). Ceil keeps the low micro <= E4M3_MAX. The
+        # fake-path high segment is UNPATCHED (stock single-level) == g*e8m0(eff/g)
+        # with pow2 g, so only the low segment moves vs the arbitrary-g round-5.
+        gs = qu._e8m0_round_up(gs)
     micro_ideal = (bmax / qu.FP4_E2M1_MAX) / gs                   # (..., nb)
     if rounding == "ceil":
         micro = qu._ceil_to_value(micro_ideal.clamp_min(2.0 ** -9), e4)
@@ -227,10 +236,74 @@ def _weight_2level_scales(W, block_size=16, per="tensor", rounding="nearest",
     return best.squeeze(-1)
 
 
-def make_weight_2level(per, rounding, mse):
+def make_weight_2level(per, rounding, mse, pow2=False):
     def nv_w2l(W, block_size=16):
-        return _weight_2level_scales(W, block_size, per=per, rounding=rounding, mse=mse)
+        return _weight_2level_scales(W, block_size, per=per, rounding=rounding,
+                                     mse=mse, pow2=pow2)
     return nv_w2l
+
+
+# Round-6 variant B: the SAME per-tensor global g rides BOTH the NVFP4 low and the
+# MXFP8 high phase of the fused kernel (one epilogue-alpha scalar). g is derived
+# from the LOW segment (amax_low/(448*6)); the high MXFP8 micro = e8m0(ideal_hi/g)
+# stays a power of 2 (E8M0-exact) for ANY g, so the global can be ARBITRARY FP32
+# (keeping the low segment bit-identical to round-5's arbitrary-g two-level) while
+# still being deployable. GPTQ processes the low (nvfp4) quantizer before the high
+# (mxfp8) one per Linear, so nv_w2l stashes g and mx_w2l_high reads it.
+_SHARED_G = {}
+
+
+def make_weight_2level_sharedg(rounding, mse, pow2=False):
+    def _g_for(W):
+        gamax = W.to(torch.float32).abs().amax()
+        gs = (gamax / (_E4M3_MAX * qu.FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
+        return qu._e8m0_round_up(gs) if pow2 else gs
+
+    def nv_w2l(W, block_size=16):
+        g = _g_for(W)
+        _SHARED_G["g"] = g
+        Wf = W.to(torch.float32)
+        *p, k = Wf.shape
+        nb = k // block_size
+        Wblk = Wf.reshape(*p, nb, block_size)
+        bmax = Wblk.abs().amax(-1)
+        e4 = torch.tensor(qu._FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
+        micro_ideal = (bmax / qu.FP4_E2M1_MAX) / g
+        if rounding == "ceil":
+            micro = qu._ceil_to_value(micro_ideal.clamp_min(2.0 ** -9), e4)
+        else:
+            micro = qu._round_to_nearest_value(micro_ideal, e4).abs()
+            micro = torch.clamp(micro, min=float(e4[1]))
+        if not mse:
+            return micro * g
+        fp4 = torch.tensor(qu.FP4_E2M1_POS, device=Wf.device, dtype=torch.float32)
+        cur = micro
+        cands = [cur]
+        for _ in range(3):
+            cur = _next_lower_grid(cur, e4)
+            cands.append(cur)
+        eff_cands = [(c * g).unsqueeze(-1) for c in cands]
+        return _mse_best(Wblk, eff_cands, qu.FP4_E2M1_MAX, fp4).squeeze(-1)
+
+    def mx_w2l_high(W, block_size=32):
+        # two-level MXFP8 high: micro = e8m0(ideal_hi / g) (power of 2), eff = g*micro.
+        # weight-A2 (base/2, base/4) still applies inside the frame.
+        g = _SHARED_G.get("g")
+        Wf = W.to(torch.float32)
+        *p, k = Wf.shape
+        nb = k // block_size
+        Wblk = Wf.reshape(*p, nb, block_size)
+        bmax = Wblk.abs().amax(-1).clamp_min(0.0)
+        ideal = (bmax / qu.FP8_E4M3_MAX) / g
+        micro = qu._e8m0_round_up(ideal.clamp_min(2.0 ** -127))
+        if not mse:
+            return micro * g
+        e4 = torch.tensor(qu._FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
+        mk = micro.unsqueeze(-1)
+        eff_cands = [(mk * g), (mk / 2.0 * g), (mk / 4.0 * g)]
+        return _mse_best(Wblk, eff_cands, qu.FP8_E4M3_MAX, e4).squeeze(-1)
+
+    return nv_w2l, mx_w2l_high
 
 
 # ---------------------------------------------------------------------------
@@ -514,11 +587,20 @@ def build_model(config, args):
     # activation quantizer uses fake_quantize_nvfp4, not select_block_scales).
     w2l_restore = None
     if args.weight_2level != "none":
-        w2l_restore = qu.select_block_scales_nvfp4
-        qu.select_block_scales_nvfp4 = make_weight_2level(
-            args.weight_2level, args.w2l_round, args.w2l_mse)
-        print(f"[weight_2level] per={args.weight_2level} round={args.w2l_round} "
-              f"mse={args.w2l_mse} (weight scale only)", flush=True)
+        if args.w2l_high:
+            # Variant B: shared global across BOTH NVFP4 low + MXFP8 high phases.
+            w2l_restore = (qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8)
+            nvf, mxf = make_weight_2level_sharedg(args.w2l_round, args.w2l_mse, pow2=args.w2l_pow2)
+            qu.select_block_scales_nvfp4 = nvf
+            qu.select_block_scales_mxfp8 = mxf
+            print(f"[weight_2level] sharedg round={args.w2l_round} mse={args.w2l_mse} "
+                  f"pow2={args.w2l_pow2} (low NVFP4 + high MXFP8, one epilogue global)", flush=True)
+        else:
+            w2l_restore = qu.select_block_scales_nvfp4
+            qu.select_block_scales_nvfp4 = make_weight_2level(
+                args.weight_2level, args.w2l_round, args.w2l_mse, pow2=args.w2l_pow2)
+            print(f"[weight_2level] per={args.weight_2level} round={args.w2l_round} "
+                  f"mse={args.w2l_mse} pow2={args.w2l_pow2} (weight scale only)", flush=True)
 
     try:
         if args.rtn:
@@ -531,7 +613,10 @@ def build_model(config, args):
         if a2_restore is not None:
             qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8 = a2_restore
         if w2l_restore is not None:
-            qu.select_block_scales_nvfp4 = w2l_restore
+            if isinstance(w2l_restore, tuple):
+                qu.select_block_scales_nvfp4, qu.select_block_scales_mxfp8 = w2l_restore
+            else:
+                qu.select_block_scales_nvfp4 = w2l_restore
 
     ptqmod.configure_quantizers(model, config)
 
@@ -589,6 +674,15 @@ def main():
                     help="E4M3 micro-scale rounding for --weight_2level (nearest = llm-compressor).")
     ap.add_argument("--w2l_mse", action="store_true",
                     help="search lower E4M3 micro steps inside the two-level frame (weight-A2).")
+    ap.add_argument("--w2l_pow2", action="store_true",
+                    help="round-6: round the per-tensor global UP to a power of 2 so a single "
+                         "epilogue-alpha scalar carries it across the NVFP4+MXFP8 fused kernel "
+                         "(the DEPLOYABLE scheme; high MXFP8 stays bit-identical to stock).")
+    ap.add_argument("--w2l_high", action="store_true",
+                    help="round-6 variant B: apply the SAME per-tensor global (derived from the "
+                         "low segment) to the MXFP8 high phase too (two-level high). Deployable "
+                         "with an ARBITRARY FP32 global (high micro=e8m0(ideal/g) stays pow2), so "
+                         "the low segment stays bit-identical to round-5's arbitrary-g two-level.")
     ap.add_argument("--rtn", action="store_true",
                     help="round-5: RTN weights (skip GPTQ error feedback); r=0 only.")
     ap.add_argument("--act_2level", choices=["none", "token", "tensor"], default="none",
@@ -629,7 +723,7 @@ def main():
                 rotation=args.rotation, weights_only=args.weights_only,
                 edriven_signal=args.edriven_signal, nvfp4_2level=args.nvfp4_2level,
                 weight_2level=args.weight_2level, w2l_round=args.w2l_round,
-                w2l_mse=args.w2l_mse, rtn=args.rtn,
+                w2l_mse=args.w2l_mse, w2l_pow2=args.w2l_pow2, w2l_high=args.w2l_high, rtn=args.rtn,
                 act_2level=args.act_2level, a2l_round=args.a2l_round,
                 act_mse=qu.ACT_MSE_SCALE_SEARCH, weight_mse=qu.WEIGHT_MSE_SCALE_SEARCH,
                 tag=args.tag)

@@ -39,7 +39,8 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
                                            torch::Tensor A_hi, torch::Tensor physSFA_hi,
                                            torch::Tensor B_hi, torch::Tensor physSFB_hi,
                                            c10::optional<torch::Tensor> bias_opt,
-                                           int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+                                           int64_t M, int64_t N, int64_t K_lo, int64_t K_hi,
+                                           double alpha = 1.0) {
   TORCH_CHECK(K_lo % 16 == 0 && K_hi % 32 == 0, "K_lo%16, K_hi%32");
   A_lo=A_lo.contiguous(); B_lo=B_lo.contiguous(); A_hi=A_hi.contiguous(); B_hi=B_hi.contiguous();
   physSFA_lo=physSFA_lo.contiguous(); physSFB_lo=physSFB_lo.contiguous();
@@ -74,7 +75,7 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
     using ElementC = typename Epilogue::ElementC;
     using ElementD = typename Epilogue::ElementD;
     typename Epilogue::Arguments epi_args;
-    epi_args.thread.alpha = 1.0f;
+    epi_args.thread.alpha = (float)alpha;
     epi_args.thread.beta = 0.0f;
     epi_args.thread.ptr_bias = reinterpret_cast<cutlass::half_t const*>(bias_t.data_ptr());
     // per-N bias: stride (0, 1) — same as the reference Sm90LinCombPerColBias
@@ -95,6 +96,10 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("fused_gemm_prepacked_bias", &cd_fused_gemm_prepacked_bias,
-        "dual-format fused GEMM, fp16 out, bias + bf16-round + cast folded into the epilogue");
+        "dual-format fused GEMM, fp16 out, bias + bf16-round + cast folded into the epilogue; optional per-tensor epilogue alpha (two-level weight global)",
+        pybind11::arg("A_lo"), pybind11::arg("physSFA_lo"), pybind11::arg("B_lo"), pybind11::arg("physSFB_lo"),
+        pybind11::arg("A_hi"), pybind11::arg("physSFA_hi"), pybind11::arg("B_hi"), pybind11::arg("physSFB_hi"),
+        pybind11::arg("bias"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K_lo"), pybind11::arg("K_hi"),
+        pybind11::arg("alpha") = 1.0);
   m.def("compat_report", &cd_compat_report, "build/smem report");
 }

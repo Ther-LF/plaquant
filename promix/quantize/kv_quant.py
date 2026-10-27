@@ -50,7 +50,7 @@ class WeightQuantizer(nn.Module):
     def ready(self):
         return torch.any(self.scale != 0)
 
-    def find_params(self, x):
+    def find_params(self, x, global_scale=None):
         if self.bits == 16:
             return
         # FP block-scaled formats: compute & freeze the per-row-per-block
@@ -61,15 +61,36 @@ class WeightQuantizer(nn.Module):
         # block alignment). Mark `ready()` True by also setting a non-zero
         # `scale` buffer for legacy callers that only check that.
         if isinstance(self.bits, str):
+            from promix.quantize import quant_utils as _qu
             from promix.quantize.quant_utils import (
                 select_block_scales_mxfp8,
                 select_block_scales_nvfp4,
             )
+            # Round-6 two-level weight scale: stash the per-tensor global `g` so
+            # the offline packer can store micro=eff/g in the SFB and carry `g`
+            # on the fused-GEMM epilogue alpha. The NVFP4 low segment derives `g`;
+            # the MXFP8 high segment reuses it (passed as `global_scale`).
+            self.frozen_global = None
             if self.bits == "mxfp8":
-                self.frozen_scales = select_block_scales_mxfp8(x, block_size=32)
+                if _qu.WEIGHT_TWO_LEVEL and global_scale is not None:
+                    xf = x.to(torch.float32)
+                    *p, k = xf.shape
+                    xb = xf.reshape(*p, k // 32, 32)
+                    self.frozen_scales = _qu._weight_two_level_mxfp8_eff(
+                        xb, xb.abs().amax(-1), global_scale)
+                    self.frozen_global = global_scale
+                else:
+                    self.frozen_scales = select_block_scales_mxfp8(x, block_size=32)
                 self.frozen_block_size = 32
             elif self.bits == "nvfp4":
-                self.frozen_scales = select_block_scales_nvfp4(x, block_size=16)
+                if _qu.WEIGHT_TWO_LEVEL:
+                    xf = x.to(torch.float32)
+                    *p, k = xf.shape
+                    xb = xf.reshape(*p, k // 16, 16)
+                    self.frozen_scales, self.frozen_global = _qu._weight_two_level_nvfp4_eff(
+                        xb, xb.abs().amax(-1))
+                else:
+                    self.frozen_scales = select_block_scales_nvfp4(x, block_size=16)
                 self.frozen_block_size = 16
             else:
                 raise NotImplementedError(

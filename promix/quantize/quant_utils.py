@@ -630,6 +630,69 @@ ACT_MSE_STEPS = int(_os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
 WEIGHT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_WEIGHT_MSE", "1") != "0"  # Win 2 (shipped)
 _MSE_STEPS = 3
 
+# Round-6 (WEIGHT two-level scale, deployable). The NVFP4 weight block scale
+# becomes `g * micro` where `g` is a per-tensor FP32 global (derived from the low
+# segment's amax) and `micro` is the per-16 E4M3 byte stored in the SFB. A SINGLE
+# epilogue-alpha scalar carries `g` across the fused kernel's NVFP4 low AND MXFP8
+# high phases: the MXFP8 high micro = e8m0(ideal_hi/g) stays a power of 2 (E8M0
+# exact) for ANY g, so the high segment is given the SAME two-level global (its
+# effective scale g*e8m0(ideal/g) is strictly finer than stock single-level). This
+# lifts tiny weight-block scales out of E4M3's subnormal range and, with NEAREST
+# micro rounding + per-block micro-MSE, is worth 3B r=1/8 -0.08 / r=0 -0.18 over
+# single-level weight-A2 (docs/round6_twolevel_weights.md). Element codes/deq are
+# UNCHANGED vs passing the effective scale as the frozen scale; only the SFB stores
+# micro=eff/g and the packer returns g for the epilogue. DEFAULT-ON for the sizes
+# where it helps (gated per size like weight-A2). An arbitrary (non-pow2) global is
+# used: it keeps the low segment bit-identical to round-5's arbitrary-g two-level
+# (the pow2 rounding cost +0.016 at r=1/8); the high stays deployable regardless.
+WEIGHT_TWO_LEVEL = _os.environ.get("PROMIX_WEIGHT_2LEVEL", "1") != "0"
+WEIGHT_TWO_LEVEL_POW2 = _os.environ.get("PROMIX_WEIGHT_2LEVEL_POW2", "0") != "0"
+
+
+def _weight_two_level_nvfp4_eff(Wblk, bmax, pow2=None):
+    """NVFP4 two-level effective per-block scale: g (per-tensor) * micro (per-16
+    E4M3). `Wblk`=(..., nb, 16), `bmax`=(..., nb) block absmax. Returns
+    (eff (..., nb), g scalar). NEAREST E4M3 micro + (weight-A2) lower-step micro-MSE
+    when WEIGHT_MSE_SCALE_SEARCH. g = amax/(448*6); pow2 rounds it UP to a power of
+    2 (default off -> arbitrary FP32)."""
+    dev = Wblk.device
+    if pow2 is None:
+        pow2 = WEIGHT_TWO_LEVEL_POW2
+    e4 = torch.tensor(_FP8_E4M3_POS, device=dev, dtype=torch.float32)
+    gamax = Wblk.abs().amax()                                    # per-tensor scalar
+    gs = (gamax / (448.0 * FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
+    g = _e8m0_round_up(gs) if pow2 else gs                       # global (scalar)
+    micro_ideal = (bmax / FP4_E2M1_MAX) / g                      # (..., nb)
+    micro = _round_to_nearest_value(micro_ideal, e4).abs()
+    micro = torch.clamp(micro, min=float(e4[1]))                 # avoid 0 scale
+    if not WEIGHT_MSE_SCALE_SEARCH:
+        return (micro * g), g
+    fp4 = torch.tensor(FP4_E2M1_POS, device=dev, dtype=torch.float32)
+    cur = micro
+    cands = [cur]
+    for _ in range(_MSE_STEPS):
+        cur = _next_lower_grid(cur, e4)
+        cands.append(cur)
+    eff_cands = [(c * g).unsqueeze(-1) for c in cands]           # (..., nb, 1)
+    best = _mse_best_scale(Wblk, eff_cands, FP4_E2M1_MAX, fp4)   # (..., nb, 1)
+    return best.squeeze(-1), g
+
+
+def _weight_two_level_mxfp8_eff(Wblk, bmax, g):
+    """MXFP8 high two-level effective per-block scale sharing the NVFP4 low global
+    `g`: micro = e8m0(ideal_hi / g) (a power of 2, E8M0-exact for ANY g), eff =
+    g*micro. weight-A2 (base/2, base/4 pow2 steps) still applies. `g` lets ONE
+    epilogue-alpha carry the global across both fused-GEMM phases."""
+    dev = Wblk.device
+    ideal = (bmax / FP8_E4M3_MAX / g).clamp_min(2.0 ** -127)
+    micro = _e8m0_round_up(ideal)
+    if not WEIGHT_MSE_SCALE_SEARCH:
+        return micro * g
+    e4 = torch.tensor(_FP8_E4M3_POS, device=dev, dtype=torch.float32)
+    mk = micro.unsqueeze(-1)
+    eff_cands = [(mk * g), (mk / 2.0 * g), (mk / 4.0 * g)]
+    return _mse_best_scale(Wblk, eff_cands, FP8_E4M3_MAX, e4).squeeze(-1)
+
 
 def _next_lower_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     """Per-element, the largest grid value strictly below `sc` (or `sc` itself if
@@ -779,6 +842,13 @@ def select_block_scales_nvfp4(
     num_blocks = k // block_size
     Wf_blk = Wf.reshape(*prefix, num_blocks, block_size)
     block_max = Wf_blk.abs().amax(dim=-1)
+    if WEIGHT_TWO_LEVEL:
+        # Round-6: two-level effective scale (g*micro). Returns the EFFECTIVE
+        # per-block scale; the packer decomposes it into (E4M3 micro in the SFB,
+        # pow2 g on the epilogue). GPTQ freezes/rounds against this effective
+        # scale exactly as it did the single-level one.
+        eff, _g = _weight_two_level_nvfp4_eff(Wf_blk, block_max, pow2=True)
+        return eff
     ideal = (block_max / FP4_E2M1_MAX).clamp_min(2.0 ** -9)
     fp8_e4m3_values = torch.tensor(_FP8_E4M3_POS, device=Wf.device, dtype=torch.float32)
     base = _ceil_to_value(ideal, fp8_e4m3_values)              # (..., nb)

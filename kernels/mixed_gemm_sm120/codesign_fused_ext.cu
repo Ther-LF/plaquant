@@ -519,13 +519,13 @@ static typename Coll::Arguments make_mainloop_args_pre(torch::Tensor A, torch::T
   return m;
 }
 
-static typename Epilogue::Arguments make_epi_args(torch::Tensor D, int Mi, int Ni) {
+static typename Epilogue::Arguments make_epi_args(torch::Tensor D, int Mi, int Ni, float alpha = 1.0f) {
   StrideC sC = cutlass::make_cute_packed_stride(StrideC{}, {Mi, Ni, 1});
   StrideD sD = cutlass::make_cute_packed_stride(StrideD{}, {Mi, Ni, 1});
   using ElementC = typename Epilogue::ElementC;
   using ElementD = typename Epilogue::ElementD;
   return {
-    {1.0f, 0.0f},
+    {alpha, 0.0f},
     reinterpret_cast<ElementC const*>(D.data_ptr()), sC,
     reinterpret_cast<ElementD*>(D.data_ptr()), sD
   };
@@ -564,7 +564,8 @@ static void run_with_cached_ws(Gemm& gemm, typename Gemm::Arguments& arguments,
 // ---- dual GEMM core: takes PRE-INTERLEAVED activation+weight SF, GEMM only ----
 static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
                                   torch::Tensor A_hi, torch::Tensor physSFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
-                                  int Mi, int Ni, int Klo, int Khi, cudaStream_t stream, torch::Device dev) {
+                                  int Mi, int Ni, int Klo, int Khi, cudaStream_t stream, torch::Device dev,
+                                  float alpha = 1.0f) {
   auto D = torch::empty({Mi, Ni}, torch::TensorOptions().dtype(CD_OUT_TORCH_DTYPE).device(dev));
   auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A_lo, physSFA_lo, B_lo, physSFB_lo, Mi, Ni, Klo);
   auto mx_args = make_mainloop_args_pre<ForkMX, BSConfigMX>(A_hi, physSFA_hi, B_hi, physSFB_hi, Mi, Ni, Khi);
@@ -575,7 +576,7 @@ static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, 
   arguments.mainloop_nv = nv_args;
   arguments.mainloop_mx = mx_args;
   arguments.K_high = Khi;
-  arguments.epilogue = make_epi_args(D, Mi, Ni);
+  arguments.epilogue = make_epi_args(D, Mi, Ni, alpha);
 
   static GemmDual gemm;
   static torch::Tensor ws_cache;
@@ -587,7 +588,7 @@ static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, 
 // ---- GEMM-only ceiling: caller supplies already-interleaved activation SF ----
 torch::Tensor cd_fused_gemm_prepacked(torch::Tensor A_lo, torch::Tensor physSFA_lo, torch::Tensor B_lo, torch::Tensor physSFB_lo,
                                       torch::Tensor A_hi, torch::Tensor physSFA_hi, torch::Tensor B_hi, torch::Tensor physSFB_hi,
-                                      int64_t M, int64_t N, int64_t K_lo, int64_t K_hi) {
+                                      int64_t M, int64_t N, int64_t K_lo, int64_t K_hi, double alpha = 1.0) {
   TORCH_CHECK(K_lo % 16 == 0 && K_hi % 32 == 0, "K_lo%16, K_hi%32");
   A_lo=A_lo.contiguous(); B_lo=B_lo.contiguous(); A_hi=A_hi.contiguous(); B_hi=B_hi.contiguous();
   physSFA_lo=physSFA_lo.contiguous(); physSFB_lo=physSFB_lo.contiguous();
@@ -595,7 +596,7 @@ torch::Tensor cd_fused_gemm_prepacked(torch::Tensor A_lo, torch::Tensor physSFA_
   auto dev = A_lo.device();
   auto stream = at::cuda::getCurrentCUDAStream(dev.index());
   return run_dual_pre(A_lo, physSFA_lo, B_lo, physSFB_lo, A_hi, physSFA_hi, B_hi, physSFB_hi,
-                      (int)M, (int)N, (int)K_lo, (int)K_hi, stream, dev);
+                      (int)M, (int)N, (int)K_lo, (int)K_hi, stream, dev, (float)alpha);
 }
 
 // ---- realistic per-call: efficient internal activation-SF interleave + cached dual GEMM ----
@@ -630,7 +631,7 @@ torch::Tensor cd_fused_gemm_slow(torch::Tensor A_lo, torch::Tensor SFA_lo, torch
 // ---- Single-phase NVFP4 through the FORKED glue (Milestone-A gate) ----
 torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
                                    torch::Tensor B, torch::Tensor physSFB,
-                                   int64_t M, int64_t N, int64_t K) {
+                                   int64_t M, int64_t N, int64_t K, double alpha = 1.0) {
   TORCH_CHECK(K % 16 == 0, "K%16");
   A = A.contiguous(); B = B.contiguous(); SFA = SFA.contiguous(); physSFB = physSFB.contiguous();
   auto dev = A.device();
@@ -646,7 +647,7 @@ torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
   arguments.problem_shape = {Mi, Ni, Ki, 1};
   arguments.mainloop_nv = nv_args;
   arguments.K_high = 0;
-  arguments.epilogue = make_epi_args(D, Mi, Ni);
+  arguments.epilogue = make_epi_args(D, Mi, Ni, (float)alpha);
 
   static GemmSingle gemm;
   static torch::Tensor ws_cache;
@@ -681,10 +682,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("codes"), pybind11::arg("SFA"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("ilv"), pybind11::arg("impl") = 1);
   m.def("quant_pack_fp8", &cd_quant_pack_fp8, "round-18/21 fused pack: MXFP8 byte copy + SF layout (ilv=interleaved atom / natural; impl=1 vectorized default, 0 scalar-ref); returns {bytes, SF}",
         pybind11::arg("bytes"), pybind11::arg("SFA"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("ilv"), pybind11::arg("impl") = 1);
-  m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)");
+  m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)",
+        pybind11::arg("A"), pybind11::arg("SFA"), pybind11::arg("B"), pybind11::arg("physSFB"),
+        pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("alpha") = 1.0);
   m.def("fused_gemm", &cd_fused_gemm, "dual-format fused GEMM; efficient per-call activation-SF interleave + cached workspace");
   m.def("fused_gemm_slow", &cd_fused_gemm_slow, "dual-format fused GEMM with OLD redundant interleave (before-number only)");
-  m.def("fused_gemm_prepacked", &cd_fused_gemm_prepacked, "dual-format fused GEMM, activation SF pre-interleaved (GEMM-only ceiling)");
+  m.def("fused_gemm_prepacked", &cd_fused_gemm_prepacked, "dual-format fused GEMM, activation SF pre-interleaved (GEMM-only ceiling); optional per-tensor epilogue alpha (two-level weight global)",
+        pybind11::arg("A_lo"), pybind11::arg("physSFA_lo"), pybind11::arg("B_lo"), pybind11::arg("physSFB_lo"),
+        pybind11::arg("A_hi"), pybind11::arg("physSFA_hi"), pybind11::arg("B_hi"), pybind11::arg("physSFB_hi"),
+        pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K_lo"), pybind11::arg("K_hi"),
+        pybind11::arg("alpha") = 1.0);
   m.def("compat_report", &cd_compat_report, "build/smem report");
 }
 #endif  // CD_NO_PYBIND

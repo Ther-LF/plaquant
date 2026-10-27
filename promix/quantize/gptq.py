@@ -60,7 +60,11 @@ class GPTQ:
             if not self.quantizer.ready():
                 self.quantizer.find_params(W_m)
             if self.high_bits_length != 0 and not self.high_quantizer.ready():
-                self.high_quantizer.find_params(W_h)
+                # Round-6: share the NVFP4 low segment's two-level global with the
+                # MXFP8 high quantizer so ONE epilogue-alpha carries it across both
+                # fused-GEMM phases (no-op when two-level is off -> global None).
+                self.high_quantizer.find_params(
+                    W_h, global_scale=getattr(self.quantizer, "frozen_global", None))
             if self.low_bits_length != 0 and not self.low_quantizer.ready():
                 self.low_quantizer.find_params(W_l)
         else:

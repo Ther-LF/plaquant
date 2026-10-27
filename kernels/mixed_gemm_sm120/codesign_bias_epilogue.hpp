@@ -78,14 +78,40 @@ template <class ElementOutput, class ElementBias, int AlignmentBias, class CtaTi
 struct BiasBFRoundHalfCallbacks : Sm90VisitorImpl<> {
   struct SharedStorage { };
   struct Arguments {
-    operator typename Sm90VisitorImpl<>::Arguments() const { return {}; }
+    float alpha = 1.0f;
   };
-  using Params = typename Sm90VisitorImpl<>::Params;
+  struct Params {
+    float alpha = 1.0f;
+  };
+  template <class ProblemShape>
+  static constexpr Params
+  to_underlying_arguments(ProblemShape const&, Arguments const& args, void*) {
+    return {args.alpha};
+  }
 
+  // Custom Arguments/Params replace the empty-base ones, so the workspace hooks
+  // the EVT framework calls must be provided here too (this node owns no device
+  // workspace -> zero bytes, nothing to initialize).
+  template <class ProblemShape>
+  static size_t get_workspace_size(ProblemShape const&, Arguments const&) {
+    return 0;
+  }
+  template <class ProblemShape>
+  static cutlass::Status initialize_workspace(ProblemShape const&, Arguments const&,
+                                              void*, cudaStream_t,
+                                              cutlass::CudaHostAdapter* = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+  template <class ProblemShape>
+  static bool can_implement(ProblemShape const&, Arguments const&) {
+    return true;
+  }
+
+  float alpha_ = 1.0f;
   CUTLASS_HOST_DEVICE
   BiasBFRoundHalfCallbacks() {}
   CUTLASS_HOST_DEVICE
-  BiasBFRoundHalfCallbacks(Params const&, SharedStorage const&) {}
+  BiasBFRoundHalfCallbacks(Params const& p, SharedStorage const&) : alpha_(p.alpha) {}
 
   template <class... Args>
   CUTLASS_DEVICE auto get_producer_load_callbacks(ProducerLoadArgs<Args...> const&) {
@@ -96,7 +122,8 @@ struct BiasBFRoundHalfCallbacks : Sm90VisitorImpl<> {
   CUTLASS_DEVICE bool is_C_load_needed() const { return false; }
 
   struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {
-    CUTLASS_DEVICE ConsumerStoreCallbacks() {}
+    float alpha;
+    CUTLASS_DEVICE ConsumerStoreCallbacks(float a) : alpha(a) {}
 
     template <typename ElementAccumulator, typename... ElementInputs, int FragmentSize>
     CUTLASS_DEVICE Array<ElementOutput, FragmentSize>
@@ -113,8 +140,12 @@ struct BiasBFRoundHalfCallbacks : Sm90VisitorImpl<> {
         if constexpr (kChildren > 1) {
           b = float(cute::get<kChildren - 1>(children)[i]);
         }
+        // round-6 two-level weight global: the per-tensor FP32 scalar `alpha`
+        // (a power of 2 carried from the weight packer) multiplies the FP32
+        // accumulator BEFORE the reference bf16 round, exactly reproducing the
+        // two-level fake-quant dequant g*(A@B). alpha=1 is the stock path.
         out[i] = ElementOutput(
-            static_cast<float>(static_cast<cutlass::bfloat16_t>(float(frg_acc[i]))) + b);
+            static_cast<float>(static_cast<cutlass::bfloat16_t>(alpha * float(frg_acc[i]))) + b);
       }
       return out;
     }
@@ -122,7 +153,7 @@ struct BiasBFRoundHalfCallbacks : Sm90VisitorImpl<> {
 
   template <bool ReferenceSrc, class... Args>
   CUTLASS_DEVICE auto get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const&) {
-    return ConsumerStoreCallbacks{};
+    return ConsumerStoreCallbacks{alpha_};
   }
 };
 
@@ -160,7 +191,7 @@ struct FusionCallbacks<
                        Stride<_0, _1, int64_t>, AlignmentBias>>;
 
   struct Arguments {
-    float alpha = 1.0f;          // accepted for interface parity; unused
+    float alpha = 1.0f;          // round-6: per-tensor two-level weight global (pow2)
     float beta = 0.0f;
     ElementBias const* ptr_bias = nullptr;
     using StrideBias = Stride<_0, _1, int64_t>;
@@ -170,7 +201,7 @@ struct FusionCallbacks<
       return {
         {},                                       // Sm90AccFetch
         {ptr_bias, ElementBias(0), dBias},        // Sm90RowBroadcast (per-N)
-        {}                                        // BiasBFRoundHalfCallbacks
+        {alpha}                                   // BiasBFRoundHalfCallbacks (alpha)
       };
     }
   };

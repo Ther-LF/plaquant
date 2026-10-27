@@ -42,7 +42,7 @@ from promix.quantize import quant_utils as qu
 # nvfp4_gemm.quantize_nvfp4 helper) makes MixedQuantLinear a faithful,
 # >=0.999-cosine replacement for the ProMix fake-quant path.
 # ---------------------------------------------------------------------------
-def quantize_nvfp4_spec(x, block=16, frozen_scale=None):
+def quantize_nvfp4_spec(x, block=16, frozen_scale=None, global_scale=None):
     """NVFP4: returns (codes uint8 (R,K), sf uint8 (R,K/16), deq f32 (R,K)).
 
     deq == quant_utils.fake_quantize_nvfp4(x); sf = E4M3 byte of the block
@@ -56,7 +56,13 @@ def quantize_nvfp4_spec(x, block=16, frozen_scale=None):
         quant_utils.select_block_scales_nvfp4 on the PRE-correction weight).
         This is the scale GPTQ's inner loop rounded the Hessian-corrected
         columns against, so packing the stored (dequantized) weight against
-        it is bit-faithful to GPTQ instead of a scale-re-derivation RTN."""
+        it is bit-faithful to GPTQ instead of a scale-re-derivation RTN.
+
+    Round-6 two-level: when ``global_scale`` (per-tensor FP32 g) is given, the
+    frozen effective scale is DECOMPOSED as g * micro, the SFB stores the E4M3
+    ``micro`` (= eff/g, on-grid by construction), and the element rounding / deq
+    use the kernel-exact reconstruction ``micro_decoded * g``. The kernel carries
+    g on the epilogue alpha, so deq == g*(A@B) matches the two-level fake path."""
     R, K = x.shape
     assert K % block == 0
     dev = x.device
@@ -68,6 +74,13 @@ def quantize_nvfp4_spec(x, block=16, frozen_scale=None):
         ideal = (bmax / qu.FP4_E2M1_MAX).clamp_min(2.0 ** -9)
         e4m3 = torch.tensor(qu._FP8_E4M3_POS, device=dev, dtype=torch.float32)
         scale = qu._ceil_to_value(ideal, e4m3)                  # (R,nb,1) grid value
+    if global_scale is not None:
+        gs = float(global_scale)
+        micro = (scale / gs).to(torch.float8_e4m3fn)            # E4M3 micro = eff/g
+        sf = micro.view(torch.uint8).reshape(R, K // block).contiguous()
+        scale = micro.float() * gs                              # kernel-exact eff
+    else:
+        sf = scale.to(torch.float8_e4m3fn).view(torch.uint8).reshape(R, K // block).contiguous()
     xs = (xf / scale).clamp(-qu.FP4_E2M1_MAX, qu.FP4_E2M1_MAX)
     fp4 = torch.tensor(qu.FP4_E2M1_POS, device=dev, dtype=torch.float32)
     qsigned = qu._round_to_nearest_value(xs, fp4)               # signed grid value
@@ -76,11 +89,10 @@ def quantize_nvfp4_spec(x, block=16, frozen_scale=None):
     neg = (qsigned < 0) & (absidx > 0)
     code = code | (neg.to(torch.uint8) * 8)
     deq = (qsigned * scale).reshape(R, K)
-    sf = scale.to(torch.float8_e4m3fn).view(torch.uint8).reshape(R, K // block).contiguous()
     return code.reshape(R, K).contiguous(), sf, deq
 
 
-def quantize_mxfp8_spec(x, block=32, frozen_scale=None):
+def quantize_mxfp8_spec(x, block=32, frozen_scale=None, global_scale=None):
     """MXFP8: returns (bytes uint8 (R,K), sf uint8 (R,K/32), deq f32 (R,K)).
 
     deq == quant_utils.fake_quantize_mxfp8(x); sf = E8M0 exponent byte
@@ -90,7 +102,12 @@ def quantize_mxfp8_spec(x, block=32, frozen_scale=None):
     a power-of-2 scale from this block's absmax (RTN); frozen_scale (shape
     (R, K//block), each value a power-of-2 from
     quant_utils.select_block_scales_mxfp8 on the pre-correction weight) uses
-    GPTQ's frozen scale so packing is bit-faithful to GPTQ."""
+    GPTQ's frozen scale so packing is bit-faithful to GPTQ.
+
+    Round-6 two-level: when ``global_scale`` (per-tensor FP32 g) is given, the
+    stored E8M0 micro = eff/g (a power of 2 for ANY g, since eff was built as
+    g*e8m0(...)), and the element rounding / deq use ``2^exp * g``. The kernel
+    carries g on the epilogue alpha shared with the NVFP4 low phase."""
     R, K = x.shape
     assert K % block == 0
     dev = x.device
@@ -101,13 +118,19 @@ def quantize_mxfp8_spec(x, block=32, frozen_scale=None):
         bmax = xf.abs().amax(-1, keepdim=True).clamp_min(0.0)
         ideal = bmax / qu.FP8_E4M3_MAX
         scale = qu._e8m0_round_up(ideal.clamp_min(2.0 ** -127))     # power-of-2
+    if global_scale is not None:
+        gs = float(global_scale)
+        exp = torch.log2(scale / gs).round().to(torch.int32)        # E8M0 micro = eff/g
+        sf = (exp + 127).clamp(0, 254).to(torch.uint8).reshape(R, K // block).contiguous()
+        scale = torch.exp2(exp.float()) * gs                        # kernel-exact eff
+    else:
+        exp = torch.log2(scale).round().to(torch.int32)
+        sf = (exp + 127).clamp(0, 254).to(torch.uint8).reshape(R, K // block).contiguous()
     xs = (xf / scale).clamp(-qu.FP8_E4M3_MAX, qu.FP8_E4M3_MAX)
     e4m3 = torch.tensor(qu._FP8_E4M3_POS, device=dev, dtype=torch.float32)
     qsigned = qu._round_to_nearest_value(xs, e4m3)
     deq = (qsigned * scale).reshape(R, K)
     bytes_ = qsigned.to(torch.float8_e4m3fn).view(torch.uint8).reshape(R, K).contiguous()
-    exp = torch.log2(scale).round().to(torch.int32)
-    sf = (exp + 127).clamp(0, 254).to(torch.uint8).reshape(R, K // block).contiguous()
     return bytes_, sf, deq
 
 
@@ -128,6 +151,9 @@ class PackedWeight:
     # dequantized reference (kernel numerics), for building the fake-quant ref
     W_deq: torch.Tensor            # (N, K) float32, cat([deq_lo, deq_hi], -1)
     bias: torch.Tensor = None      # (N,) or None
+    # Round-6 two-level weight global: per-tensor FP32 g carried on the fused-GEMM
+    # epilogue alpha (D = g*(A@B)). 1.0 = single-level (no epilogue scaling).
+    g_w: float = 1.0
     # decode-GEMV pack (row-major, raw FP32 scales) — a memory-bound M=1 path that
     # streams the SAME 4-bit/8-bit weights at HBM BW (decode_gemv_ext.cu). Built
     # from the identical spec codes/scales, so dequant is bit-identical to W_deq.
@@ -150,7 +176,8 @@ def split_k(K, high_fraction=0.125):
 
 
 def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
-                      frozen_nvfp4_scale=None, frozen_mxfp8_scale=None):
+                      frozen_nvfp4_scale=None, frozen_mxfp8_scale=None,
+                      global_scale=None):
     """Pack a rotated+reordered weight ``W`` (N, K) into mixed NVFP4+MXFP8 buffers.
 
     Args:
@@ -183,27 +210,45 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
 
     W_lo = Wf[:, :K_low].contiguous()
     W_hi = Wf[:, K_low:].contiguous()
+    # Round-6: when two-level is enabled but no GPTQ frozen scale is supplied
+    # (RTN / from_linear / single-layer paths), derive the two-level effective
+    # scales + shared global g here so this path matches the GPTQ one.
+    if (global_scale is None and frozen_nvfp4_scale is None
+            and getattr(qu, "WEIGHT_TWO_LEVEL", False) and K_low > 0):
+        xb_lo = W_lo.reshape(N, K_low // 16, 16)
+        frozen_nvfp4_scale, g_auto = qu._weight_two_level_nvfp4_eff(
+            xb_lo, xb_lo.abs().amax(-1))
+        global_scale = g_auto
+        if K_high > 0:
+            xb_hi = W_hi.reshape(N, K_high // 32, 32)
+            frozen_mxfp8_scale = qu._weight_two_level_mxfp8_eff(
+                xb_hi, xb_hi.abs().amax(-1), g_auto)
+    g = 1.0 if global_scale is None else float(global_scale)
 
     # --- NVFP4 low/main segment (frozen GPTQ scale when available, else RTN) ---
-    codes_lo, SFB_lo, deq_lo = quantize_nvfp4_spec(W_lo, frozen_scale=frozen_nvfp4_scale)
+    codes_lo, SFB_lo, deq_lo = quantize_nvfp4_spec(W_lo, frozen_scale=frozen_nvfp4_scale,
+                                                   global_scale=global_scale)
     W_lo_packed = nv.pack_fp4(codes_lo)
     physSFB_lo = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
 
     # --- MXFP8 high segment (frozen GPTQ scale when available, else RTN) ---
-    bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale)
+    bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale,
+                                                   global_scale=global_scale)
     physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
 
     W_deq = torch.cat([deq_lo, deq_hi], dim=-1).contiguous()
 
     # decode-GEMV pack (reuse the already-computed spec codes/scales): row-major
     # 2-codes/byte NVFP4 (even k -> low nibble) + FP32 per-16 scale; FP8 bytes +
-    # FP32 per-32 power-of-2 scale. dequant is bit-identical to W_deq above.
+    # FP32 per-32 power-of-2 scale. dequant is bit-identical to W_deq above. The
+    # decode GEMV streams raw FP32 scales, so the two-level global g is folded
+    # directly into the stored FP32 effective scale (no epilogue needed there).
     N_, _ = codes_lo.shape
     cl = codes_lo.view(N_, K_low // 2, 2)
     W_lo_dec = (cl[:, :, 0] | (cl[:, :, 1] << 4)).to(torch.uint8).contiguous()
-    S_lo_dec = SFB_lo.view(torch.float8_e4m3fn).float().contiguous()
+    S_lo_dec = (SFB_lo.view(torch.float8_e4m3fn).float() * g).contiguous()
     W_hi_dec = bytes_hi.contiguous()
-    S_hi_dec = torch.exp2(SFB_hi.float() - 127.0).contiguous()
+    S_hi_dec = (torch.exp2(SFB_hi.float() - 127.0) * g).contiguous()
 
     return PackedWeight(
         N=N, K=K, K_low=K_low, K_high=K_high,
@@ -213,6 +258,7 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
         physSFB_hi=physSFB_hi.contiguous(),
         W_deq=W_deq,
         bias=None if bias is None else bias.detach().to(dev).contiguous(),
+        g_w=g,
         W_lo_dec=W_lo_dec, S_lo_dec=S_lo_dec, W_hi_dec=W_hi_dec, S_hi_dec=S_hi_dec,
     )
 
@@ -228,12 +274,19 @@ def probe_weight_sfb_bitexact(W, K_low, K_high, nv, mx, cd):
     """
     N, K = W.shape
     Wf = W.to(torch.float32)
-    _, SFB_lo, _ = quantize_nvfp4_spec(Wf[:, :K_low].contiguous())
-    _, SFB_hi, _ = quantize_mxfp8_spec(Wf[:, K_low:].contiguous())
-    phys_lo_ref = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
-    phys_hi_ref = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
-
-    pk = pack_weight_mixed(W, K_low, K_high, nv, mx, cd)
+    # This probe checks the SFB interleave LAYOUT (byte addressing), not the
+    # scale VALUES — run it single-level so the independent ref and the packer
+    # agree regardless of the WEIGHT_TWO_LEVEL default.
+    _saved = qu.WEIGHT_TWO_LEVEL
+    qu.WEIGHT_TWO_LEVEL = False
+    try:
+        _, SFB_lo, _ = quantize_nvfp4_spec(Wf[:, :K_low].contiguous())
+        _, SFB_hi, _ = quantize_mxfp8_spec(Wf[:, K_low:].contiguous())
+        phys_lo_ref = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
+        phys_hi_ref = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
+        pk = pack_weight_mixed(W, K_low, K_high, nv, mx, cd)
+    finally:
+        qu.WEIGHT_TWO_LEVEL = _saved
     return {
         "sfb_lo_equal": bool(torch.equal(pk.physSFB_lo, phys_lo_ref)),
         "sfb_hi_equal": bool(torch.equal(pk.physSFB_hi, phys_hi_ref)),

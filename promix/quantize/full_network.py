@@ -112,23 +112,25 @@ def _frozen_scales_for(name, quantizers):
     ``model.layers.{i}.{sub}`` (HF LlamaForCausalLM.named_modules), so the
     main key is simply ``name + ".module"``.
 
-    Returns (nvfp4_scale, mxfp8_scale): each a (N, n_blocks) tensor frozen on
-    the PRE-correction weight by `WeightQuantizer.find_params`, or None when
-    the quantizers dict is absent or the entry/attribute is missing (RTN
-    fallback).
+    Returns (nvfp4_scale, mxfp8_scale, global_scale): the per-block frozen scales
+    (each a (N, n_blocks) tensor, or None), plus the per-tensor two-level global
+    `g` (round-6) stashed on the NVFP4 quantizer as `frozen_global` (None when
+    two-level is off). `g` rides the fused-GEMM epilogue alpha so the SFB can store
+    E4M3/E8M0 micro = eff/g.
     """
     if not quantizers:
-        return None, None
+        return None, None, None
     main_key = name + ".module"
     high_key = main_key + ",high_quantizer"
-    nv_scale = mx_scale = None
+    nv_scale = mx_scale = g_scale = None
     qm = quantizers.get(main_key)
     if qm is not None:
         nv_scale = getattr(qm, "frozen_scales", None)
+        g_scale = getattr(qm, "frozen_global", None)
     qh = quantizers.get(high_key)
     if qh is not None:
         mx_scale = getattr(qh, "frozen_scales", None)
-    return nv_scale, mx_scale
+    return nv_scale, mx_scale, g_scale
 
 
 def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
@@ -155,12 +157,13 @@ def pack_all_targets(model, nv, mx, cd, high_fraction=0.125, verbose=True,
         K_low, K_high = _khigh_for(wrapper, K, high_fraction)
         bias = getattr(wrapper.module, "bias", None)
         bias = None if bias is None else bias.data
-        nv_scale, mx_scale = _frozen_scales_for(name, quantizers)
+        nv_scale, mx_scale, g_scale = _frozen_scales_for(name, quantizers)
         if nv_scale is not None or mx_scale is not None:
             nfrozen += 1
         pk = pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=bias,
                                frozen_nvfp4_scale=nv_scale,
-                               frozen_mxfp8_scale=mx_scale)
+                               frozen_mxfp8_scale=mx_scale,
+                               global_scale=g_scale)
         packed[name] = pk
         if verbose:
             print(f"  packed {name:48s} N={pk.N:5d} K={pk.K:5d} "
