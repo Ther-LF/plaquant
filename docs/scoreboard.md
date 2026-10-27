@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | BF16(FP16 参照) | 16 | 13.16 | 7.82 | 6.14 |
 | **vLLM NVFP4 W4A4** | **≈4.25** | 15.65 | 8.63 | 6.87 |
-| **ProMix W4A4 — SHIPPED(r=1/8, act-MSE快+weight两级scale)** | **4.97** | 14.76* | **8.296** | **6.599** |
+| **ProMix W4A4 — SHIPPED(r=1/8, act-MSE快+weight两级scale)** | **4.97** | **14.563** | **8.296** | **6.599** |
 | ProMix W4A4 r=1/16(两级 weight scale) | 4.73 | — | **8.361** | — |
 | ProMix W4A4 r=0(两级 weight scale, 4.5b) | 4.50 | — | 8.859 | — |
 | ProMix W4A4 r=1/8(单级 weight-A2, round-4 旧) | 4.97 | 14.76 | 8.376 | 6.713 |
@@ -17,7 +17,7 @@
 | AWQ W4A16 | 4.0 | 14.53 | ~8.35 | 6.59 |
 | FP8 W8A8 | 8.0 | 13.30 | — | — |
 
-\* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。1B base 模型本轮离线不可用,两级 scale 1B 暂 gate 关(`PROMIX_WEIGHT_2LEVEL=0`,与 weight-A2 的 1B 关一致)。
+\* 1B 用 pipeline PPL 协议,与其余行(vLLM 绝对协议)不同,**未对齐,不能横比**;3B/8B 已同协议。**round-7:1B base 模型已恢复,两级 scale A/B 实测 real-kernel 14.7604(单级)→14.5629(两级),Δ−0.198(远超预期 −0.05..−0.1),real-vs-twin 门 |Δ|=0.014 PASS → 1B 默认翻 ON,三档全部两级。**
 SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tensor FP32 global g × per-block E4M3/E8M0 micro,NEAREST+micro-MSE)**。g 搭在 fused-GEMM epilogue 的 alpha 上(零 GEMM 代价,epilogue 本就乘 alpha);decode 把 g 折进 FP32 scale。
 **round-6:两级 scale 相比单级 weight-A2:3B r=1/8 −0.08(真·kernel 8.2955,fake 8.293;与 round-5 fake 8.297 差 0.0015)、3B r=1/16 −0.10、8B r=1/8 −0.11、3B r=0 −0.18。real-vs-twin gate |Δ|=0.0095≤0.1、per-layer cos 0.999998。**
 
@@ -32,11 +32,14 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 | vLLM GPTQ W4A16 | 0.86 / 0.39 / 0.89 | 1.52 / 0.92 / 2.51 | 1.57 / 1.01 / 2.47 |
 | vLLM FP8 W8A8 | 1.31 / — / — | 1.23 / — / — | 1.40 / — / — |
 | **ProMix SHIPPED (round-4, act-MSE 开)** | **1.25 / 1.34 / 1.29×**(M8192;M2048 1.17/1.35/1.27) | **0.73 / 0.85 / 1.06×** | **0.70 / 0.82 / 1.01×** |
+| **ProMix + round-7 QKV/gate-up decode MERGE** | (prefill 不变;merge 伤 prefill 0.81–0.92×) | **0.85 / 0.96 / 1.23×** | **0.79 / 0.94 / 1.07×** |
 
 (prefill/decode 均 graphed-vs-graphed,idle GPU,一卡一任务。round-4:act-MSE 现默认**开**且便宜(生产端 1.06–1.10×)。真·A/B(act-MSE 开 vs 关,同环境):1B/3B prefill+decode **开==关**(免费);8B prefill 仅 −0.03×(graph 1.29 vs 关 1.31),decode 不变——对比 round-3 旧搜索把 8B prefill 砸到 0.78×、decode-b8 到 0.80×。即:**精度最大与性能最大现为同一 operating point**。prefill cos 1.0000005–1.0000014,decode M=1 位精确保持。)
 
 **判定(round-4):act-MSE 大精度赢(3B −0.17、8B −0.10)现以 ~0.03× 的 8B prefill 代价随 SHIPPED 一起发(1B/3B 免费);8B 仍在 prefill/decode 同时赢 FP16,但三项仍落后 NVFP4(2.21×/1.61×/1.45×)。1B/3B decode <1(M=1 launch-bound)。**
 **目标:prefill ≥ NVFP4(8B ≥2.2×)、decode 全面 ≥ NVFP4;并把 act-MSE 做成便宜生产端以同时拿精度。**
+
+**判定(round-7):decode QKV+gate/up 融合(每层 7→4 launch,共享激活只量化一次)实测 1.16–1.22× decode 加速,b1 位精确(max|Δ|=0.0),b8/prefill 路径 +0.022 PPL。新 decode b1 1B/3B/8B=0.85/0.96/1.23×(8B 过 1.0,3B 近 1.0),b8=0.79/0.94/1.07×。此杠杆只对 decode(launch-bound)有效,prefill(compute-bound)被它拖慢 0.81–0.92× → decode 专用。prefill M=8192 stage-profile:3B 混合 GEMM 对 Linear 已 ~1.36×,NVFP4 2.21× 的差距是 FP16 attention(23%)+RMSNorm(13.6%)+RoPE/lm_head 的 Amdahl + 两段式混合 GEMM 结构性低于单段 NVFP4;8B 最大桶是 down_proj FP32 Hadamard(87ms/21.6%),已建的 bit-identical hpk28 融合 producer 实测无增益(occupancy-bound 1 CTA/SM)→ prefill 本轮无免费赢,加速比不变。**
 
 ## loop 规则(KDA 式,controller 串行调度)
 

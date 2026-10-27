@@ -653,11 +653,22 @@ def main():
         model.config.use_cache = False
         packed = fn.pack_all_targets(model, nv, mx, cd, high_fraction=HIGH_FRACTION, verbose=False)
         hpk_arg = None
+        # Always wire the real packed kernel so "real" profiles the SHIPPED GEMM
+        # path (not the fake-quant model). --fused additionally enables the fused
+        # SwiGLU+Hadamard+pack down_proj producer (power-of-two intermediate only;
+        # 8B I=14336 uses the reference producer, matching the shipped 8B path).
+        qpfm_arg = None
+        hpk28_arg = had28_arg = None
         if args.fused:
-            from promix.eval.hadamard_swiglu_fusion import load_hpk, load_qpfm
-            hpk_arg = load_hpk()
-            fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf,
-                                qpfm=load_qpfm(), hpk=hpk_arg)
+            from promix.eval.hadamard_swiglu_fusion import load_hpk, load_qpfm, load_hpk28
+            qpfm_arg = load_qpfm()
+            I = model.config.intermediate_size
+            if I == 14336:
+                hpk28_arg, had28_arg = load_hpk28()   # 8B non-power-of-two producer
+            else:
+                hpk_arg = load_hpk()
+        fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf,
+                            qpfm=qpfm_arg, hpk=hpk_arg, hpk28=hpk28_arg, had28=had28_arg)
         if args.bias_epilogue:
             from promix.eval.edge_fusion import load_new
             cd_bias, _ = load_new()
