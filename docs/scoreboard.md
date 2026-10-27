@@ -23,7 +23,7 @@
 | *(round-13 同协议实测)* ResQ W4A4KV4(INT4+1/8 INT8,hf=0.125) | ≈4.5 | 15.98 | 8.71 | 7.06 |
 | *(round-13 同协议实测)* Atom W4A4KV4(128 INT8 keeper+g128+GPTQ+INT4 KV) | ≈4.2 | 18.40 | 9.699 | *(8B running)* |
 | *(round-14 同协议实测)* SpinQuant W4A4KV4(Hadamard,**非学习**) | ≈4.0 | 18.623 | 10.092 | 7.882 |
-| *(round-14 同协议实测)* SpinQuant W4A4KV4(**学习旋转** Cayley-SGD) | ≈4.0 | **16.143** | *(训练中)* | *(未训,用 Had 7.882)* |
+| *(round-14 同协议实测)* SpinQuant W4A4KV4(**学习旋转** Cayley-SGD) | ≈4.0 | **16.143** | **9.246** | *(未训,用 Had 7.882)* |
 | *(论文口径,待同协议复测)* QServe W4A8KV4 | 4/8 | — | — | — |
 
 > **round-13 W4A4 主对比组填充(QuaRot + ResQ,同协议实测)**。协议 = `docs/baselines_on_hardware.md` 的 wikitext-2 PPL(bf16、`add_special_tokens=False`、`"\n\n".join`、非重叠 2048 chunk=141、288,627 token、token-pooled exp(mean NLL))。**harness bridge 验证**:同一纯-torch full-forward evaluator 在未量化 bf16 上复现committed 基线 **1B 13.1650 / 3B 7.8199 / 8B 6.1382**(= 13.16/7.82/6.14,逐位吻合)→ 任何 Δ 为真·量化差异。跑的是官方开源实现(QuaRot `spcl/QuaRot` fake_quant、ResQ `project-resq` fake_quant)在 SM120 上的 fake-quant 精度模式(torch 2.7.1+cu128,transformers 4.45.2/4.48.1,fast_hadamard 用 pure-torch FWHT shim 替代——数值 maxerr 1e-14 vs 显式 Hadamard 矩阵)。
@@ -31,7 +31,7 @@
 > - **判定**:同协议下 **QuaRot/ResQ 均不如 ProMix 也不如 NVFP4**。QuaRot(纯 INT4,无 micro-scale/无高精段)在难量化的 Llama-3.x 上退化最大(1B +68%/3B +37%/8B +41%)。ResQ(INT4+1/8 INT8,ProMix 的前身)居中:3B 8.71 / 8B 7.06,略逊于 NVFP4(8.63/6.87),明显逊于 ProMix SHIPPED(8.296/6.599)——印证 ProMix 在 ResQ 之上的 act-MSE + 两级 weight scale + FP4 格式增益。ResQ 1B 15.98 ≈ NVFP4 1B 15.65。
 > - **未复现(本轮)**:SpinQuant 的"学习旋转"需其 GDrive/gated checkpoint 或自训(对 3.2-1B/3B 无公开旋转),Hadamard-mode 退化为 ≈QuaRot;Atom/QServe 为另一套旧 transformers 环境。原始数据:GPU host `/home/luofan/refquant/{results_*.json,SUMMARY.md}`。
 > - **Atom 补充(独立 agent,同协议)**:Atom 自身 bridge 在 FP16 复现 **13.159/7.814/6.136**(= committed 基线)→ 协议匹配。真·recipe(128 INT8 keeper + group-128 + hessian reorder + GPTQ + INT4 KV,≈4.2 b/w)fake-quant:1B **18.40**(Δ+5.24)、3B **9.699**(Δ+1.89)、8B 计算中。**明显逊于 ProMix**。Atom 又一次独立印证 **INT4 在 Blackwell 无真数据通路**:ptxas 把 `s4.s4` MMA 降级成 INT8 `IMMA.16832.S8.S8`,零 S4 SASS(与 QuaRot 的 INT4 kernel 慢 5-6× 结论一致)。原始数据:`/home/luofan/baselines/peers/atom/{RESULTS.md,results.json}`。
-> - **SpinQuant 补充(独立 agent,同协议)**:FP16 bridge 复现 **13.158/7.816/6.137**(= 基线)→ 协议匹配。SpinQuant 仅 fake-quant(SM120 无 GPU kernel,无加速)。W4A4KV4 4.0 b/w(GPTQ per-channel + KV4 asym + A4 per-token):**Hadamard 旋转(非学习,= QuaRot 式默认)**:1B **18.623**(Δ+5.47)、3B **10.092**(Δ+2.28)、8B **7.882**(Δ+1.75)。学习旋转(Cayley-SGD 100 步,单卡 batch 远小于论文 8-GPU):1B **16.143**(Δ+2.99,较 Hadamard 改善 2.48)、3B 训练中、8B 太慢未训(用 Hadamard 7.882)。**即便学习旋转,SpinQuant 4.0b 仍明显逊于 ProMix 4.97b(14.56/8.30/6.60)与 NVFP4 4.50b。** 原始数据:`/home/luofan/baselines/peers/spinquant/`。
+> - **SpinQuant 补充(独立 agent,同协议)**:FP16 bridge 复现 **13.158/7.816/6.137**(= 基线)→ 协议匹配。SpinQuant 仅 fake-quant(SM120 无 GPU kernel,无加速)。W4A4KV4 4.0 b/w(GPTQ per-channel + KV4 asym + A4 per-token):**Hadamard 旋转(非学习,= QuaRot 式默认)**:1B **18.623**(Δ+5.47)、3B **10.092**(Δ+2.28)、8B **7.882**(Δ+1.75)。学习旋转(Cayley-SGD 100 步,单卡 batch 8/2 远小于论文 8-GPU batch-8):1B **16.143**(Δ+2.99,较 Hadamard 改善 2.48)、3B **9.246**(Δ+1.43,改善 0.85)、8B 太慢未训(用 Hadamard 7.882)。**即便学习旋转,SpinQuant 4.0b(16.14/9.25/7.88)仍明显逊于 ProMix 4.97b(14.56/8.30/6.60)与 NVFP4 4.50b。** SpinQuant 在 SM120 无 CUDA/CUTLASS kernel(仅 ExecuTorch 移动端路径)→ 无 on-hardware 加速。原始数据:`/home/luofan/baselines/peers/spinquant/`(commit 8f47aa3)。
 
 ### 参考组 —— W4A16(**激活不量化**;不可作为同条件对比)
 
