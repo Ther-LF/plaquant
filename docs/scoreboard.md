@@ -60,6 +60,8 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 **Task-3 修复:FP32 online Hadamard 是多余的 `.float()` 上采样——fast-WHT 跑 fp16 数值位同(cos=1.000000)且 ~3× 快。8B down-Hadamard 92.8→31.5ms(−66%),全模型 8B prefill 421→370ms(−12.1%,此时已快过 vLLM BF16 388.8ms),8B prefill ×FP16 1.14→1.29×;3B 位同(PPL 不变 8.6816)36.3→10.7ms,prefill 1.05→1.17×。PPL 门过(隔离 twin Δ=−0.0005 8B / +0.0055 3B,<0.01;3B pow2 位同)。`mixed`(fp32 K-matmul)与纯 fp16 PPL 完全一致 → 纯 fp16 即可,radix-4 fp32 无必要。ship `PROMIX_HAD_MODE=fp16`。**
 **Task-2 FP8-KV 接入 graphed decode(e4m3 per-vector,写时量化、读时反量化 FP16 attention):显存 1.94×(1B)/1.97×(3B/8B);PPL Δ +0.058(1B opt-in)/+0.015(3B)/+0.012(8B)。decode 速度 0.90–0.99×(略慢)——FP16 attention 读回 fp16,无带宽收益 → FP8-KV 是显存/容量杠杆,非 decode 加速杠杆(要加速需 fp8-native attention)。**
 
+**判定(round-10,FP16 non-GEMM stack 攻坚):per-op profile(同 shape、同进程、median-of-50)定位到非-GEMM 差距几乎全在 RMSNorm+RoPE,attention 是平手(SDPA≈FlashAttention,8B 1.05×)。8B@M8192 model-level:RMSNorm ours 51.3ms vs vLLM 3.1ms(16.5×)、RoPE 17.3 vs 5.6ms(3.1×)、attn 59.7 vs 56.6ms。两个 Triton 融合 kernel(fused RMSNorm drop-in + fused RoPE)都过 PPL 门:RMSNorm 3B Δ+0.0032/8B −0.0062,norm+rope 3B +0.0062/8B −0.0100。prefill@M8192 ×our-FP16:3B 1.16→1.38、8B 1.28→1.52;×vLLM-BF16(forward-only,保守)3B 0.94→1.11、8B 1.05→1.25——从低于 BF16 翻到明确超过。另发现一个免费 TTFT 杠杆:我们 prefill 算全 [M,V] logits(8B lm_head 21.4ms)而 vLLM TTFT 只算末 token(0.7ms),切片(HF logits_to_keep=1)可省 16–21ms → 投影 8B ≈1.34× / 3B ≈1.23× vLLM-BF16(未接线)。fp16 Hadamard 已设为默认(PROMIX_HAD_MODE=fp16)。残余对 NVFP4 的差距不再是 FP16 stack(已追平/超过 vLLM),而是两段式 mixed-GEMM 结构 + down-Hadamard 税。**
+
 ### 轴 2 协议对齐表(round-9,TTFT ms @M8192,b1,空闲 GPU;口径见下)
 
 | 口径 | 1B | 3B | 8B |
@@ -67,10 +69,14 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 | our FP16(forward-only,graphed,无调度/采样) | 84.95 | 229.14 | 482.83 |
 | our real-kernel(forward-only,fp32-had) | 92.98 | 217.63 | 422.11 |
 | **our real-kernel(fp16-had,round-9 ship)** | — | **197.5** | **370.3** |
+| **our real-kernel + Triton fused RMSNorm(round-10)** | 76.0 | **172.3** | **322.2** |
+| **our real-kernel + fused RMSNorm+RoPE(round-10)** | 75.0 | **165.9** | **311.2** |
 | vLLM BF16(TTFT=调度+prefill+采样1 token) | 78.6 | 183.9 | 388.8 |
 | vLLM NVFP4(同 vLLM TTFT) | 45.7 | 101.5 | 177.9 |
 
 归一到同一强基线 vLLM BF16(×BF16):our real-kernel(fp16-had)= 0.85/0.93/**1.05×**;vLLM NVFP4 = 1.72/1.81/2.19×。**警告:our 为纯 forward(不含 vLLM 的调度+采样),对我们偏乐观,故"低于 BF16"是保守结论。**
+
+**round-10 更新:Triton 融合 RMSNorm+RoPE 后 ×vLLM-BF16 = 1.05/1.11/1.25×(1B/3B/8B,原 fp16-had 0.97/0.94/1.05×),3B/8B 翻到超过 BF16。per-op profile 证明非-GEMM 差距全在 RMSNorm(8B 16.5×)+RoPE(3.1×),attention 平手(1.05×)。另:lm_head 全 [M,V] logits(8B 21.4ms)vs vLLM TTFT 末-token(0.7ms)是免费杠杆(切片省 16–21ms),投影 8B ≈1.34×。两个融合 kernel 过 PPL 门(3B +0.0032/+0.0062,8B −0.0062/−0.0100)。**
 
 
 ## loop 规则(KDA 式,controller 串行调度)

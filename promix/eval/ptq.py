@@ -374,15 +374,16 @@ def setup_down_proj_hadamard(model):
     """Set online Hadamard rotation for down_proj layers.
 
     PROMIX_HAD_MODE (round-9 Task-3) selects the online-Hadamard precision on
-    down_proj, default ``fp32`` (shipped, byte-identical):
-      fp32       : x.float() WHT + fp32 K-matmul (shipped)
-      fp16       : fp16 WHT + fp16 K-matmul
+    down_proj, default ``fp16`` (round-10 ship: bit-identical on pow2 widths,
+    twin-neutral on 8B, ~3x faster; set ``fp32`` for the old byte-identical path):
+      fp16       : fp16 WHT + fp16 K-matmul (shipped, round-10 default)
+      fp32       : x.float() WHT + fp32 K-matmul (old shipped, byte-identical)
       mixed      : fp16 WHT + fp32 K-matmul (fp32-accumulate butterfly)
       bf16       : bf16 WHT + bf16 K-matmul
       bf16mixed  : bf16 WHT + fp32 K-matmul
     """
     import torch as _torch
-    mode = os.environ.get("PROMIX_HAD_MODE", "fp32").lower()
+    mode = os.environ.get("PROMIX_HAD_MODE", "fp16").lower()
     fp32 = (mode == "fp32")
     mixed = mode in ("mixed", "bf16mixed")
     had_dtype = (_torch.bfloat16 if mode in ("bf16", "bf16mixed") else None)
