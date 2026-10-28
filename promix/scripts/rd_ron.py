@@ -74,8 +74,12 @@ def resolve_paths(config):
     elif "8b" in lname:
         short, local = "llama-3-8b", "/home/luofan/models/llama-3-8b"
     elif "1b" in lname:
-        # artifacts for 1B are the Instruct variant; no local dir (HF cache).
+        # artifacts for 1B are the Instruct variant; the HF-cached model is
+        # unsloth/Llama-3.2-1B-Instruct (matches the basis/rotation fit).
         short, local = "Llama-3.2-1B-Instruct", "/home/luofan/models/Llama-3.2-1B-Instruct"
+        if not os.path.isdir(local):
+            config["model"]["name"] = "unsloth/Llama-3.2-1B-Instruct"
+            local = None
     else:
         short, local = os.path.basename(name), None
     if local and os.path.isdir(local):

@@ -52,6 +52,9 @@ def main():
                     help="DENSE-LIMIT probe: use the SHIPPED dense R1 rotation "
                          "(ring_r1=False) instead of the ring substrate; ring_size "
                          "is then only the measured-allocation atom (K alignment).")
+    ap.add_argument("--structure_only", action="store_true",
+                    help="only collect stats and report per-ring ΔD non-uniformity "
+                         "(CV/Gini/top-1/8 fraction); skip GPTQ+eval.")
     ap.add_argument("--out", default="/home/luofan/RD_RON_RINGSIZE.json")
     args = ap.parse_args()
 
@@ -87,6 +90,31 @@ def main():
         cleanup_memory()
         return dict(ppl=ppl, avg_fp8=frac, hi_ch=hi, tot_ch=tot)
 
+    def dd_structure(stats):
+        """Quantify per-ring ΔD non-uniformity (predicts allocation gain).
+
+        Pools per-ring ΔD = D_fp4 − D_fp8 over all reallocated Linears and
+        reports: CV = std/|mean|; Gini on the positive part; and the fraction
+        of total positive ΔD captured by the top-1/8 rings (what a 1/8 budget
+        can actually grab)."""
+        import torch as _t
+        dd = _t.cat([_t.as_tensor(stats[n]["deltaD"]).flatten() for n in stats])
+        n = dd.numel()
+        mean = dd.mean().item()
+        std = dd.std(unbiased=False).item()
+        cv = std / abs(mean) if mean != 0 else float("inf")
+        pos = dd.clamp_min(0)
+        srt, _ = _t.sort(pos)
+        idx = _t.arange(1, n + 1, dtype=_t.float64)
+        tot = srt.sum().item()
+        gini = ((2 * (idx * srt.double()).sum() / (n * srt.double().sum())
+                 - (n + 1) / n).item()) if tot > 0 else 0.0
+        k = max(1, int(round(n / 8)))
+        topk = _t.topk(dd, k).values.clamp_min(0).sum().item()
+        top_frac = topk / tot if tot > 0 else 0.0
+        return dict(n_rings=n, dd_mean=mean, dd_std=std, dd_cv=cv,
+                    dd_gini=gini, top1_8_frac=top_frac)
+
     for S in ring_sizes:
         cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1, ring_size=S)
         cmodel.to(DEV)
@@ -95,6 +123,14 @@ def main():
         cleanup_memory()
         total_rings = sum(stats[n]["nr"] for n in stats)
         budget = int(round(0.125 * total_rings))
+        struct = dd_structure(stats)
+        print(f"STRUCTURE S={S} n_rings={struct['n_rings']} dd_cv={struct['dd_cv']:.3f} "
+              f"dd_gini={struct['dd_gini']:.3f} top1/8_frac={struct['top1_8_frac']:.3f}",
+              flush=True)
+        if args.structure_only:
+            results["by_ring"][str(S)] = dict(total_rings=total_rings,
+                                              budget=budget, structure=struct)
+            continue
         chosen = rv.measured_alloc(stats, budget, total_rings)
         print(f"RING S={S} total_rings={total_rings} budget@1/8={budget}", flush=True)
 
@@ -104,12 +140,19 @@ def main():
         gain = uni["ppl"] - meas["ppl"]          # allocation gain at this S
         beats = meas["ppl"] < dense
         results["by_ring"][str(S)] = dict(
-            total_rings=total_rings, budget=budget,
+            total_rings=total_rings, budget=budget, structure=struct,
             uniform=uni, measured=meas, eps_vs_dense=eps, alloc_gain=gain,
             net_vs_dense=meas["ppl"] - dense, beats_dense=beats)
         print(f"RING S={S}: uniform={uni['ppl']:.4f} measured={meas['ppl']:.4f} "
               f"eps={eps:+.4f} gain={gain:+.4f} net={meas['ppl']-dense:+.4f} "
               f"{'OVERTURNED' if beats else 'stands'}", flush=True)
+
+    if args.structure_only:
+        with open(args.out, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"WROTE {args.out}", flush=True)
+        print("STRUCTURE_DONE", flush=True)
+        return
 
     # overall verdict
     any_beat = any(v["beats_dense"] for v in results["by_ring"].values())
