@@ -21,10 +21,27 @@ from promix.quantize.ring_rotation import (  # noqa: F401
 )
 
 
-def build_main_transform(U_attn, R_dict, identity_main_rotation):
-    """Compose the main-path transform T. With identity_main_rotation,
-    T = U_attn (pure PCA, no trained R1 block boundary). Otherwise
-    T = U_attn @ block_diag(R1_0?, R1_1, R1_2)."""
+def build_main_transform(U_attn, R_dict, identity_main_rotation,
+                         ring_r1=False, ring_size=64):
+    """Compose the main-path (residual-stream) transform T.
+
+    Three mutually-exclusive regimes, in priority order:
+
+    - ``ring_r1=True`` (spec §3, the shipped R-on substrate): replace the
+      dense block-diagonal R1 with the uniform 64-ring block-diagonal
+      Hadamard R1 that covers ALL of hidden_dim. ``T = U_attn @ R1_ring``.
+      ``U_attn`` (global variance-sorted PCA basis) is unchanged; only the
+      hidden-dim residual-stream rotation is swapped. Per-head R2 / value /
+      key rotations and the down_proj online Hadamard are applied elsewhere
+      and are NOT touched by this flag. Takes priority over both other modes.
+    - ``identity_main_rotation=True``: T = U_attn (pure PCA, R1-off).
+    - otherwise (dense R-on): T = U_attn @ block_diag(R1_0?, R1_1, R1_2).
+    """
+    if ring_r1:
+        R1 = build_uniform_ring_R1(
+            U_attn.shape[-1], ring_size=ring_size, dtype=torch.float64
+        ).to(U_attn.device)
+        return compose_rotation(U_attn, R1)
     if identity_main_rotation:
         return U_attn
     R1_1 = R_dict["R1_1"].to(U_attn.device, torch.float64)
@@ -203,13 +220,17 @@ def _rearrange_o_proj(layer, high_bits_length, low_bits_length, head_dim):
 
 
 def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fraction=0.0,
-                         identity_main_rotation=False):
+                         identity_main_rotation=False, ring_r1=False, ring_size=64):
     """Fuse PCA basis + rotation into model weights (full_shared mode).
 
     After this call:
     - embed_tokens output is in rotated coordinate system
     - All linear weights absorb the rotation
     - Residual stream stays in rotated coordinates throughout
+
+    ``ring_r1`` (opt-in, spec §3): when True the residual-stream rotation is
+    ``U @ uniform-64-ring-R1`` instead of the dense ``U @ R1`` (or ``U`` when
+    ``identity_main_rotation``). Default False = byte-identical shipped path.
     """
     config = model.config
     num_heads = config.num_attention_heads
@@ -221,7 +242,8 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
     U_attn = U_cpk["attn_mlp"].cuda()
 
     R_dict = torch.load(rotation_path, weights_only=False)
-    U_attn = build_main_transform(U_attn, R_dict, identity_main_rotation)
+    U_attn = build_main_transform(U_attn, R_dict, identity_main_rotation,
+                                  ring_r1=ring_r1, ring_size=ring_size)
 
     torch.distributed.barrier()
 
