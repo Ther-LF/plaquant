@@ -55,3 +55,42 @@ def main_path_avg_bits(khigh_list, hidden_dim, low_bits=4, high_bits=8):
     per = [((hidden_dim - k) * low_bits + k * high_bits) / hidden_dim
            for k in khigh_list]
     return sum(per) / len(per)
+
+
+# ---------------------------------------------------------------------------
+# Rate-distortion mixed-precision allocation
+# (docs/superpowers/plans/2026-10-28-rate-distortion-mixed-precision-allocation.md)
+# ---------------------------------------------------------------------------
+from .quant_utils import fake_quantize_nvfp4, fake_quantize_mxfp8
+
+_FMT = {'nvfp4': fake_quantize_nvfp4, 'mxfp8': fake_quantize_mxfp8}
+
+
+def ring_mse(x_rot, ring_size, fmt):
+    """Per-ring measured quantization MSE on rotated activations/weights.
+
+    Uses the deployment pipeline's real fake-quant (the same MSE-searched
+    block scales the kernel sees), so the measured MSE matches what the
+    model is actually served with. `fake_quantize_nvfp4`/`_mxfp8` quantize
+    along the last dim with their own block sizes (16 / 32) and derive
+    block scales internally; `ring_size` (64) is a whole multiple of both,
+    so per-ring MSE is simply the mean squared dequant error over each
+    64-channel group.
+
+    x_rot: (M, d). Returns (d//ring_size,) float tensor.
+    """
+    if fmt not in _FMT:
+        raise ValueError(f"fmt must be one of {list(_FMT)}, got {fmt}")
+    x = torch.as_tensor(x_rot, dtype=torch.float32)
+    M, d = x.shape
+    if d % ring_size != 0:
+        raise ValueError(f"d={d} not a multiple of ring_size={ring_size}")
+    q = _FMT[fmt](x)                       # dequantized, same shape
+    err2 = (x - q).pow(2)                  # (M, d)
+    per_ring = err2.reshape(M, d // ring_size, ring_size).mean(dim=(0, 2))
+    return per_ring                        # (d//ring_size,)
+
+
+def ring_deltaD(x_rot, ring_size):
+    """D_fp4 - D_fp8 per ring (error reduced by upgrading FP4 -> FP8)."""
+    return ring_mse(x_rot, ring_size, 'nvfp4') - ring_mse(x_rot, ring_size, 'mxfp8')
