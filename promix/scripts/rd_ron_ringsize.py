@@ -48,6 +48,10 @@ def main():
                     help="in-harness dense-R-on uniform-1/8 PPL (the flip target)")
     ap.add_argument("--collect_tokens", type=int, default=4096)
     ap.add_argument("--calib_samples", type=int, default=16)
+    ap.add_argument("--dense_rotation", action="store_true",
+                    help="DENSE-LIMIT probe: use the SHIPPED dense R1 rotation "
+                         "(ring_r1=False) instead of the ring substrate; ring_size "
+                         "is then only the measured-allocation atom (K alignment).")
     ap.add_argument("--out", default="/home/luofan/RD_RON_RINGSIZE.json")
     args = ap.parse_args()
 
@@ -58,12 +62,13 @@ def main():
     ptqmod.init_distributed_for_ptq_main_if_needed()
     transformers.set_seed(config["calibration"].get("seed", 0))
 
+    ring_r1 = not args.dense_rotation          # dense-limit probe => dense R1
     ring_sizes = [int(x) for x in args.ring_sizes.split(",")]
     dense = args.dense_ron_uniform
     print(f"START ringsize model={config['model']['name']} sizes={ring_sizes} "
-          f"dense_uniform={dense}", flush=True)
+          f"ring_r1={ring_r1} dense_uniform={dense}", flush=True)
     results = {"meta": dict(model=config["model"]["name"], ring_sizes=ring_sizes,
-                            dense_ron_uniform=dense), "by_ring": {}}
+                            ring_r1=ring_r1, dense_ron_uniform=dense), "by_ring": {}}
 
     tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
     calib = get_wikitext2(nsamples=args.calib_samples,
@@ -73,7 +78,7 @@ def main():
     def run(tag, chosen, S):
         t = time.time()
         model = rv.build_eval(config, r1_off=False, chosen=chosen,
-                              ring_r1=True, ring_size=S)
+                              ring_r1=ring_r1, ring_size=S)
         frac, hi, tot = rv.avg_fp8_fraction(model)
         ppl = rv.eval_ppl(model, config)
         print(f"RESULT {tag} ppl={ppl:.4f} avg_fp8={frac:.4f} ({hi}/{tot}) "
@@ -83,7 +88,7 @@ def main():
         return dict(ppl=ppl, avg_fp8=frac, hi_ch=hi, tot_ch=tot)
 
     for S in ring_sizes:
-        cmodel = rv.build_base(config, r1_off=False, ring_r1=True, ring_size=S)
+        cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1, ring_size=S)
         cmodel.to(DEV)
         stats = rv.collect_stats(cmodel, calib, max_tokens=args.collect_tokens, ring=S)
         del cmodel
