@@ -635,17 +635,38 @@ def build_model(config, args):
     return model
 
 
-def ensure_rotation_file(config, size_short):
+def ensure_rotation_file(config, size_short, high_fraction=None):
+    """Generate `config["paths"]["rotation"]` if missing.
+
+    `high_fraction` MUST be the sweep's actual `rw` (the fraction baked into
+    the `R-high-{rw}-...` filename this function is asked to produce) — NOT
+    `config["quantize"]["high_fraction"]` (the yaml's default, e.g. 0.125),
+    which `main()` never updates before calling this (that update only
+    happens later, inside `build_model()`). Using the yaml default here was
+    a latent bug: `compute_basis` computes its OWN internal rotation
+    filename from whatever `high_fraction` it's given, so passing the wrong
+    value makes it silently read/write a DIFFERENT R-file than `rot` (e.g.
+    asked for r=0 and 0.0625, it would just re-touch the pre-existing
+    r=0.125 file and never create the r=0/r=0.0625 ones) — the final
+    `assert os.path.exists(rot)` then fails. Only silent-if-undetected
+    because every r this script had previously been run with already had
+    its R-file cached from an earlier correctly-targeted run. Caller must
+    now pass the real `rw` explicitly.
+    """
     rot = config["paths"]["rotation"]
     if os.path.exists(rot):
         return
+    assert high_fraction is not None, (
+        "ensure_rotation_file: high_fraction is required when the rotation "
+        "file does not exist yet (must be the sweep's rw, not the yaml default)"
+    )
     qcfg = config["quantize"]
     print(f"Generating rotation file {rot} ...", flush=True)
     basismod.compute_basis(
         model_name=config["model"]["name"], output_dir=os.path.dirname(rot),
         seqlen=config["calibration"]["seqlen"], nsamples=config["calibration"]["nsamples"],
         seed=config["calibration"].get("seed", 0), calib_dataset=config["calibration"]["dataset"],
-        high_fraction=qcfg["high_fraction"], low_fraction=0.0, sparse_fraction=0.0,
+        high_fraction=high_fraction, low_fraction=0.0, sparse_fraction=0.0,
         down_proj_blocksize=qcfg.get("down_proj_blocksize", 256),
         rotation_granularity=qcfg["rotation_granularity"],
         o_proj_pca=qcfg.get("o_proj_pca", "per_head"))
@@ -694,6 +715,16 @@ def main():
     ap.add_argument("--out", default="/home/luofan/ablation_results")
     ap.add_argument("--model_path", default=None,
                     help="local model dir override (e.g. when HF download is blocked)")
+    ap.add_argument("--basis_override", default=None,
+                    help="same-format-nvfp4 ablation: path to a surrogate basis .bin "
+                         "whose 'attn_mlp' key replaces the real PCA basis (everything "
+                         "else — per-layer value/key_pos/down_proj/o_proj_global — is "
+                         "still read from the real basis bundle at this path). Combine "
+                         "with --mode a3 --rotation off so identity_main_rotation=True "
+                         "makes T = this override's 'attn_mlp' directly (no R1 mixed "
+                         "in). Used to swap in a foreign residual-stream rotation "
+                         "(QuaRot randomized-Hadamard / SpinQuant learned R1) while "
+                         "holding the rest of the ProMix pipeline fixed.")
     args = ap.parse_args()
 
     # resolve rw/ra
@@ -712,7 +743,10 @@ def main():
     rotdir = os.path.dirname(config["paths"]["rotation"])
     config["paths"]["rotation"] = os.path.join(rotdir, f"R-high-{args.rw}-low-0.0-sparse-0.0-{si['short']}.bin")
     config["paths"]["basis"] = os.path.join(rotdir, f"U-wikitext-512-{si['short']}.bin")
-    ensure_rotation_file(config, si["short"])
+    ensure_rotation_file(config, si["short"], high_fraction=args.rw)
+    if args.basis_override:
+        assert os.path.exists(args.basis_override), args.basis_override
+        config["paths"]["basis"] = args.basis_override
 
     ptqmod.init_distributed_for_ptq_main_if_needed()
     transformers.set_seed(config["calibration"].get("seed", 0))
@@ -726,7 +760,7 @@ def main():
                 w2l_mse=args.w2l_mse, w2l_pow2=args.w2l_pow2, w2l_high=args.w2l_high, rtn=args.rtn,
                 act_2level=args.act_2level, a2l_round=args.a2l_round,
                 act_mse=qu.ACT_MSE_SCALE_SEARCH, weight_mse=qu.WEIGHT_MSE_SCALE_SEARCH,
-                tag=args.tag)
+                basis_override=args.basis_override, tag=args.tag)
     print(f"START {json.dumps(meta)}", flush=True)
 
     model = build_model(config, args)
