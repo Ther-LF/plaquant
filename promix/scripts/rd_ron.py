@@ -102,6 +102,12 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--collect_tokens", type=int, default=4096)
     ap.add_argument("--calib_samples", type=int, default=16)
+    ap.add_argument("--ring_size", type=int, default=64,
+                    help="Hadamard ring width = allocation unit (64 default; "
+                         "128 is the ablation-chosen default substrate)")
+    ap.add_argument("--skip_dense", action="store_true",
+                    help="skip re-measuring the ring-independent dense-R-on "
+                         "uniform anchor; use --dense_ron_uniform_ref instead")
     ap.add_argument("--dense_ron_uniform_ref", type=float, default=8.293,
                     help="published dense-R-on uniform-1/8 floor for this model")
     # budget grid (as fractions). Priority order: downward iso-accuracy hunt
@@ -123,12 +129,14 @@ def main():
     transformers.set_seed(config["calibration"].get("seed", 0))
 
     budgets = [float(x) for x in args.budgets.split(",")]
+    S = args.ring_size
     print(f"START rd_ron model={config['model']['name']} "
-          f"basis={os.path.basename(config['paths']['basis'])} budgets={budgets}",
-          flush=True)
+          f"basis={os.path.basename(config['paths']['basis'])} ring_size={S} "
+          f"budgets={budgets}", flush=True)
 
     results = {"meta": dict(model=config["model"]["name"],
                             basis=os.path.basename(config["paths"]["basis"]),
+                            ring_size=S,
                             dense_ron_uniform_ref=args.dense_ron_uniform_ref,
                             budgets=budgets)}
 
@@ -147,7 +155,7 @@ def main():
 
     # --- GATE (b): ring-rotation-only, NO quant (lossless probe) -------------
     t0 = time.time()
-    mdl = rv.build_base(config, r1_off=False, ring_r1=True)  # no configure => no quant
+    mdl = rv.build_base(config, r1_off=False, ring_r1=True, ring_size=S)  # no configure => no quant
     mdl.to(DEV)
     ppl_ring_noquant = rv.eval_ppl(mdl, config)
     del mdl
@@ -165,15 +173,14 @@ def main():
     calib = get_wikitext2(nsamples=args.calib_samples,
                           seed=config["calibration"].get("seed", 0),
                           seqlen=2048, tokenizer=tok, eval_mode=False)
-    cmodel = rv.build_base(config, r1_off=False, ring_r1=True)
+    cmodel = rv.build_base(config, r1_off=False, ring_r1=True, ring_size=S)
     cmodel.to(DEV)
-    stats = rv.collect_stats(cmodel, calib, max_tokens=args.collect_tokens)
+    stats = rv.collect_stats(cmodel, calib, max_tokens=args.collect_tokens, ring=S)
     del cmodel
     cleanup_memory()
 
     total_rings = sum(stats[n]["nr"] for n in stats)
-    uni = rv.uniform_rings(stats)
-    budget_rings_18 = sum(uni.values())      # exact matched 1/8 budget
+    budget_rings_18 = int(round(0.125 * total_rings))   # matched 1/8 budget (any ring size)
     print(f"ALLOC units={len(stats)} total_rings={total_rings} "
           f"budget_fp8_rings@1/8={budget_rings_18} "
           f"(frac={budget_rings_18/total_rings:.4f})", flush=True)
@@ -182,7 +189,8 @@ def main():
 
     def run(tag, chosen, ring_r1):
         t = time.time()
-        model = rv.build_eval(config, r1_off=False, chosen=chosen, ring_r1=ring_r1)
+        model = rv.build_eval(config, r1_off=False, chosen=chosen, ring_r1=ring_r1,
+                              ring_size=S)
         frac, hi, tot = rv.avg_fp8_fraction(model)
         ppl = rv.eval_ppl(model, config)
         dt = time.time() - t
@@ -195,7 +203,13 @@ def main():
     # --- @1/8 comparators: dense-R-on uniform, ring-R-on {uniform, variance,
     #     measured} — the 3-way ranking re-verification + ring-vs-dense cost ---
     results["at_1_8"] = {}
-    results["at_1_8"]["dense_ron_uniform"] = run("dense_ron_uniform", None, ring_r1=False)
+    if args.skip_dense:
+        results["at_1_8"]["dense_ron_uniform"] = dict(
+            ppl=args.dense_ron_uniform_ref, avg_fp8=0.125, skipped=True)
+        print(f"RESULT dense_ron_uniform ppl={args.dense_ron_uniform_ref:.4f} "
+              f"(skipped, ring-independent; from --dense_ron_uniform_ref)", flush=True)
+    else:
+        results["at_1_8"]["dense_ron_uniform"] = run("dense_ron_uniform", None, ring_r1=False)
     results["at_1_8"]["ring_ron_uniform"] = run("ring_ron_uniform", None, ring_r1=True)   # GATE (c)
 
     chosen_var, tau = rv.variance_alloc(stats, budget_rings_18)
