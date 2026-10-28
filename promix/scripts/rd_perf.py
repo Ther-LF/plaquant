@@ -136,6 +136,7 @@ def build_real(config, r1_off, chosen, nv, mx, cd, qpf, dg):
     """Real packed fused-kernel model for latency. chosen=None -> shipped uniform
     1/8 (no override, byte-identical). Else per-Linear measured allocation."""
     model = rdv.build_base(config, r1_off)
+    model.to(DEV)
     if chosen is not None:
         _apply_reorder_override(model, chosen)
     ptqmod.configure_quantizers(model, config)
@@ -143,6 +144,7 @@ def build_real(config, r1_off, chosen, nv, mx, cd, qpf, dg):
                   rotation_path=config["paths"]["rotation"])
     # pack_all_targets reads each wrapper.quantizer.high_bits_length (the per-
     # Linear K_high just configured) via _khigh_for -> per-layer allocated pack.
+    # Weights must be on CUDA here (the SF prepack kernels require CUDA uint8).
     packed = fn.pack_all_targets(model, nv, mx, cd, high_fraction=0.125,
                                  verbose=False)
     fn.wire_real_kernel(model, packed, nv, mx, cd, qpf=qpf, dg=dg)
