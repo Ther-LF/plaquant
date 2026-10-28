@@ -221,6 +221,21 @@ def configure_quantizers(model, config):
                 layer_low_length = 0
                 layer_groupsize = -1
 
+        # Externally-supplied per-Linear K_high override (rate-distortion
+        # allocation, Task 3). OPT-IN and zero-regression: active only when
+        # the caller has stashed a `model._rd_khigh_override` dict mapping
+        # the exact qlayer name -> K_high (FP8 segment length, already
+        # ring-aligned). Absent attribute -> byte-identical to the shipped
+        # uniform path. Keyed per-Linear (not per-layer) so it can drive the
+        # measured-MSE / variance-proxy allocations which vary K_high across
+        # the individual projections within a decoder layer. Must run LAST so
+        # it wins over both the per-Linear defaults and the adaptive map.
+        rd_override = getattr(model, "_rd_khigh_override", None)
+        if rd_override is not None and name in rd_override:
+            layer_high_length = int(rd_override[name])
+            layer_low_length = 0
+            layer_groupsize = -1
+
         qlayers[name].quantizer.configure(
             bits=layer_bits,
             groupsize=layer_groupsize,
