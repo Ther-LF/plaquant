@@ -59,6 +59,36 @@ import rd_validity as rv
 RING = rv.RING
 
 
+def resolve_paths(config):
+    """Model-aware artifact + local-model resolution (generalizes
+    rd_validity.resolve_paths, which was 3B-only, to 1B/3B/8B).
+
+    Forces the EXISTING, proven per-head PCA basis + R-on rotation artifacts
+    and the local model dir for whichever Llama size the config names, so the
+    same R-on substrate the shipped uniform path uses is what we build on.
+    """
+    name = config["model"]["name"]
+    lname = name.lower()
+    if "3b" in lname:
+        short, local = "Llama-3.2-3B", "/home/luofan/models/Llama-3.2-3B"
+    elif "8b" in lname:
+        short, local = "llama-3-8b", "/home/luofan/models/llama-3-8b"
+    elif "1b" in lname:
+        # artifacts for 1B are the Instruct variant; no local dir (HF cache).
+        short, local = "Llama-3.2-1B-Instruct", "/home/luofan/models/Llama-3.2-1B-Instruct"
+    else:
+        short, local = os.path.basename(name), None
+    if local and os.path.isdir(local):
+        config["model"]["name"] = local
+    rotdir = os.path.dirname(config["paths"]["rotation"])
+    config["paths"]["basis"] = os.path.join(rotdir, f"U-wikitext-512-{short}.bin")
+    config["paths"]["rotation"] = os.path.join(
+        rotdir, f"R-high-0.125-low-0.0-sparse-0.0-{short}.bin")
+    config["quantize"]["o_proj_pca"] = "per_head"   # matches the existing basis
+    config["quantize"]["high_fraction"] = 0.125
+    return config
+
+
 def fp16_bridge(config):
     """Plain fp16 baseline (no rotation, no quant) — the lossless-rotation
     reference for gate (b). Loaded in the SAME dtype build_base uses so the
@@ -85,7 +115,7 @@ def main():
     args = ap.parse_args()
 
     config = ptqmod.load_config(os.path.join(REPO, args.config))
-    config = rv.resolve_paths(config)
+    config = resolve_paths(config)
     for p in (config["paths"]["basis"], config["paths"]["rotation"]):
         assert os.path.exists(p), f"missing artifact: {p}"
 
