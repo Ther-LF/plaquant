@@ -114,13 +114,32 @@ def _aligned_uniform_chosen(stats, b):
 
 
 # ---------------------------------------------------------------------------
+def _clamp_chosen(chosen, stats):
+    """Keep >=1 NVFP4 (low) ring per Linear so the NVFP4 weight/activation block
+    is never empty (K_low>=RING). A fully-FP8 Linear makes `Wblk.abs().amax()`
+    reduce an empty tensor in the two-level NVFP4 weight quantizer (crash), and
+    the fused kernel rejects K_low==0 on the latency side too. At high budgets
+    (>=3/8) the global deltaD threshold can push a small Linear fully to FP8; we
+    drop its lowest-deltaD FP8 ring back to NVFP4. So r=1 is "all-but-one-ring
+    MXFP8" (a faithful pure-MXFP8 endpoint anchor)."""
+    for name, S in chosen.items():
+        nr = stats[name]["nr"]
+        if len(S) >= nr:
+            dd = stats[name]["deltaD"]
+            drop = len(S) - (nr - 1)
+            for r in sorted(S, key=lambda r: float(dd[r]))[:drop]:
+                S.discard(r)
+    return chosen
+
+
 def build_points(stats, budgets, total_rings):
     """List of (alloc, budget, chosen). chosen=None -> shipped uniform-1/8."""
     pts = [("uniform", 0.125, None)]                       # anchor baseline
     pts.append(("uniform", 0.0625, _aligned_uniform_chosen(stats, 0.0625)))  # ref
     for b in budgets:
         budget_rings = int(round(b * total_rings))
-        chosen = rdv.measured_alloc(stats, budget_rings, total_rings)
+        chosen = _clamp_chosen(rdv.measured_alloc(stats, budget_rings, total_rings),
+                               stats)
         pts.append(("measured", b, chosen))
     return pts
 
@@ -152,12 +171,25 @@ def run(model_key, config_path, phase, budgets, args):
     rows = {}
     out["rows"] = rows
 
+    # --- resume: load a prior incremental JSON and skip completed points -----
+    if args.resume and os.path.exists(args.out):
+        try:
+            prev = json.load(open(args.out))
+            if "bf16_bridge" in prev:
+                out["bf16_bridge"] = prev["bf16_bridge"]
+                out["bf16_ok"] = prev.get("bf16_ok")
+            rows.update(prev.get("rows", {}))
+            print(f"RESUME loaded {len(rows)} prior points from {args.out}",
+                  flush=True)
+        except Exception as ex:
+            print(f"RESUME failed to load prior ({ex}); starting fresh", flush=True)
+
     def flush():
         with open(args.out, "w") as f:
             json.dump(out, f, indent=2, default=str)
 
     # --- bf16 bridge gate ---------------------------------------------------
-    if phase in ("ppl", "both") and not args.skip_bf16:
+    if phase in ("ppl", "both") and not args.skip_bf16 and "bf16_bridge" not in out:
         t0 = time.time()
         bf16 = rdv.bf16_bridge(config)
         out["bf16_bridge"] = bf16
@@ -187,7 +219,6 @@ def run(model_key, config_path, phase, budgets, args):
 
     # --- latency kernel load (lazy) -----------------------------------------
     nv = mx = cd = qpf = dg = None
-    lat_ref = None
     if phase in ("lat", "both"):
         import rd_perf
         print("Loading SM120 kernels (JIT may take minutes)...", flush=True)
@@ -205,7 +236,7 @@ def run(model_key, config_path, phase, budgets, args):
         row = rows.setdefault(key, dict(model=model_key, alloc=alloc, budget=budget))
         print(f"=== POINT {key} ===", flush=True)
 
-        if phase in ("ppl", "both"):
+        if phase in ("ppl", "both") and "ppl" not in row:
             t0 = time.time()
             model = rdv.build_eval(config, r1_off=True, chosen=chosen)
             frac, hi, totc = rdv.avg_fp8_fraction(model)
@@ -229,7 +260,7 @@ def run(model_key, config_path, phase, budgets, args):
             cleanup_memory()
             flush()
 
-        if phase in ("lat", "both"):
+        if phase in ("lat", "both") and "prefill_ms" not in row:
             t0 = time.time()
             import rd_perf
             lat = rd_perf.measure_latency_for(config, True, chosen, stats, budget,
@@ -241,8 +272,6 @@ def run(model_key, config_path, phase, budgets, args):
                     bpw, realized = bits_per_weight(lat["khigh"])
                     row["bits_per_weight"] = bpw
                     row["avg_fp8_realized"] = realized
-                if alloc == "uniform" and abs(budget - 0.125) < 1e-9:
-                    lat_ref = lat
                 print(f"  prefill={lat['prefill_ms']:.3f}ms decode={lat['decode_ms']:.3f}ms "
                       f"fallback={lat.get('uniform_fallback')} ({time.time()-t0:.0f}s)",
                       flush=True)
@@ -251,10 +280,11 @@ def run(model_key, config_path, phase, budgets, args):
                 print(f"  latency FAILED: {lat['error']}", flush=True)
             flush()
 
-    # --- speedups vs uniform-1/8 (latency phase only) -----------------------
-    if lat_ref is not None:
-        pr0 = lat_ref["prefill_ms"]
-        de0 = lat_ref["decode_ms"]
+    # --- speedups vs uniform-1/8 (read the anchor row; resume-safe) ----------
+    u18 = rows.get(point_key("uniform", 0.125))
+    if u18 and "prefill_ms" in u18:
+        pr0 = u18["prefill_ms"]
+        de0 = u18["decode_ms"]
         for key, row in rows.items():
             if "prefill_ms" in row:
                 row["prefill_x_vs_uniform18"] = pr0 / row["prefill_ms"]
@@ -283,6 +313,8 @@ def main():
     ap.add_argument("--calib_samples", type=int, default=16)
     ap.add_argument("--eval_bs", type=int, default=16)
     ap.add_argument("--skip_bf16", action="store_true")
+    ap.add_argument("--resume", action="store_true", default=True)
+    ap.add_argument("--no_resume", dest="resume", action="store_false")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     if args.out is None:
