@@ -19,11 +19,11 @@ per-ring. Two levers, both validated on **3B**:
    rotation is untouched, rotation cost ε = 0, so the allocation gain is pure
    win: **8.2678, −0.030** vs dense uniform 8.2974.
 
-**On 8B the overturn does NOT hold via the ring substrate** (measured ≈ dense
-uniform within +0.001…+0.006 at every ring width) — 8B's per-ring ΔD is far more
-uniform, so allocation buys almost nothing and the ring rotation cost ε is not
-repaid. The dense-limit on 8B (ε=0) is the deciding test for whether allocation
-helps 8B at all: _[8B dense-limit in progress]_.
+**On 8B the overturn does NOT hold** — not via the ring substrate (measured ≈
+dense uniform within +0.001…+0.006 at every ring width) and not at the
+dense-limit either (ε=0: measured 6.6072 vs uniform 6.5882, **+0.019 worse** —
+the gain itself is negative on 8B). 8B's per-ring ΔD is far more uniform, so
+allocation buys nothing there. **8B verdict final: stands.**
 
 **Net:** the "uniform near-optimal" claim is **overturned on 3B** (clearly, by
 either lever) but **holds on 8B** for the ring substrate; the model-dependence
@@ -115,14 +115,17 @@ Reference: dense-R-on uniform (in-harness) **6.5882** (≈ published 6.599); bf1
 | ring128 | 6.6105 | 6.5937 | +0.0223 | +0.0168 | +0.0055 | stands |
 | ring256 | 6.6009 | 6.5917 | +0.0127 | +0.0092 | +0.0035 | stands |
 | ring512 | 6.5970 | 6.5890 | +0.0088 | +0.0080 | +0.0008 | stands (≈ tied) |
-| **dense R1 + measured** | 6.5882 | _[pending]_ | 0 | _[pending]_ | _[pending]_ | _[pending]_ |
+| **dense R1 + measured** | 6.5882 | **6.6072** | 0 | **−0.0190** | **+0.0190** | **stands** |
 
-8B's measured allocation gain is tiny (+0.008…+0.017, vs 3B's +0.024…+0.217)
-because 8B's per-ring ΔD is far more uniform — there is little outlier structure
-to exploit. With the ring substrate, the (small) rotation cost ε is not repaid,
-so net stays ≈ 0 to slightly positive at every width (approaching 0 as ε→0 with
-S). The dense-limit (ε=0) is the only configuration that *could* net-positive on
-8B — pending.
+8B's measured allocation gain is tiny (+0.008…+0.017 on rings, vs 3B's
++0.024…+0.217) because 8B's per-ring ΔD is far more uniform — there is little
+outlier structure to exploit. With the ring substrate, the (small) rotation cost
+ε is not repaid, so net stays ≈ 0 to slightly positive at every width. The
+dense-limit (ε=0, the only configuration that could net-positive) **also
+stands**: measured = 6.6072 is +0.019 *worse* than uniform — on 8B the measured
+ΔD ranking actually underperforms the position-ranked uniform cut (gain is
+*negative* at dense), consistent with the ΔD-metric caveat below. **8B verdict
+is final: uniform near-optimal holds on 8B under every tested lever.**
 
 ## Three-model summary + ΔD-structure metric
 
@@ -133,13 +136,14 @@ activations (ring-64 atoms, pooled over the reallocated Linears):
 |---|---|---|---|---|---|---|
 | 1B (Instruct) | 14.5483 (≈14.563) | 0.694 | 1.945 | 0.607 | **+0.0766** (14.4717) | **YES** |
 | 3B | 8.2974 (≈8.293) | 0.641 | 1.772 | 0.592 | +0.0296 (8.2678) | **YES** |
-| 8B | 6.5882 (≈6.599) | 0.664 | 1.834 | 0.588 | _[in progress]_ | ring: NO (net +0.001…+0.006) |
+| 8B | 6.5882 (≈6.599) | 0.664 | 1.834 | 0.588 | **−0.0190** (6.6072, worse) | **NO** (rings +0.001…+0.006; dense −0.019 gain) |
 
 **The dense-limit allocation gain orders cleanly by model size: 1B +0.077 >
-3B +0.030 > 8B (ring gains ≈ +0.008…+0.017).** Smaller models have more
-allocation headroom (they quantize further from their fp16 floor), so per-layer
-measured-MSE K buys more. The dense-limit (shipped R1 + measured K, ε=0) is a
-clean overturn on both 1B and 3B.
+3B +0.030 > 8B −0.019.** Smaller models have more allocation headroom (they
+quantize further from their fp16 floor), so per-layer measured-MSE K buys more —
+and on 8B it crosses into slightly negative. The dense-limit (shipped R1 +
+measured K, ε=0) is a clean overturn on both 1B and 3B, and a clean "stands"
+on 8B.
 
 **Honest caveat on the ΔD metric:** the ΔD-*concentration* numbers (Gini,
 top-1/8 fraction) are *similar across all three models* and do **not** cleanly
@@ -158,9 +162,12 @@ metric as measured rather than curve-fit a just-so story.
   0.030 PPL at iso-budget and needs no rotation-artifact change. If the ring
   substrate is acceptable (opt-in, zero online cost, baked once), ring256/512
   buys a further ~0.035 and extends iso-accuracy to smaller budgets.
-- **8B: uniform is near-optimal; allocation is neutral.** The measured allocation
-  neither helps nor hurts beyond ~0.005 — safe to ship as a no-op or skip. (Final
-  call pending the 8B dense-limit.)
+- **8B: uniform is near-optimal; ship uniform.** The measured allocation is
+  neutral on rings (+0.001…+0.006) and slightly *negative* at the dense-limit
+  (−0.019) — final call: **do not enable allocation on 8B**; keep uniform 1/8.
+  Operationally: gate the allocator on a cheap pre-check (e.g. the measured
+  3B-vs-8B gain pattern, or a calibration A/B at 1/8) rather than a fixed
+  model-size rule.
 - **Rings in the paper:** keep the full ring64→512 ablation — it is what
   *discovered* the flip and isolates the ε(S)/gain(S) mechanism (mixing-width
   vs allocation), and shows the ring structure contributes beyond dense+measured.

@@ -33,6 +33,20 @@
 > - **Atom 补充(独立 agent,同协议)**:Atom 自身 bridge 在 FP16 复现 **13.159/7.814/6.136**(= committed 基线)→ 协议匹配。真·recipe(128 INT8 keeper + group-128 + hessian reorder + GPTQ + INT4 KV,≈4.2 b/w)fake-quant:1B **18.40**(Δ+5.24)、3B **9.699**(Δ+1.89)、8B 计算中。**明显逊于 ProMix**。Atom 又一次独立印证 **INT4 在 Blackwell 无真数据通路**:ptxas 把 `s4.s4` MMA 降级成 INT8 `IMMA.16832.S8.S8`,零 S4 SASS(与 QuaRot 的 INT4 kernel 慢 5-6× 结论一致)。原始数据:`/home/luofan/baselines/peers/atom/{RESULTS.md,results.json}`。
 > - **SpinQuant 补充(独立 agent,同协议)**:FP16 bridge 复现 **13.158/7.816/6.137**(= 基线)→ 协议匹配。SpinQuant 仅 fake-quant(SM120 无 GPU kernel,无加速)。W4A4KV4 4.0 b/w(GPTQ per-channel + KV4 asym + A4 per-token):**Hadamard 旋转(非学习,= QuaRot 式默认)**:1B **18.623**(Δ+5.47)、3B **10.092**(Δ+2.28)、8B **7.882**(Δ+1.75)。学习旋转(Cayley-SGD 100 步,单卡 batch 8/2 远小于论文 8-GPU batch-8):1B **16.143**(Δ+2.99,较 Hadamard 改善 2.48)、3B **9.246**(Δ+1.43,改善 0.85)、8B 太慢未训(用 Hadamard 7.882)。**即便学习旋转,SpinQuant 4.0b(16.14/9.25/7.88)仍明显逊于 ProMix 4.97b(14.56/8.30/6.60)与 NVFP4 4.50b。** SpinQuant 在 SM120 无 CUDA/CUTLASS kernel(仅 ExecuTorch 移动端路径)→ 无 on-hardware 加速。原始数据:`/home/luofan/baselines/peers/spinquant/`(commit 8f47aa3)。
 
+### 率失真分配战役(2026-10-28/29,`feat/rd-alloc`,完整数据:`docs/rd_pareto_report.md` + `docs/rd_ron_report.md`)
+
+**算法升级:实测-MSE 率失真每层分配(θ/B 单旋钮),取代固定 1/8。** 五次"uniform 近最优"结论在翻盘杠杆(保 R 的环/稠密基座)下被**部分推翻 —— 模型依赖**:
+
+| 模型 | 最优配置 @同比特同速度 | PPL(vs shipped uniform-1/8) | 判决 |
+|---|---|---|---|
+| 1B | 稠密R1不动 + 实测MSE每层K | **14.4717**(−0.077 vs 14.548) | **推翻 ✅** |
+| 3B | ring512+measured / 稠密+measured | **8.2328**(−0.065)/ 8.2678(−0.030) | **推翻 ✅** |
+| 8B | 任何杠杆都不赢(dense 下 gain=−0.019) | 6.5882 uniform 仍最优 | 维持(8B 每环 ΔD 均匀,无结构可利用) |
+
+- **机制图**:ε(环旋转代价) vs gain(分配增益) 随环宽的分解(64→512);uniform 怕宽环抹花方差尾,**实测MSE重排免疫**,净收益随环宽单调扩大(3B)。
+- **θ 旋钮完整说明书**(三模型 × 12 预算 × PPL+真实延迟,42 点):下翼(<1/8)是**比特/精度旋钮**(延迟平,~1.0×);上翼(>1/8)是**延迟换精度旋钮**(1/8→纯MXFP8:−0.79/−0.27/−0.29 PPL,价 +10%/+18%/+24% prefill,斜率随尺寸涨);r=0 悬崖(17.8/10.9/8.0)被单个 1/32 环预算抹平。iso-accuracy 地板:1B=1/8、3B=1/16(省 1.8× MXFP8)、8B=1/12。
+- **发货规则**:1B/3B(及类似小模型)开分配(最简=稠密R1不动+measured K,零旋转改动零运行时开销);8B 保持 uniform;"分配不提供免费加速"(~1%,kernel 诊断)如实列为 limitation —— 性能来自格式+kernel(独立已证)。
+
 ### 参考组 —— W4A16(**激活不量化**;不可作为同条件对比)
 
 | 方法 | bit/weight | 1B PPL | 3B PPL | 8B PPL |
