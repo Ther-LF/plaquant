@@ -12,6 +12,14 @@ from tqdm import tqdm
 from promix.utils import cleanup_memory
 from promix.quantize.hadamard import matmul_hadU_cuda, get_hadK
 
+# Uniform 64-ring block-diagonal R1 substrate (spec §3). Implemented in a
+# torch-only focused module so it is importable without the CUDA/fht chain;
+# re-exported here because spec §6 lists rotation.py as the R1-construction home.
+from promix.quantize.ring_rotation import (  # noqa: F401
+    build_uniform_ring_R1,
+    compose_rotation,
+)
+
 
 def build_main_transform(U_attn, R_dict, identity_main_rotation):
     """Compose the main-path transform T. With identity_main_rotation,
