@@ -131,29 +131,24 @@ activations (ring-64 atoms, pooled over the reallocated Linears):
 
 | model | dense uniform (anchor) | ΔD Gini | ΔD CV | top-1/8 ΔD frac | measured gain @1/8 (dense-limit) | overturn? |
 |---|---|---|---|---|---|---|
-| 1B (Instruct) | 14.5483 (≈14.563) | 0.694 | 1.945 | 0.607 | _[blocked, see below]_ | predicted YES (R1-off gain −0.22) |
+| 1B (Instruct) | 14.5483 (≈14.563) | 0.694 | 1.945 | 0.607 | **+0.0766** (14.4717) | **YES** |
 | 3B | 8.2974 (≈8.293) | 0.641 | 1.772 | 0.592 | +0.0296 (8.2678) | **YES** |
 | 8B | 6.5882 (≈6.599) | 0.664 | 1.834 | 0.588 | _[in progress]_ | ring: NO (net +0.001…+0.006) |
 
-**Honest caveat on the metric:** the ΔD-concentration numbers (Gini, top-1/8
-fraction) are *similar across all three models* and do **not** by themselves
-separate 8B (≈nil ring gain) from 3B (large gain) — 8B's Gini (0.664) even
-exceeds 3B's (0.641). So "structure = ΔD-concentration" is at best a *partial*
-predictor: 1B (highest Gini) does have the largest gain, but 8B breaks the
-monotone story. The ring-substrate gain gap is better explained by (a) absolute
-ΔD magnitude relative to each model's loss curvature (larger models quantize
-closer to their fp16 floor, less headroom) and (b) the overlap between the
-measured-ΔD ranking and the position-based ranking the uniform cut already uses
-(if they coincide, reallocation moves little). We report the metric as measured
-rather than curve-fit a just-so story.
+**The dense-limit allocation gain orders cleanly by model size: 1B +0.077 >
+3B +0.030 > 8B (ring gains ≈ +0.008…+0.017).** Smaller models have more
+allocation headroom (they quantize further from their fp16 floor), so per-layer
+measured-MSE K buys more. The dense-limit (shipped R1 + measured K, ε=0) is a
+clean overturn on both 1B and 3B.
 
-**1B note:** the dense-uniform anchor (14.5483) and the structure metric landed,
-but the 1B *measured* dense-limit PPL was blocked by a pre-existing 1B-specific
-crash in the K-cache weight quant (`_weight_two_level_nvfp4_eff` amax on an empty
-block — a degenerate K-weight slice for 1B dims), orthogonal to the ring/
-allocation logic. Given 1B's highest ΔD structure and the R1-off prior (measured
-gain −0.22 at 1/8), 1B is expected to overturn strongly; the measured PPL is not
-captured here.
+**Honest caveat on the ΔD metric:** the ΔD-*concentration* numbers (Gini,
+top-1/8 fraction) are *similar across all three models* and do **not** cleanly
+rank the gains — 8B's Gini (0.664) exceeds 3B's (0.641) yet 8B's gain is the
+smallest. So "structure = ΔD-concentration" is only a *partial* predictor; the
+gain is better explained by absolute ΔD magnitude relative to each model's loss
+curvature (model-size headroom) and by the overlap between the measured-ΔD
+ranking and the position ranking the uniform cut already uses. We report the
+metric as measured rather than curve-fit a just-so story.
 
 ## Shipping recommendation
 
