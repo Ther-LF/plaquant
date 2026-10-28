@@ -94,3 +94,35 @@ def ring_mse(x_rot, ring_size, fmt):
 def ring_deltaD(x_rot, ring_size):
     """D_fp4 - D_fp8 per ring (error reduced by upgrading FP4 -> FP8)."""
     return ring_mse(x_rot, ring_size, 'nvfp4') - ring_mse(x_rot, ring_size, 'mxfp8')
+
+
+def allocate_by_budget(deltaD_per_layer, target_mean_fp8, deltaC_per_layer=None):
+    """Global single-threshold rate-distortion allocation.
+
+    Rank all rings by deltaD/deltaC (deltaC=None -> equal cost -> by deltaD),
+    upgrade the top ones until the average FP8 ring-fraction == target_mean_fp8.
+    Returns one bool mask per layer (True = FP8).
+    """
+    flat = []  # (score, layer_idx, ring_idx)
+    for li, dd in enumerate(deltaD_per_layer):
+        dd = torch.as_tensor(dd, dtype=torch.float64)
+        if deltaC_per_layer is not None:
+            dc = torch.as_tensor(deltaC_per_layer[li], dtype=torch.float64).clamp_min(1e-12)
+            score = dd / dc
+        else:
+            score = dd
+        for ri in range(score.numel()):
+            flat.append((float(score[ri]), li, ri))
+    total_rings = len(flat)
+    n_fp8 = int(round(target_mean_fp8 * total_rings))
+    flat.sort(key=lambda t: t[0], reverse=True)
+    masks = [torch.zeros(len(torch.as_tensor(dd).flatten()), dtype=torch.bool)
+             for dd in deltaD_per_layer]
+    for _, li, ri in flat[:n_fp8]:
+        masks[li][ri] = True
+    return masks
+
+
+def masks_to_khigh(masks, ring_size):
+    """FP8 ring masks -> per-layer K_high (= #FP8 rings * ring_size)."""
+    return [int(m.sum()) * ring_size for m in masks]

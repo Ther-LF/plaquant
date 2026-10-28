@@ -46,3 +46,28 @@ def test_ring_mse_catches_outlier():
     x = torch.cat([gauss, heavy], dim=1)      # ring0=gauss, ring1=heavy
     mse = ring_mse(x, ring, 'nvfp4')
     assert mse[1] > mse[0]  # outlier ring hurts more under FP4
+
+
+from promix.quantize.adaptive import allocate_by_budget, masks_to_khigh
+
+
+def test_allocate_hits_budget_and_picks_highest_deltaD():
+    # layer0: deltaD [0.08,0.02,0.005,0.001]; layer1: [0.015,0.009,0.004,0.002]
+    dd = [torch.tensor([0.08, 0.02, 0.005, 0.001]),
+          torch.tensor([0.015, 0.009, 0.004, 0.002])]
+    # 8 rings total, target mean fp8 = 0.25 -> 2 FP8 rings total
+    masks = allocate_by_budget(dd, target_mean_fp8=0.25)
+    total_fp8 = sum(int(m.sum()) for m in masks)
+    assert total_fp8 == 2
+    # the 2 globally-highest deltaD rings are layer0-ring0 (0.08) and layer0-ring1 (0.02)
+    assert masks[0].tolist() == [True, True, False, False]
+    assert masks[1].tolist() == [False, False, False, False]
+
+
+def test_masks_to_khigh_alignment():
+    masks = [torch.tensor([True, True, False, False]),
+             torch.tensor([False, False, False, False])]
+    kh = masks_to_khigh(masks, ring_size=64)
+    assert kh == [128, 0]
+    assert all(k % 64 == 0 for k in kh)
+
