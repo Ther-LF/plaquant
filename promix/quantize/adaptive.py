@@ -129,6 +129,38 @@ def masks_to_khigh(masks, ring_size):
 
 
 # ---------------------------------------------------------------------------
+# Config plumbing (plan Task 6 Step 1): opt-in `rd_alloc` block reader.
+# ---------------------------------------------------------------------------
+_RD_ALLOC_DEFAULTS = {'enabled': False, 'ring_size': 64, 'mode': 'perf',
+                      'target': 0.125}
+
+
+def rd_alloc_config(config):
+    """Read the opt-in ``rd_alloc`` block from a loaded config dict.
+
+    Returns a dict with all defaults filled:
+      ``{'enabled': bool, 'ring_size': int, 'mode': str, 'target': float}``.
+
+    ZERO-REGRESSION CONTRACT (plan Global Constraints): when the block is
+    absent OR ``enabled: false`` (the shipped default), this returns
+    ``enabled=False``. Callers MUST then install NO ``model._rd_khigh_override``,
+    so ``configure_quantizers`` takes the byte-identical uniform
+    ``high_fraction`` split. Only ``enabled: true`` opts a config into the
+    rate-distortion per-Linear K_high allocation.
+    """
+    raw = (config or {}).get('rd_alloc') or {}
+    out = dict(_RD_ALLOC_DEFAULTS)
+    for k in out:
+        if k in raw and raw[k] is not None:
+            out[k] = raw[k]
+    out['enabled'] = bool(out['enabled'])
+    out['ring_size'] = int(out['ring_size'])
+    out['target'] = float(out['target'])
+    out['mode'] = str(out['mode'])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Operating-point selection (spec section 8): one ranked curve, three modes.
 # Purely algorithmic -- eval_ppl_fn is injected (no model, no cost_model import)
 # so it stays unit-testable. All results are clipped to the Global-Constraints

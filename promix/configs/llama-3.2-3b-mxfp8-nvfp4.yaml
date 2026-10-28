@@ -48,3 +48,17 @@ eval:
   batch_size: 16
   num_fewshot: 0
   max_length: 2048
+
+# Rate-distortion mixed-precision allocation (opt-in; plan Task 6).
+# enabled: false => NO per-Linear K_high override is installed and the pipeline
+# is BYTE-IDENTICAL to the shipped uniform high_fraction=0.125 split (zero
+# regression). When enabled, `promix.quantize.adaptive.rd_alloc_config` reads
+# this block: `mode` picks the operating point (perf|accuracy|knee), `target` is
+# the avg-FP8 ring budget (perf) or acceptable PPL (accuracy/knee), `ring_size`
+# is the allocation unit (64). The measured-MSE allocation is produced offline
+# and driven into `configure_quantizers` via `model._rd_khigh_override`.
+rd_alloc:
+  enabled: false
+  ring_size: 64
+  mode: "perf"
+  target: 0.125

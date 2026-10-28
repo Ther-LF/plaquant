@@ -71,3 +71,24 @@ def test_masks_to_khigh_alignment():
     assert kh == [128, 0]
     assert all(k % 64 == 0 for k in kh)
 
+
+
+from promix.quantize.adaptive import rd_alloc_config
+
+
+def test_rd_alloc_config_disabled_by_default():
+    # Absent block -> disabled (zero-regression: no override installed).
+    c = rd_alloc_config({})
+    assert c['enabled'] is False
+    assert c['ring_size'] == 64 and c['mode'] == 'perf' and c['target'] == 0.125
+    # Explicit enabled:false (the shipped 3B config) is also disabled.
+    c2 = rd_alloc_config({'rd_alloc': {'enabled': False, 'ring_size': 64,
+                                       'mode': 'perf', 'target': 0.125}})
+    assert c2['enabled'] is False
+
+
+def test_rd_alloc_config_enabled_reads_fields():
+    c = rd_alloc_config({'rd_alloc': {'enabled': True, 'ring_size': 64,
+                                      'mode': 'accuracy', 'target': 8.30}})
+    assert c['enabled'] is True
+    assert c['mode'] == 'accuracy' and c['target'] == 8.30 and c['ring_size'] == 64
