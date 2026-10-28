@@ -105,27 +105,27 @@ def _median(xs):
 # fake-quant module for the real packed fused kernel (pack_all_targets reads the
 # configured per-Linear K_high, so the pack is per-layer-allocated).
 # ---------------------------------------------------------------------------
-def _apply_reorder_override(model, chosen):
-    """chosen = {name: set(fp8 ring idx)} over the ALLOC Linears. Reorders each
-    Linear's weight columns so the chosen rings are the LAST K_high, tags the
-    wrapper for the matching activation reorder, and records the per-Linear
-    K_high override read by configure_quantizers + pack_all_targets."""
+def _apply_khigh_override(model, chosen):
+    """chosen = {name: set(fp8 ring idx)} over the ALLOC Linears. Installs the
+    per-Linear K_high COUNT override read by configure_quantizers +
+    pack_all_targets.
+
+    LATENCY-ONLY: we do NOT reorder weight columns or set
+    `reorder_before_quant`. End-to-end latency depends only on each Linear's
+    K_high COUNT (FP8 FLOPs/bytes), not on WHICH rings are FP8, and in real
+    deployment the ring SELECTION is folded offline into the PCA rotation (the
+    activation arrives already ordered — there is no per-forward gather). Adding
+    a runtime activation reorder here would charge the measured allocation a
+    harness-only cost the uniform baseline never pays, biasing the curve. So the
+    latency build packs the contiguous last-K_high columns as MXFP8 (bit-irrelevant
+    for timing) at each Linear's allocated K_high count. (PPL, which DOES depend on
+    the ring selection, is measured separately via rd_validity's reorder path.)"""
     override = {}
     for name, w in find_qlayers(model, layers=[ActQuantWrapper]).items():
         if not _is_alloc_target(name):
             continue
         S = chosen.get(name, set())
-        nr = w.module.weight.shape[1] // RING
-        non_s = [r for r in range(nr) if r not in S]
-        s_lst = [r for r in range(nr) if r in S]
-        ring_order = non_s + s_lst
-        order = torch.cat([torch.arange(r * RING, (r + 1) * RING)
-                           for r in ring_order]).to(w.module.weight.device)
-        W = w.module.weight.data
-        w.module.weight.data = W[:, order].contiguous()
-        w._column_order = order
-        w.reorder_before_quant = True
-        kh = len(s_lst) * RING
+        kh = len(S) * RING
         w.module._edriven_khigh = int(kh)
         override[name] = int(kh)
     model._rd_khigh_override = override
@@ -138,7 +138,7 @@ def build_real(config, r1_off, chosen, nv, mx, cd, qpf, dg):
     model = rdv.build_base(config, r1_off)
     model.to(DEV)
     if chosen is not None:
-        _apply_reorder_override(model, chosen)
+        _apply_khigh_override(model, chosen)
     ptqmod.configure_quantizers(model, config)
     setup_k_quant(model, config, basis_path=config["paths"]["basis"],
                   rotation_path=config["paths"]["rotation"])
