@@ -90,18 +90,20 @@ worst allocator (as in R1-off, 8.47).
 
 | budget | avg FP8 | PPL (ring128) | vs floor 8.2974 |
 |---|---|---|---|
-| 3/16 | _[pending]_ | _[pending]_ | — |
+| 1/4  | 0.2356 | 8.2022 | −0.095 |
+| 3/16 | 0.1803 | 8.2303 | −0.067 |
 | 1/8  | 0.1250 | 8.2893 | −0.008 (below floor) |
 | 1/12 | 0.0881 | 8.3022 | +0.005 |
 | 1/16 | 0.0697 | 8.2983 | +0.001 (≈ floor) |
 | 1/24 | 0.0513 | 8.3467 | +0.049 |
-| 1/32 | _[pending]_ | _[pending]_ | — |
+| 1/32 | 0.0421 | 8.3881 | +0.091 |
 
 **Iso-accuracy (PPL ≤ dense uniform 8.2974) holds down to ≈ 1/16 (0.07 avg FP8)**
 at ring128 — i.e. ~1.8× fewer MXFP8 channels than the shipped uniform 1/8 at the
-same accuracy. (ring64 had no sub-1/8 headroom: measured@1/8 was 8.3097 > floor;
-downward 1/12=8.3399, 1/16=8.3510, 1/24=8.3892.) ring256/512 shift the whole
-curve lower still and would hold iso-accuracy at even smaller budgets.
+same accuracy. The upper wing (3/16, 1/4) keeps improving (8.230, 8.202) — the
+spend-latency-buy-accuracy side. (ring64 had no sub-1/8 headroom: measured@1/8
+was 8.3097 > floor; 1/12=8.3399, 1/16=8.3510, 1/24=8.3892.) ring256/512 shift
+the whole curve lower still.
 
 ## 8B — overturn does NOT generalize via the ring substrate
 
@@ -121,6 +123,37 @@ to exploit. With the ring substrate, the (small) rotation cost ε is not repaid,
 so net stays ≈ 0 to slightly positive at every width (approaching 0 as ε→0 with
 S). The dense-limit (ε=0) is the only configuration that *could* net-positive on
 8B — pending.
+
+## Three-model summary + ΔD-structure metric
+
+Per-ring ΔD = (D_nvfp4 − D_mxfp8) non-uniformity on dense-R-on-rotated
+activations (ring-64 atoms, pooled over the reallocated Linears):
+
+| model | dense uniform (anchor) | ΔD Gini | ΔD CV | top-1/8 ΔD frac | measured gain @1/8 (dense-limit) | overturn? |
+|---|---|---|---|---|---|---|
+| 1B (Instruct) | 14.5483 (≈14.563) | 0.694 | 1.945 | 0.607 | _[blocked, see below]_ | predicted YES (R1-off gain −0.22) |
+| 3B | 8.2974 (≈8.293) | 0.641 | 1.772 | 0.592 | +0.0296 (8.2678) | **YES** |
+| 8B | 6.5882 (≈6.599) | 0.664 | 1.834 | 0.588 | _[in progress]_ | ring: NO (net +0.001…+0.006) |
+
+**Honest caveat on the metric:** the ΔD-concentration numbers (Gini, top-1/8
+fraction) are *similar across all three models* and do **not** by themselves
+separate 8B (≈nil ring gain) from 3B (large gain) — 8B's Gini (0.664) even
+exceeds 3B's (0.641). So "structure = ΔD-concentration" is at best a *partial*
+predictor: 1B (highest Gini) does have the largest gain, but 8B breaks the
+monotone story. The ring-substrate gain gap is better explained by (a) absolute
+ΔD magnitude relative to each model's loss curvature (larger models quantize
+closer to their fp16 floor, less headroom) and (b) the overlap between the
+measured-ΔD ranking and the position-based ranking the uniform cut already uses
+(if they coincide, reallocation moves little). We report the metric as measured
+rather than curve-fit a just-so story.
+
+**1B note:** the dense-uniform anchor (14.5483) and the structure metric landed,
+but the 1B *measured* dense-limit PPL was blocked by a pre-existing 1B-specific
+crash in the K-cache weight quant (`_weight_two_level_nvfp4_eff` amax on an empty
+block — a degenerate K-weight slice for 1B dims), orthogonal to the ring/
+allocation logic. Given 1B's highest ΔD structure and the R1-off prior (measured
+gain −0.22 at 1/8), 1B is expected to overturn strongly; the measured PPL is not
+captured here.
 
 ## Shipping recommendation
 
