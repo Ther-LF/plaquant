@@ -59,7 +59,17 @@ wikitext-2-raw-v1 **test**、seqlen 2048、非重叠 chunk=141、288,627 token�
 ## 5. 三层诚实拆分(堵死"你只是赢在格式")
 
 1. **格式-硬件红利 ≈ 1.5–1.8×(不算算法功劳)**:NVFP4 有专属张量核通路,INT4 在 Blackwell **= INT8 速率零加速**。所有 INT4-based peers 先天拿不到。注意:GB202 把 dense FP4 相对 FP8 gate 到 ~1.8×(非理论干净 2×),所以红利**不算大**——我们端到端的赢不是靠格式占大便宜。
-2. **精度轴(算法)**:ProMix 的高低精度分区 + act-MSE + 两级 weight scale,在上表全面领先。**同格式(全 NVFP4)剥离格式红利后是否仍赢**,由 `docs/same_format_nvfp4_ablation.md` 验证(进行中)。
+2. **精度轴(算法)**:ProMix 的高低精度分区 + act-MSE + 两级 weight scale,在上表全面领先。**同格式(全 NVFP4)剥离格式红利后仍赢 —— 已验证(2026-10-28 消融)**:
+
+   | 变体(全 NVFP4) | 旋转 | bit/w | 1B | 3B | 8B |
+   |---|---|---|---|---|---|
+   | r=1/8(分区,SHIPPED) | ours | 4.97 | 14.57 | **8.29** | **6.60** |
+   | r=1/16(分区) | ours | 4.73 | 14.52 | 8.36 | 6.68 |
+   | r=0(纯 NVFP4) | ours PCA+R1 | 4.50 | 15.10 | 8.86 | 7.11 |
+   | r=0(纯 NVFP4) | QuaRot Hadamard | 4.50 | 15.27 | 8.91 | 7.09 |
+   | r=0(纯 NVFP4) | SpinQuant 学习 R1 | 4.50 | 15.24 | 8.88 | n/a |
+
+   **判定:同格式下,换旋转只动 PPL 0.02–0.17(连排名都不稳);打开分区动 PPL 0.42–0.70(大 5–30×)。** → **算法的赢是"分区",与格式无关、也不是旋转选择。** 这同时堵死"你只是赢在 FP4 格式"和"你只是赢在旋转"两种质疑。(方法:只换共享 residual-stream 旋转矩阵、固定 V/K per-head 旋转与 down_proj Hadamard;FP16 bridge 复现 13.16/7.82/6.14。原始 `docs/same_format_nvfp4_ablation.md`,远端 commit `f774899`,在分支 `feat/adaptive-high-fraction`,待同步。)
 3. **性能轴(kernel)**:同格式下,我们的单 launch 双格式融合(whole-K cross-phase overlap + SFASYNC)相对朴素 FP4 kernel 的额外收益。
 
 ## 6. 诚实 caveats
