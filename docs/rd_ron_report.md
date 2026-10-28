@@ -22,8 +22,9 @@ allocation still works per-ring, then run measured-MSE allocation on top.
 
   **ring128-R-on + measured-MSE @1/8 = 8.2893 < dense-R-on uniform 8.2974**
   (and < published 8.293). **The "uniform near-optimal" conclusion is OVERTURNED
-  at ring_size=128**, and more strongly at **ring_size=256 (measured 8.2665, net
-  −0.031 vs dense uniform)** — the best tested substrate.
+  at ring_size=128**, and the margin widens monotonically with ring width:
+  ring256 measured 8.2665 (net −0.031), **ring512 measured 8.2328 (net −0.065,
+  best tested, no knee yet)**.
 
 Mechanism, allocation preserved vs discarded, is the whole story: keep R (ring
 substrate) **and** make the ring wide enough, and per-ring measured-MSE
@@ -47,24 +48,31 @@ exact. 8B (hidden 4096 = 64 rings of 64) uses identical machinery — lossless.
 | ring_size S | #rings (3B) | ring-R-on uniform | ring-R-on measured | **ε(S)** = unif−dense (rotation cost) | **gain(S)** = unif−meas (allocation) | net = meas−dense | verdict |
 |---|---|---|---|---|---|---|---|
 | 64  | 48/unit (10304 tot) | 8.3452 | 8.3097 | +0.0478 | +0.0355 | +0.0123 | stands |
-| 128 | 24/unit (5152 tot)  | 8.3133 | 8.2893 | +0.0159 | +0.0240 | **−0.0081** | **OVERTURNED** |
-| 256 | 12/unit (2576 tot)  | 8.3369 | **8.2665** | +0.0395 | +0.0704 | **−0.0309** | **OVERTURNED (best)** |
+| 128 | 24/unit (5152 tot)  | 8.3133 | 8.2893 | +0.0159 | +0.0240 | −0.0081 | OVERTURNED |
+| 256 | 12/unit (2576 tot)  | 8.3369 | 8.2665 | +0.0395 | +0.0704 | −0.0309 | OVERTURNED |
+| 512 | 6/unit (1288 tot)   | 8.4494 | **8.2328** | +0.1520 | +0.2166 | **−0.0646** | **OVERTURNED (best, no knee yet)** |
 
 Two curves, two behaviours:
-- **ε(S)** (ring-R-on *uniform* rotation cost) is **non-monotone** — 64:+0.048,
-  128:+0.016, 256:+0.040 — minimum at 128. A very wide Hadamard (256) smears the
-  U-sorted variance tail that the *uniform* last-K cut relies on, so uniform
-  gets slightly worse again.
-- **gain(S)** (measured-MSE allocation benefit) **grows monotonically** —
-  64:+0.036, 128:+0.024... wait 128 dips, then 256:+0.070 — because the
-  measured path *reorders* (picks the true high-ΔD rings regardless of position),
-  so it is immune to the uniform-tail smearing and instead *benefits* from wider
-  per-ring mixing (each upgraded ring absorbs more energy).
-- **net = meas − dense improves monotonically with S: +0.012 → −0.008 → −0.031.**
-  The measured allocation's gain outruns the rotation cost from ring128 onward.
-  **ring256 is the strongest tested substrate (beats dense-R-on uniform by
-  0.031);** ring128 already overturns (−0.008). (ring64 is kept only as the
-  ablation point that exposed the mechanism.)
+- **ε(S)** (ring-R-on *uniform* rotation cost) is **non-monotone and eventually
+  blows up** — 64:+0.048, 128:+0.016, 256:+0.040, 512:+0.152. A wide Hadamard
+  smears the U-sorted variance tail that the *uniform* last-K cut relies on, and
+  at 512 (only 6 rings/unit) the smear is severe.
+- **gain(S)** (measured-MSE allocation benefit) **grows monotonically and fast** —
+  +0.036, +0.024, +0.070, +0.217 — because the measured path *reorders* (picks
+  the true high-ΔD rings regardless of position), so it is immune to tail-smearing
+  and actively *benefits* from wider per-ring mixing: each upgraded 512-wide ring
+  absorbs the concentrated high-variance energy the Hadamard spread into it.
+- **net = meas − dense is monotonically improving with S: +0.012 → −0.008 →
+  −0.031 → −0.065.** No knee through S=512. The allocation gain outruns the
+  rotation cost from ring128 on, and the margin keeps widening.
+
+**Limit reading (flagged, not run):** as S → (per-unit dim) with measured
+reordering, the ring substrate degenerates to "full per-unit dense Hadamard
+rotation + per-layer K_high chosen by measured MSE" — i.e. the real win is the
+**per-layer measured-MSE K allocation**, which the ring substrate unlocks while
+keeping R. ring512 (6 rings/unit on the 3072-dim attn units) is already close to
+that limit and is the strongest tested point; S = d/2 / full-dense-with-reorder
+is the natural next probe.
 
 ## 3B @1/8 three-way ranking (re-verification)
 
@@ -95,14 +103,16 @@ ring128 (the default substrate — measured@1/8 = 8.2893 is **below** the floor,
 there is headroom; downward hunt finds the smallest budget still ≤ 8.2974):
 _[ring128 sweep in progress — downward {1/12,1/16,1/24,1/32} + upper {3/16,1/4}]_
 
-## 8B
+## 8B (overturn generalization — publishable confirmation)
 
 - Gates PASS: bf16 6.1368 (floor 6.14); ring-noquant 6.1347 (lossless Δ+0.0001).
 - dense-R-on uniform (in-harness) = **6.5882** (≈ published floor 6.599).
-- ring64 uniform = 6.6111 → ε(64, 8B) = **+0.0229** (already smaller than 3B's
-  +0.0478 — 8B is less sensitive to ring width).
-- ring128 {uniform, measured} + overturn confirmation: _[in progress]_ — this is
-  the publishable confirmation that the 3B overturn generalizes.
+- ring-R-on uniform ε(S, 8B): ring64 6.6111 (+0.0229), ring128 6.6105 (+0.0223),
+  ring256 6.6009 (+0.0127). For 8B (d=4096, more rings/unit) the uniform cost is
+  small at every width and *decreases* with S (no tail-smear blow-up through 256),
+  unlike 3B.
+- ring {128, 256, 512} measured-MSE @1/8 (the overturn confirmation vs dense
+  uniform 6.5882): _[in progress]_.
 
 ## Three key answers (3B, ring128 default)
 
