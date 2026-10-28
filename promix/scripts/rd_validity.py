@@ -69,13 +69,13 @@ def _is_alloc_target(name):
 # ---------------------------------------------------------------------------
 # Model build (mirrors round11_sensitivity.build_model up to GPTQ, R1-off).
 # ---------------------------------------------------------------------------
-def build_base(config, r1_off):
+def build_base(config, r1_off, ring_r1=False):
     model = load_model(config["model"]["name"], dtype=torch.float16)
     fuse_layer_norms(model)
     fuse_basis_to_model(model, basis_path=config["paths"]["basis"],
                         rotation_path=config["paths"]["rotation"],
                         high_fraction=0.125, low_fraction=0.0,
-                        identity_main_rotation=r1_off)
+                        identity_main_rotation=r1_off, ring_r1=ring_r1)
     rearrange_columns(model, high_fraction=0.125, low_fraction=0.0,
                       o_proj_pca=config["quantize"].get("o_proj_pca", "per_head"))
     cleanup_memory()
@@ -207,9 +207,9 @@ def measured_alloc(stats, budget_rings, total_rings):
 # Apply an allocation to a freshly-built base model (reorder + weight-permute +
 # GPTQ-edriven tag + activation override), run GPTQ, configure, KV, return model.
 # ---------------------------------------------------------------------------
-def build_eval(config, r1_off, chosen):
+def build_eval(config, r1_off, chosen, ring_r1=False):
     """chosen = None -> uniform shipped path. Else {name: set(fp8 ring idx)}."""
-    model = build_base(config, r1_off)
+    model = build_base(config, r1_off, ring_r1=ring_r1)
 
     override = {}
     if chosen is not None:

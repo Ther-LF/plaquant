@@ -102,3 +102,62 @@ def test_non_power_of_two_ring_size_raises():
     # Sylvester-Hadamard construction is undefined and must raise.
     with pytest.raises(ValueError):
         build_uniform_ring_R1(96, ring_size=48)
+
+
+# ---------------------------------------------------------------------------
+# build_main_transform wiring (opt-in ring-R1 regime, spec §3). rotation.py
+# pulls in the Hadamard/CUDA chain at import; skip these if it cannot import
+# in the pure-math test environment (no fast_hadamard_transform stub).
+# ---------------------------------------------------------------------------
+try:
+    from promix.quantize.rotation import build_main_transform
+    _HAVE_ROTATION = True
+except Exception:  # pragma: no cover - import-env dependent
+    _HAVE_ROTATION = False
+
+rotation_required = pytest.mark.skipif(
+    not _HAVE_ROTATION, reason="rotation.py (Hadamard chain) unimportable here")
+
+
+@rotation_required
+@pytest.mark.parametrize("hidden_dim", HIDDEN_DIMS)
+def test_build_main_transform_ring_r1_equals_U_times_ring(hidden_dim):
+    U = _random_orthogonal(hidden_dim, seed=hidden_dim)
+    T = build_main_transform(U, {}, identity_main_rotation=False,
+                             ring_r1=True, ring_size=RING_SIZE)
+    R1 = build_uniform_ring_R1(hidden_dim, ring_size=RING_SIZE).to(U.device)
+    assert torch.allclose(T, U @ R1, atol=1e-10)
+    ident = torch.eye(hidden_dim, dtype=torch.float64)
+    assert torch.allclose(T @ T.T, ident, atol=1e-8)
+
+
+@rotation_required
+def test_build_main_transform_ring_r1_takes_priority_over_identity():
+    # ring_r1 must win even when identity_main_rotation is also set.
+    U = _random_orthogonal(2048, seed=7)
+    T = build_main_transform(U, {}, identity_main_rotation=True,
+                             ring_r1=True, ring_size=RING_SIZE)
+    R1 = build_uniform_ring_R1(2048, ring_size=RING_SIZE).to(U.device)
+    assert torch.allclose(T, U @ R1, atol=1e-10)
+
+
+@rotation_required
+def test_build_main_transform_default_off_is_identity_path():
+    # ring_r1=False + identity_main_rotation=True => T == U (byte-identical).
+    U = _random_orthogonal(2048, seed=11)
+    T = build_main_transform(U, {}, identity_main_rotation=True)
+    assert T is U
+
+
+@rotation_required
+def test_build_main_transform_default_off_dense_path_unchanged():
+    # ring_r1=False + dense R_dict => T == U @ block_diag(R1_1, R1_2).
+    d = 2048
+    U = _random_orthogonal(d, seed=3)
+    high = 256
+    R1_1 = _random_orthogonal(d - high, seed=1)
+    R1_2 = _random_orthogonal(high, seed=2)
+    R_dict = {"R1_1": R1_1, "R1_2": R1_2, "R1_0": None}
+    T = build_main_transform(U, R_dict, identity_main_rotation=False)
+    expected = U @ torch.block_diag(R1_1, R1_2)
+    assert torch.allclose(T, expected, atol=1e-10)

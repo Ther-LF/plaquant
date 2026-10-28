@@ -365,6 +365,8 @@ def prepare_ptq_model(config, dev, *, run_gptq=True):
         high_fraction=config['quantize']['high_fraction'],
         low_fraction=config['quantize'].get('low_fraction', 0.0),
         identity_main_rotation=config['quantize'].get('adaptive_high_fraction', False),
+        ring_r1=config['quantize'].get('ring_r1', False),
+        ring_size=config['quantize'].get('ring_size', 64),
     )
     rearrange_columns(
         model,
