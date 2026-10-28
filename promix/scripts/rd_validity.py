@@ -69,13 +69,14 @@ def _is_alloc_target(name):
 # ---------------------------------------------------------------------------
 # Model build (mirrors round11_sensitivity.build_model up to GPTQ, R1-off).
 # ---------------------------------------------------------------------------
-def build_base(config, r1_off, ring_r1=False):
+def build_base(config, r1_off, ring_r1=False, ring_size=64):
     model = load_model(config["model"]["name"], dtype=torch.float16)
     fuse_layer_norms(model)
     fuse_basis_to_model(model, basis_path=config["paths"]["basis"],
                         rotation_path=config["paths"]["rotation"],
                         high_fraction=0.125, low_fraction=0.0,
-                        identity_main_rotation=r1_off, ring_r1=ring_r1)
+                        identity_main_rotation=r1_off, ring_r1=ring_r1,
+                        ring_size=ring_size)
     rearrange_columns(model, high_fraction=0.125, low_fraction=0.0,
                       o_proj_pca=config["quantize"].get("o_proj_pca", "per_head"))
     cleanup_memory()
@@ -92,7 +93,7 @@ def build_base(config, r1_off, ring_r1=False):
 # weights give the clean rotated calibration activation the allocation reads.
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def collect_stats(model, calib, max_tokens=4096):
+def collect_stats(model, calib, max_tokens=4096, ring=RING):
     qlayers = find_qlayers(model, layers=[ActQuantWrapper])
     acc = {}
     handles = []
@@ -106,7 +107,7 @@ def collect_stats(model, calib, max_tokens=4096):
             st = acc.get(name)
             d = x.shape[1]
             if st is None:
-                nr = d // RING
+                nr = d // ring
                 st = dict(n=0, e4=torch.zeros(nr), e8=torch.zeros(nr),
                           csum=torch.zeros(d), csq=torch.zeros(d), d=d, nr=nr)
                 acc[name] = st
@@ -116,8 +117,8 @@ def collect_stats(model, calib, max_tokens=4096):
             x = x[:take]
             q4 = qu.fake_quantize_nvfp4(x)
             q8 = qu.fake_quantize_mxfp8(x)
-            e4 = (x - q4).pow(2).reshape(take, st["nr"], RING).sum(dim=(0, 2))
-            e8 = (x - q8).pow(2).reshape(take, st["nr"], RING).sum(dim=(0, 2))
+            e4 = (x - q4).pow(2).reshape(take, st["nr"], ring).sum(dim=(0, 2))
+            e8 = (x - q8).pow(2).reshape(take, st["nr"], ring).sum(dim=(0, 2))
             st["e4"] += e4.cpu()
             st["e8"] += e8.cpu()
             st["csum"] += x.sum(0).cpu()
@@ -142,12 +143,12 @@ def collect_stats(model, calib, max_tokens=4096):
     stats = {}
     for name, st in acc.items():
         n = max(st["n"], 1)
-        mse4 = st["e4"] / (n * RING)          # per-ring MSE, NVFP4
-        mse8 = st["e8"] / (n * RING)          # per-ring MSE, MXFP8
+        mse4 = st["e4"] / (n * ring)          # per-ring MSE, NVFP4
+        mse8 = st["e8"] / (n * ring)          # per-ring MSE, MXFP8
         deltaD = (mse4 - mse8)                # upgrade benefit per ring
         mean = st["csum"] / n
         var = (st["csq"] / n - mean.pow(2)).clamp_min(0)   # per-channel variance
-        ring_var = var.reshape(st["nr"], RING).mean(dim=1)  # per-ring variance
+        ring_var = var.reshape(st["nr"], ring).mean(dim=1)  # per-ring variance
         stats[name] = dict(deltaD=deltaD, ring_var=ring_var, nr=st["nr"],
                            d=st["d"], ntok=st["n"])
     return stats
@@ -207,9 +208,9 @@ def measured_alloc(stats, budget_rings, total_rings):
 # Apply an allocation to a freshly-built base model (reorder + weight-permute +
 # GPTQ-edriven tag + activation override), run GPTQ, configure, KV, return model.
 # ---------------------------------------------------------------------------
-def build_eval(config, r1_off, chosen, ring_r1=False):
+def build_eval(config, r1_off, chosen, ring_r1=False, ring_size=64):
     """chosen = None -> uniform shipped path. Else {name: set(fp8 ring idx)}."""
-    model = build_base(config, r1_off, ring_r1=ring_r1)
+    model = build_base(config, r1_off, ring_r1=ring_r1, ring_size=ring_size)
 
     override = {}
     if chosen is not None:
@@ -217,17 +218,17 @@ def build_eval(config, r1_off, chosen, ring_r1=False):
             if not _is_alloc_target(name):
                 continue
             S = chosen.get(name, set())
-            nr = w.module.weight.shape[1] // RING
+            nr = w.module.weight.shape[1] // ring_size
             non_s = [r for r in range(nr) if r not in S]
             s_lst = [r for r in range(nr) if r in S]
             ring_order = non_s + s_lst
-            order = torch.cat([torch.arange(r * RING, (r + 1) * RING)
+            order = torch.cat([torch.arange(r * ring_size, (r + 1) * ring_size)
                                for r in ring_order]).to(w.module.weight.device)
             W = w.module.weight.data
             w.module.weight.data = W[:, order].contiguous()
             w._column_order = order
             w.reorder_before_quant = True
-            kh = len(s_lst) * RING
+            kh = len(s_lst) * ring_size
             w.module._edriven_khigh = int(kh)
             override[name] = int(kh)
         model._rd_khigh_override = override
