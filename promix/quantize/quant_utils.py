@@ -667,6 +667,13 @@ def _weight_two_level_nvfp4_eff(Wblk, bmax, pow2=None):
     dev = Wblk.device
     if pow2 is None:
         pow2 = WEIGHT_TWO_LEVEL_POW2
+    # Empty block guard: a reordered/mixed-precision segment can be zero-width
+    # (K_high==0 or K_low==0 for a given Linear after measured-MSE reorder on
+    # some model dims, e.g. 1B/8B). `.amax()` on a 0-element tensor raises; an
+    # empty segment has nothing to quantize, so return empty eff + unit global.
+    # Zero-regression: only triggers when numel()==0 (previously a hard crash).
+    if Wblk.numel() == 0:
+        return bmax.clone(), torch.ones((), device=dev, dtype=torch.float32)
     e4 = torch.tensor(_FP8_E4M3_POS, device=dev, dtype=torch.float32)
     gamax = Wblk.abs().amax()                                    # per-tensor scalar
     gs = (gamax / (448.0 * FP4_E2M1_MAX)).clamp_min(2.0 ** -40)
@@ -693,6 +700,8 @@ def _weight_two_level_mxfp8_eff(Wblk, bmax, g):
     g*micro. weight-A2 (base/2, base/4 pow2 steps) still applies. `g` lets ONE
     epilogue-alpha carry the global across both fused-GEMM phases."""
     dev = Wblk.device
+    if Wblk.numel() == 0:                 # empty high segment -> nothing to scale
+        return bmax.clone()
     ideal = (bmax / FP8_E4M3_MAX / g).clamp_min(2.0 ** -127)
     micro = _e8m0_round_up(ideal)
     if not WEIGHT_MSE_SCALE_SEARCH:
