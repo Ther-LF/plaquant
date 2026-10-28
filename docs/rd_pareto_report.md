@@ -31,7 +31,7 @@ K_high map (NVFP4=4.5 b, MXFP8=8.25 b/weight).
 |---|---|---|---|---|
 | 1B | 13.157 (13.16) ✓ | 14.6423 | 14.4202 | 14.8728 |
 | 3B | 7.8148 (7.82) ✓ | **8.3924** | **8.3124** | **8.3774** |
-| 8B | 6.1371 (6.14) ✓ | 6.6367 | *(pending)* | *(pending)* |
+| 8B | 6.1371 (6.14) ✓ | 6.6367 | 6.5996 | 6.6663 |
 
 The 3B uniform-1/8 = **8.3924**, measured-1/8 = **8.3124**, measured-1/16 =
 **8.3774** reproduce the prior `rd_validity`/`rd_perf` numbers exactly, confirming
@@ -106,33 +106,76 @@ baselines, so every delta below is trustworthy.
 
 ---
 
-## Llama-3-8B (d=4096) — all latency DONE; measured PPL filling in (sharded across GPUs)
+## Llama-3-8B (d=4096) — COMPLETE
 
 | alloc | budget | avg FP8 | bits/w | PPL | prefill ms | decode ms | prefill × | decode × |
 |---|---|---|---|---|---|---|---|---|
-| measured | 0      | —      | —     | *(pending)* | 82.69 | 31.42 | 1.009 | 0.962 |
+| measured | 0      | 0.0132 | 4.549 | 8.0150 | 82.69 | 31.42 | 1.009 | 0.962 |
+| measured | 1/32   | 0.0411 | 4.654 | 6.7234 | 84.22 | 30.29 | 0.991 | 0.998 |
+| measured | 1/24   | 0.0504 | 4.689 | 6.6897 | 82.29 | 30.92 | 1.014 | 0.978 |
 | measured | 1/16   | 0.0691 | 4.759 | 6.6663 | 85.33 | 31.18 | 0.978 | 0.970 |
+| **measured** | **1/12** | 0.0877 | 4.829 | **6.6272** | 83.89 | 29.93 | 0.994 | 1.010 |
 | **measured** | **1/8** | 0.1250 | 4.969 | **6.5996** | 84.75 | 31.18 | 0.984 | 0.970 |
+| measured | 3/16   | 0.1809 | 5.179 | 6.5752 | 86.00 | 31.60 | 0.970 | 0.957 |
+| measured | 1/4    | 0.2368 | 5.388 | 6.5438 | 89.07 | 31.16 | 0.937 | 0.970 |
 | measured | 3/8    | 0.3487 | 5.808 | 6.5211 | 93.61 | 31.44 | 0.891 | 0.962 |
+| measured | 1/2    | 0.4602 | 6.226 | 6.4845 | 90.53 | 31.05 | 0.921 | 0.974 |
 | measured | 3/4    | 0.6754 | 7.033 | 6.3877 | 96.81 | 31.87 | 0.862 | 0.949 |
-| measured | 1 (≈MXFP8) | —  | —     | *(pending)* | 103.23 | 32.52 | 0.808 | 0.930 |
+| measured | 1 (≈MXFP8) | 0.8980 | 7.868 | 6.3082 | 103.23 | 32.52 | 0.808 | 0.930 |
 | uniform  | 1/16   | 0.0691 | 4.759 | 6.7116 | 82.88 | 31.13 | 1.007 | 0.971 |
 | **uniform** | **1/8** | 0.1250 | 4.969 | **6.6367** | 83.42 | 30.23 | 1.000 | 1.000 |
 
-**Pareto readings (8B, preliminary — remaining measured PPLs still computing).**
-- **Iso-accuracy so far**: **1/8** (measured 6.5996 ≤ uniform-1/8 6.6367; measured-1/16
-  = 6.6663 just exceeds). Like 1B, 8B does **not** drop below 1/8 at iso-accuracy —
-  the measured win is −0.037 PPL at the matched 1/8 budget (1/12 result pending may
-  refine this).
-- **Upper wing:** 1/8 → 3/4 improves PPL 6.5996 → 6.3877 (−0.21) for +16% prefill.
-- Latency flat ≤ 1/8, upper wing rises to **prefill ×0.808 at r=1** (≈24% slower) —
-  the steepest of the three (bigger model → bigger K → steeper budget→latency slope).
-
-(Full 8B grid in the CSV; measured PPL being filled by 4 GPU-sharded resume jobs.)
+**Pareto readings (8B).**
+- **Iso-accuracy**: **1/12** (measured 6.6272 ≤ uniform-1/8 6.6367) — below 1/8
+  (not as far as 3B's 1/16); measured-1/16 (6.6663) just exceeds. Speedup at 1/12:
+  prefill ×0.994, decode ×1.010 (flat + noise).
+- **Iso-speed** (top of the flat latency region): **measured-1/8 = 6.5996** (−0.037).
+- **Upper wing (spend latency, buy accuracy):** 1/8 → r=1 improves PPL
+  **6.5996 → 6.3082 (−0.29)** for **+24% prefill** (prefill ×0.808) — the steepest
+  accuracy-for-latency trade of the three.
+- **Pure NVFP4 (r=0) cliff:** 8.0150, nearly erased by a 1/32 FP8 ring-budget (6.7234).
+- Latency flat ≤ 1/8; upper wing rises to **prefill ×0.808 at r=1** (≈24% slower),
+  the largest slope (bigger model → bigger K → the FP8 phase scales better, steeper
+  budget→latency slope — consistent with `docs/rd_perf_diagnostic.md`).
 
 ---
 
-## Cross-model scaling & honest notes
+## Cross-model synthesis
+
+**Accuracy knob (below 1/8 — "same-accuracy-faster" candidates).**
+
+| model | bf16 | uniform-1/8 | measured-1/8 | **iso-accuracy budget** | measured PPL there |
+|---|---|---|---|---|---|
+| 1B | 13.16 | 14.6423 | 14.4202 | **1/8** (cannot go lower) | 14.4202 |
+| 3B | 7.82  | 8.3924  | 8.3124  | **1/16** (½ the FP8)     | 8.3774 |
+| 8B | 6.14  | 6.6367  | 6.5996  | **1/12**                 | 6.6272 |
+
+The measured-MSE allocation beats uniform at the matched 1/8 budget on **all three**
+(1B −0.22, 3B −0.08, 8B −0.037 PPL; the gain shrinks as the model grows). Below 1/8
+the **larger models (3B, 8B) keep iso-accuracy headroom** (down to 1/16 / 1/12 —
+serving more of the net in NVFP4 for free), while the **smallest model (1B) cannot**
+drop below 1/8 (it is the most NVFP4-sensitive). The realized e2e speedup of moving
+below 1/8 is **~1.0× (flat, within ±2% noise)** on this kernel, so the low-budget win
+is a **bits/accuracy** win, not a latency win (see notes).
+
+**Latency knob (above 1/8 — "spend-latency, buy-accuracy" candidates).** This is where
+latency actually moves, and the slope **scales with model size**:
+
+| model | 1/8 → r=1 PPL gain | 1/8 → r=1 prefill cost | r=1 prefill × |
+|---|---|---|---|
+| 1B | −0.79 (14.42→13.63) | +10% | 0.907 |
+| 3B | −0.27 (8.31→8.04)   | +18% | 0.845 |
+| 8B | −0.29 (6.60→6.31)   | +24% | 0.808 |
+
+Decode (bandwidth-bound) stays ≈flat (±5%) across the whole grid — the budget knob is
+a **prefill/compute** lever, not a decode lever.
+
+**Shape of the curve.** Monotone PPL ↓ as budget ↑ on all three, with a **sharp bottom
+knee**: pure-NVFP4 (r=0) is a cliff (1B 17.84 / 3B 10.91 / 8B 8.02), but the first 1/32
+FP8 ring-budget recovers almost all of it. The curve is shallow through the middle and
+flattens toward r=1 (≈pure MXFP8), approaching but not reaching the bf16 bridge.
+
+## Honest notes
 
 - **Latency payoff/cost of the budget knob grows with model size.** Pushing the
   budget from 1/8 → r=1 (pure MXFP8) costs **+10% (1B) / +18% (3B) / +24% (8B)**
