@@ -73,53 +73,62 @@ baselines, so every delta below is trustworthy.
 
 ---
 
-## Llama-3.2-3B (d=3072) — PPL low-budget + all latency DONE; high-budget PPL pending
+## Llama-3.2-3B (d=3072) — COMPLETE
 
 | alloc | budget | avg FP8 | bits/w | PPL | prefill ms | decode ms | prefill × | decode × |
 |---|---|---|---|---|---|---|---|---|
-| measured | 0      | 0.1250 | 4.969 | *(pending)* | 54.39 | 24.05 | 0.997 | 1.031 |
+| measured | 0      | 0.0144 | 4.554 | 10.9085 | 54.39 | 24.05 | 0.997 | 1.031 |
 | measured | 1/32   | 0.0421 | 4.658 | 8.4465 | 55.67 | 25.94 | 0.974 | 0.956 |
 | measured | 1/24   | 0.0513 | 4.692 | 8.4328 | 54.17 | 25.26 | 1.001 | 0.982 |
 | **measured** | **1/16** | 0.0697 | 4.761 | **8.3774** | 53.33 | 23.85 | 1.016 | 1.039 |
 | measured | 1/12   | 0.0882 | 4.831 | 8.3740 | 55.55 | 26.21 | 0.976 | 0.946 |
 | **measured** | **1/8** | 0.1250 | 4.969 | **8.3124** | 54.70 | 25.10 | 0.991 | 0.988 |
-| measured | 3/16   | 0.2188 | 5.320 | *(pending)* | 56.89 | 25.24 | 0.953 | 0.982 |
-| measured | 1/4    | 0.2740 | 5.528 | *(pending)* | 57.94 | 24.84 | 0.935 | 0.998 |
-| measured | 3/8    | 0.3846 | 5.942 | *(pending)* | 57.90 | 25.35 | 0.936 | 0.978 |
-| measured | 1/2    | 0.4567 | 6.213 | *(pending)* | 58.34 | 25.48 | 0.929 | 0.973 |
-| measured | 3/4    | 0.6779 | 7.042 | *(pending)* | 59.73 | 25.00 | 0.907 | 0.992 |
-| measured | 1 (≈MXFP8) | 0.8846 | 7.817 | *(pending)* | 64.16 | 26.06 | 0.845 | 0.952 |
+| measured | 3/16   | 0.1803 | 5.176 | 8.2975 | 56.89 | 25.24 | 0.953 | 0.982 |
+| measured | 1/4    | 0.2356 | 5.383 | 8.2841 | 57.94 | 24.84 | 0.935 | 0.998 |
+| measured | 3/8    | 0.3462 | 5.798 | 8.2219 | 57.90 | 25.35 | 0.936 | 0.978 |
+| measured | 1/2    | 0.4558 | 6.209 | 8.1935 | 58.34 | 25.48 | 0.929 | 0.973 |
+| measured | 3/4    | 0.6653 | 6.995 | 8.1213 | 59.73 | 25.00 | 0.907 | 0.992 |
+| measured | 1 (≈MXFP8) | 0.8846 | 7.817 | 8.0385 | 64.16 | 26.06 | 0.845 | 0.952 |
 | uniform  | 1/16   | 0.0697 | 4.761 | 8.4613 | 54.35 | 24.52 | 0.997 | 1.011 |
 | **uniform** | **1/8** | 0.1250 | 4.969 | **8.3924** | 54.20 | 24.80 | 1.000 | 1.000 |
 
 **Pareto readings (3B).**
-- **Iso-accuracy**: **1/16** (measured 8.3774 ≤ uniform-1/8 8.3924) — half the FP8
-  budget at iso-accuracy. 1/24 (8.4328) already exceeds. Speedup at 1/16: prefill
-  ×1.016, decode ×1.039 (≈flat, within noise — see latency note).
+- **Iso-accuracy**: **1/16** (measured 8.3774 ≤ uniform-1/8 8.3924) — **half the FP8
+  budget** at iso-accuracy; 1/24 (8.4328) already exceeds. Speedup at 1/16: prefill
+  ×1.016, decode ×1.039 (≈flat + noise — the low region is flat, see note).
 - **Iso-speed** (±1% prefill of uniform-1/8): **measured-1/8 = 8.3124** (−0.08).
+- **Upper wing (spend latency, buy accuracy):** 1/8 → r=1 improves PPL
+  **8.3124 → 8.0385 (−0.27)** for **+18% prefill** (prefill ×0.845). The accuracy
+  gain is smooth and monotone across the whole upper wing.
+- **Pure NVFP4 (r=0) is a cliff:** 10.9085 — but a single 1/32 FP8 ring-budget
+  recovers almost all of it (8.4465). The knee is extremely sharp at the bottom.
 - Latency flat ≤ 1/8; upper wing rises to **prefill ×0.845 at r=1** (≈18% slower).
-  Larger slope than 1B.
 
 ---
 
-## Llama-3-8B (d=4096) — all latency DONE; measured PPL pending (long GPTQ)
+## Llama-3-8B (d=4096) — all latency DONE; measured PPL filling in (sharded across GPUs)
 
 | alloc | budget | avg FP8 | bits/w | PPL | prefill ms | decode ms | prefill × | decode × |
 |---|---|---|---|---|---|---|---|---|
-| measured | 0      | 0.1250 | 4.969 | *(pending)* | 82.69 | 31.42 | 1.009 | 0.962 |
-| measured | 1/16   | 0.1151 | 4.932 | *(pending)* | 85.33 | 31.18 | 0.978 | 0.970 |
-| measured | 1/8    | 0.1711 | 5.141 | *(pending)* | 84.75 | 31.18 | 0.984 | 0.970 |
-| measured | 1/4    | 0.2829 | 5.561 | *(pending)* | 89.07 | 31.16 | 0.937 | 0.970 |
-| measured | 1/2    | 0.4605 | 6.227 | *(pending)* | 90.53 | 31.05 | 0.921 | 0.974 |
-| measured | 1 (≈MXFP8) | 0.8980 | 7.868 | *(pending)* | 103.23 | 32.52 | 0.808 | 0.930 |
+| measured | 0      | —      | —     | *(pending)* | 82.69 | 31.42 | 1.009 | 0.962 |
+| measured | 1/16   | 0.0691 | 4.759 | 6.6663 | 85.33 | 31.18 | 0.978 | 0.970 |
+| **measured** | **1/8** | 0.1250 | 4.969 | **6.5996** | 84.75 | 31.18 | 0.984 | 0.970 |
+| measured | 3/8    | 0.3487 | 5.808 | 6.5211 | 93.61 | 31.44 | 0.891 | 0.962 |
+| measured | 3/4    | 0.6754 | 7.033 | 6.3877 | 96.81 | 31.87 | 0.862 | 0.949 |
+| measured | 1 (≈MXFP8) | —  | —     | *(pending)* | 103.23 | 32.52 | 0.808 | 0.930 |
 | uniform  | 1/16   | 0.0691 | 4.759 | 6.7116 | 82.88 | 31.13 | 1.007 | 0.971 |
 | **uniform** | **1/8** | 0.1250 | 4.969 | **6.6367** | 83.42 | 30.23 | 1.000 | 1.000 |
 
-(Full 8B grid in the CSV. Measured PPL still computing — 8B GPTQ is ~27 min/point.)
-Latency flat ≤ 1/8, upper wing rises to **prefill ×0.808 at r=1** (≈24% slower) —
-the **steepest** of the three, confirming the diagnostic's prediction that the
-FP8-phase cost scales with K_high only once K_high is a large multiple of the
-128-tile (bigger model = bigger K = steeper budget→latency slope).
+**Pareto readings (8B, preliminary — remaining measured PPLs still computing).**
+- **Iso-accuracy so far**: **1/8** (measured 6.5996 ≤ uniform-1/8 6.6367; measured-1/16
+  = 6.6663 just exceeds). Like 1B, 8B does **not** drop below 1/8 at iso-accuracy —
+  the measured win is −0.037 PPL at the matched 1/8 budget (1/12 result pending may
+  refine this).
+- **Upper wing:** 1/8 → 3/4 improves PPL 6.5996 → 6.3877 (−0.21) for +16% prefill.
+- Latency flat ≤ 1/8, upper wing rises to **prefill ×0.808 at r=1** (≈24% slower) —
+  the steepest of the three (bigger model → bigger K → steeper budget→latency slope).
+
+(Full 8B grid in the CSV; measured PPL being filled by 4 GPU-sharded resume jobs.)
 
 ---
 
@@ -146,8 +155,14 @@ FP8-phase cost scales with K_high only once K_high is a large multiple of the
   is worth fixing in the kernel if a true pure-MXFP8 path is ever wanted.
 - **R1-off lower bound.** All PPLs use R1-off (identity main rotation); the shipped
   R-on recipe is slightly better in absolute PPL and will shift the iso-accuracy
-  knee. This sweep is the **R1-off characterization**; the parallel `feat/rd-ron`
-  work provides the R-on shift. The measured-MSE-vs-uniform *deltas* are the signal.
+  knee. This sweep is the **R1-off characterization** (controlled lower-bound
+  curve); the parallel `feat/rd-ron` work provides the R-on shift. Specifically the
+  R-on **ring128 substrate shifts the accuracy column down ~0.08–0.1 PPL at 1/8**
+  (e.g. 3B measured-1/8 ≈ 8.289 vs 8.3124 here, and it even overturns the
+  uniform-optimal verdict at 3B@1/8) — those absolute numbers live on the `feat/rd-ron`
+  branch. **Latency is rotation-independent, so the latency columns in this report
+  are THE latency data for both the R1-off and R-on curves.** The measured-MSE-vs-
+  uniform *deltas* here are the controlled signal.
 - **4th model size:** the remote HF cache holds only the three llama sizes already
   swept (1B/3B/8B) plus Qwen3-8B (different architecture, same ~8B size class,
   incompatible with the llama-specific rotation/basis pipeline). No 7B/13B/3.1
