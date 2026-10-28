@@ -126,3 +126,121 @@ def allocate_by_budget(deltaD_per_layer, target_mean_fp8, deltaC_per_layer=None)
 def masks_to_khigh(masks, ring_size):
     """FP8 ring masks -> per-layer K_high (= #FP8 rings * ring_size)."""
     return [int(m.sum()) * ring_size for m in masks]
+
+
+# ---------------------------------------------------------------------------
+# Operating-point selection (spec section 8): one ranked curve, three modes.
+# Purely algorithmic -- eval_ppl_fn is injected (no model, no cost_model import)
+# so it stays unit-testable. All results are clipped to the Global-Constraints
+# feasible region: PPL <= floor AND average FP8 ring-fraction <= 1/8.
+# ---------------------------------------------------------------------------
+_MAX_MEAN_FP8 = 1.0 / 8  # low-precision floor: avg FP8 ring-fraction <= 1/8
+
+
+def select_operating_point(deltaD_per_layer, deltaC_per_layer, mode,
+                           target, eval_ppl_fn=None, floor=None):
+    """Pick an operating point on the single-threshold rate-distortion curve.
+
+    deltaD_per_layer:  list of per-ring deltaD tensors (one per layer).
+    deltaC_per_layer:  optional per-ring cost (None -> equal-cost, rank by deltaD).
+    mode:              'perf' | 'accuracy' | 'knee'.
+    target:            perf -> avg FP8 budget; accuracy -> acceptable PPL;
+                       knee -> acceptable PPL used only for fallback.
+    eval_ppl_fn:       masks -> PPL (monotone-decreasing in #FP8 rings).
+    floor:             hard PPL ceiling for the feasible region.
+
+    Returns (masks, info). ``info`` carries mode, n_fp8, avg_fp8, feasible, and
+    (where evaluated) ppl / fallback.
+    """
+    counts = [int(torch.as_tensor(dd).flatten().numel()) for dd in deltaD_per_layer]
+    total_rings = sum(counts)
+    max_fp8 = int(total_rings * _MAX_MEAN_FP8)  # avg FP8 <= 1/8 feasibility cap
+
+    def masks_for(n):
+        n = max(0, min(int(n), total_rings))
+        frac = (n / total_rings) if total_rings else 0.0
+        return allocate_by_budget(deltaD_per_layer, frac, deltaC_per_layer)
+
+    def n_of(masks):
+        return sum(int(m.sum()) for m in masks)
+
+    def n_floor_min():
+        """Smallest feasible n whose PPL <= floor (monotone => a threshold).
+        Returns max_fp8 if even the feasible cap cannot reach the floor."""
+        if eval_ppl_fn is None or floor is None:
+            return 0
+        for n in range(0, max_fp8 + 1):
+            if eval_ppl_fn(masks_for(n)) <= floor:
+                return n
+        return max_fp8
+
+    def _accuracy_n(acc_target):
+        """Fewest FP8 rings meeting acc_target, then clipped to [n_floor, max_fp8].
+        Returns (n, feasible)."""
+        chosen, met = None, False
+        for n in range(0, max_fp8 + 1):
+            if eval_ppl_fn(masks_for(n)) <= acc_target:
+                chosen, met = n, True
+                break
+        if chosen is None:
+            chosen = max_fp8
+        chosen = max(chosen, n_floor_min())      # enforce PPL <= floor
+        chosen = min(chosen, max_fp8)            # enforce avg FP8 <= 1/8
+        feasible = met and (floor is None or eval_ppl_fn is None
+                            or eval_ppl_fn(masks_for(chosen)) <= floor)
+        return chosen, feasible
+
+    info = {'mode': mode, 'total_rings': total_rings, 'max_fp8': max_fp8}
+
+    if mode == 'perf':
+        budget_n = int(round(target * total_rings))
+        n = max(n_floor_min(), min(budget_n, max_fp8))   # clip to feasible region
+        masks = masks_for(n)
+        info['target_budget'] = target
+
+    elif mode == 'accuracy':
+        n, feasible = _accuracy_n(target)
+        masks = masks_for(n)
+        info['target_ppl'] = target
+        info['feasible'] = feasible
+
+    elif mode == 'knee':
+        ppls = [eval_ppl_fn(masks_for(n)) for n in range(0, max_fp8 + 1)]
+        # improvement[i] = PPL drop from adding the (i+1)-th FP8 ring (cost +1).
+        improvements = [ppls[i] - ppls[i + 1] for i in range(len(ppls) - 1)]
+        knee_n = None
+        for i in range(1, len(improvements)):
+            prev = improvements[i - 1]
+            if prev > 1e-12 and improvements[i] / prev < 0.5:
+                knee_n = i          # marginal gain collapses at ring i+1 -> keep i
+                break
+        if knee_n is None:
+            # No clean knee -> fall back to accuracy(target); target=None -> floor.
+            acc_target = target if target is not None else floor
+            if acc_target is None:
+                n = max_fp8
+                feasible = False
+            else:
+                n, feasible = _accuracy_n(acc_target)
+            info['fallback'] = True
+            info['feasible'] = feasible
+        else:
+            n = max(n_floor_min(), min(knee_n, max_fp8))  # clip to feasible region
+            info['fallback'] = False
+        masks = masks_for(n)
+
+    else:
+        raise ValueError(
+            f"mode must be one of 'perf', 'accuracy', 'knee', got {mode!r}")
+
+    actual = n_of(masks)
+    info['n_fp8'] = actual
+    info['avg_fp8'] = (actual / total_rings) if total_rings else 0.0
+    if eval_ppl_fn is not None:
+        info['ppl'] = eval_ppl_fn(masks)
+    if 'feasible' not in info:
+        ok_budget = info['avg_fp8'] <= _MAX_MEAN_FP8 + 1e-12
+        ok_ppl = (floor is None or eval_ppl_fn is None
+                  or info.get('ppl', float('-inf')) <= floor)
+        info['feasible'] = ok_budget and ok_ppl
+    return masks, info
