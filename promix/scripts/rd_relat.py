@@ -107,6 +107,19 @@ def interleaved_decode(mA, mB, prompt_ids, gen, warmup=6):
     return a, b
 
 
+
+def _free_wdeq(packed):
+    """Drop the (N,K) FP32 dequant reference held by each PackedWeight. It is
+    only consumed by the fake twin (FakeMixedLinear); the real-kernel latency
+    path never reads it. For 8B it is ~26 GiB per model copy — keeping two
+    copies resident (baseline + measured) OOMs the 95 GiB Pro 6000."""
+    n = 0
+    for pk in packed.values():
+        if getattr(pk, "W_deq", None) is not None:
+            pk.W_deq = None
+            n += 1
+    return n
+
 def khigh_summary(model):
     """(n_khigh0, n_targets, realized_avg_fp8) over the 7 target Linears,
     counting K_high==0 only among the 6 REALLOCATED Linears (o_proj pinned)."""
@@ -178,6 +191,10 @@ def main():
     # --- uniform-1/8 baseline (kept resident) --------------------------------
     print("Building uniform-1/8 baseline (resident)...", flush=True)
     base, base_packed = rd_perf.build_real(config, True, None, nv, mx, cd, qpf, dg)
+    _free_wdeq(base_packed)
+    cleanup_memory()
+    print(f"  mem after baseline: {torch.cuda.memory_allocated()/2**30:.1f} GiB",
+          flush=True)
     vocab = base.config.vocab_size
     bn0, bnt, bfrac, bkh = khigh_summary(base)
     out["baseline"] = dict(n_khigh0=bn0, n_targets=bnt, avg_fp8_realized=bfrac)
@@ -194,6 +211,8 @@ def main():
         try:
             meas, meas_packed = rd_perf.build_real(config, True, chosen,
                                                    nv, mx, cd, qpf, dg)
+            _free_wdeq(meas_packed)
+            cleanup_memory()
             n0, nt, frac, kh = khigh_summary(meas)
             bpw, realized = bits_per_weight(kh)
             # smoke
