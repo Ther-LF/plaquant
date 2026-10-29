@@ -69,7 +69,10 @@ def resolve_paths(config):
     """
     name = config["model"]["name"]
     lname = name.lower()
-    if "3b" in lname:
+    if "13b" in lname:
+        # NB: must be checked BEFORE "3b" ("13b" contains it as a substring).
+        short, local = "Llama-2-13b-hf", "/home/luofan/models/Llama-2-13b-hf"
+    elif "3b" in lname:
         short, local = "Llama-3.2-3B", "/home/luofan/models/Llama-3.2-3B"
     elif "8b" in lname:
         short, local = "llama-3-8b", "/home/luofan/models/llama-3-8b"
