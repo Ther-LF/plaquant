@@ -223,3 +223,20 @@ python3 promix/scripts/rd_sweep.py --model {1b|3b|8b} \
 # then assemble:
 python3 promix/scripts/rd_sweep_merge.py <json_dir> docs/rd_pareto_sweep.csv
 ```
+
+---
+## CAVEAT (added post-hoc, from rd_perfpuzzle diagnostic)
+
+**The r=0 (pure-NVFP4) LATENCY rows in this sweep are NOT valid** — they are a
+uniform-1/8 fallback (`avg_fp8_realized=0.125`, `bpw=4.969` in the latency JSON)
+because the real fused kernel cannot build a pure-NVFP4 K_high=0 path (asserts
+in the fp8 pack + Phase-2 TMA descriptor). So the observed "r=0 prefill ≈ 1/8"
+is **partly by construction**, not a real measurement. The r=0 **PPL** rows ARE
+valid (computed via fake-quant, giving the real cliff 17.84/10.91/8.02).
+
+**Real finding (rd_perfpuzzle_report.md):** the fused kernel is **flat in K_high**
+(no shrink-FP8 latency lever at all) and the dedicated pure-NVFP4 dispatcher is
+24-65% SLOWER than fused-mixed. The FP4/FP8 format lever is ~1.3× at our LLM
+shapes (TC util 10-42%, not compute-bound) vs 2.05× at 16384³; GEMM is only
+25.7%/32.6% of prefill (3B/8B). Lever recovers to 1.6-1.8× at M≥8192/K=N≥8192
+→ scales with batch+model size.
