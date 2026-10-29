@@ -251,6 +251,7 @@ def main():
                 del cand, candp
                 cleanup_memory()
         assert f8 is not None, "no FP8 endpoint buildable"
+        cand = candp = None   # drop the loop aliases of f8/f8p (refcount leak)
         s8 = khigh_stats(f8)
         print(f"  F8 endpoint mode={f8_mode} avg_fp8={s8['avg_fp8']:.4f}", flush=True)
         fmt = {"f8_mode": f8_mode, "f8_avg_fp8": s8["avg_fp8"], "rows": {}}
