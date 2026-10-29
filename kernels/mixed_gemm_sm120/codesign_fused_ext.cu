@@ -656,6 +656,40 @@ torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
   return D;
 }
 
+// ---- Single-phase NVFP4, activation SF PRE-interleaved (GEMM-only; K_high==0 route) ----
+// Same tuned Phase-1 (NVFP4) collective/config as the dual-format fused kernel, with
+// Phase-2 (MXFP8) skipped AT COMPILE TIME (DualPhase=false -> GemmSingle). This is the
+// correct, fast K_high==0 path: it inherits ALL the round-24 NVFP4 tuning (stages/tile)
+// of the fused kernel instead of falling back to the stock untuned pure-NVFP4 dispatcher.
+// Consumes an already-interleaved activation SF (BSConfigNV atom) -- exactly what
+// quant_pack_float_fp4 emits for the NVFP4 segment of the fused path, so it is
+// byte-compatible with the dual-format prepacked path (no double interleave).
+torch::Tensor cd_single_nvfp4_gemm_prepacked(torch::Tensor A, torch::Tensor physSFA,
+                                             torch::Tensor B, torch::Tensor physSFB,
+                                             int64_t M, int64_t N, int64_t K, double alpha = 1.0) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  A = A.contiguous(); B = B.contiguous();
+  physSFA = physSFA.contiguous(); physSFB = physSFB.contiguous();
+  auto dev = A.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  int Mi=(int)M, Ni=(int)N, Ki=(int)K;
+  auto D = torch::empty({M, N}, torch::TensorOptions().dtype(CD_OUT_TORCH_DTYPE).device(dev));
+  auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A, physSFA, B, physSFB, Mi, Ni, Ki);
+
+  typename GemmSingle::Arguments arguments;
+  arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
+  arguments.problem_shape = {Mi, Ni, Ki, 1};
+  arguments.mainloop_nv = nv_args;
+  arguments.K_high = 0;
+  arguments.epilogue = make_epi_args(D, Mi, Ni, (float)alpha);
+
+  static GemmSingle gemm;
+  static torch::Tensor ws_cache;
+  static bool checked = false;
+  run_with_cached_ws(gemm, arguments, dev, stream, ws_cache, checked, "single_pre");
+  return D;
+}
+
 static std::string cd_compat_report() {
   using AccNV = typename ForkNV::ElementAccumulator;
   using AccMX = typename ForkMX::ElementAccumulator;
@@ -684,6 +718,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("bytes"), pybind11::arg("SFA"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("ilv"), pybind11::arg("impl") = 1);
   m.def("single_nvfp4_gemm", &cd_single_nvfp4_gemm, "single-format NVFP4 through forked glue (gate)",
         pybind11::arg("A"), pybind11::arg("SFA"), pybind11::arg("B"), pybind11::arg("physSFB"),
+        pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("alpha") = 1.0);
+  m.def("single_nvfp4_gemm_prepacked", &cd_single_nvfp4_gemm_prepacked,
+        "single-format NVFP4 (Phase-2 skipped at compile time), activation SF pre-interleaved; the K_high==0 pure-NVFP4 route reusing the fused kernel's tuned NVFP4 Phase-1",
+        pybind11::arg("A"), pybind11::arg("physSFA"), pybind11::arg("B"), pybind11::arg("physSFB"),
         pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"), pybind11::arg("alpha") = 1.0);
   m.def("fused_gemm", &cd_fused_gemm, "dual-format fused GEMM; efficient per-call activation-SF interleave + cached workspace");
   m.def("fused_gemm_slow", &cd_fused_gemm_slow, "dual-format fused GEMM with OLD redundant interleave (before-number only)");

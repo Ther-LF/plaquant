@@ -82,6 +82,19 @@ class MixedQuantLinear(nn.Module):
         self.K = packed.K
         self.K_low = packed.K_low
         self.K_high = packed.K_high
+        # K_high==0 -> pure-NVFP4 Linear (0 MXFP8 rings, e.g. rate-distortion low
+        # budgets). The two-phase fused kernel cannot build an empty MXFP8 segment
+        # (Phase-2 pack / TMA / SF layout assume K_high>0); instead we dispatch the
+        # single-phase NVFP4 GEMM (cd.single_nvfp4_gemm_prepacked), which reuses the
+        # SAME tuned NVFP4 Phase-1 collective with Phase-2 skipped at compile time.
+        self.is_pure_nvfp4 = (self.K_high == 0)
+        # K_low==0 (pure-MXFP8) has no single-phase MXFP8 real-kernel path -> refuse
+        # clearly rather than silently serving a different split.
+        if self.K_low == 0:
+            raise ValueError(
+                f"MixedQuantLinear: K_low==0 (pure-MXFP8, K_high={self.K_high}, "
+                f"K={self.K}, N={self.N}) is unsupported — no single-phase MXFP8 "
+                "kernel. Route to a pure-MXFP8 GEMM or allocate >=1 NVFP4 ring.")
         self.out_dtype = out_dtype
         # Round-6 two-level weight global (per-tensor FP32, pow2-or-arbitrary):
         # carried on the fused-GEMM epilogue alpha so D = g*(A@B). 1.0 = single-level.
@@ -156,8 +169,22 @@ class MixedQuantLinear(nn.Module):
         return D.unsqueeze(0)      # (1, N)
 
     def _pack_activation(self, x2d):
-        """x2d: (M, K) fp (any dtype) -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi)."""
+        """x2d: (M, K) fp (any dtype) -> (A_lo_packed, physSFA_lo, A_hi_bytes, physSFA_hi).
+
+        Pure-NVFP4 (K_high==0): pack ONLY the NVFP4 segment (the whole row) and
+        return None for the MXFP8 pair — the single-phase GEMM ignores it. The
+        qpf fp8 pack / qpfm mixed pack would launch a 0-block kernel otherwise."""
         M = x2d.shape[0]
+        if self.is_pure_nvfp4:
+            x2d = x2d.contiguous()
+            if self._qpf is not None:
+                a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low,
+                                                      row_stride=self.K, col_off=0)
+                return a_lo[0], a_lo[1], None, None
+            x_lo = x2d[:, :self.K_low].contiguous()
+            codes_lo, SFA_lo, _ = quantize_nvfp4_spec(x_lo.float())
+            a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low, True)
+            return a_lo[0], a_lo[1], None, None
         if self._qpfm is not None:
             # LEVER 1 (pack fusion): one fused launch for BOTH the NVFP4 (low) and
             # MXFP8 (high) segments -> halves the pack launch count. Bit-exact to the
@@ -187,6 +214,18 @@ class MixedQuantLinear(nn.Module):
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
+        if self.is_pure_nvfp4:
+            # Pure-NVFP4: single-phase NVFP4 GEMM (Phase-2 skipped at compile time),
+            # reusing the fused kernel's tuned NVFP4 Phase-1. g_w rides the epilogue
+            # alpha exactly as in the dual path; bias is applied in torch (the
+            # single-phase entry has no bias-epilogue variant).
+            D = self._cd.single_nvfp4_gemm_prepacked(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                M, self.N, self.K_low, self.g_w)
+            D = D.to(self.out_dtype)
+            if self.bias is not None:
+                D = D + self.bias.to(D.dtype)
+            return D
         if self.bias_in_epilogue and self._cd_bias is not None:
             return self._cd_bias.fused_gemm_prepacked_bias(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
@@ -207,7 +246,10 @@ class MixedQuantLinear(nn.Module):
         in_shape = x.shape
         x2d = x.reshape(-1, in_shape[-1])          # keep dtype (kernel reads fp16/bf16/fp32)
         M = x2d.shape[0]
-        if self._dg is not None and M == 1:
+        # Pure-NVFP4 (K_high==0) has no decode-GEMV (its weight-high buffers are
+        # empty); route M==1 through the single-phase prefill GEMM (correct, just
+        # not the bandwidth-optimized decode kernel).
+        if self._dg is not None and M == 1 and not self.is_pure_nvfp4:
             D = self._decode_gemv(x2d)             # memory-bound W4A4 GEMV (decode)
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)

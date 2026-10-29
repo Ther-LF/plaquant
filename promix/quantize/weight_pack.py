@@ -205,6 +205,15 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     assert W.dim() == 2, f"W must be 2D (N,K), got {tuple(W.shape)}"
     N, K = W.shape
     assert K_low + K_high == K, f"K_low+K_high={K_low + K_high} != K={K}"
+    # K_low==0 (pure-MXFP8) has NO supported real-kernel path in this fused module
+    # (the forked glue exposes a single-phase NVFP4 kernel, not a single-phase
+    # MXFP8 one). Refuse with a clear error rather than silently clamping to a
+    # 1/8 split the evaluated model never had.
+    if K_low == 0:
+        raise ValueError(
+            f"pack_weight_mixed: K_low==0 (pure-MXFP8, K_high={K_high}, K={K}) is not "
+            "supported by the fused NVFP4+MXFP8 kernel — no single-phase MXFP8 path "
+            "exists. Route this Linear to a pure-MXFP8 GEMM or allocate >=1 NVFP4 ring.")
     dev = W.device
     Wf = W.to(torch.float32).contiguous()
 
@@ -232,9 +241,23 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     physSFB_lo = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
 
     # --- MXFP8 high segment (frozen GPTQ scale when available, else RTN) ---
-    bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale,
-                                                   global_scale=global_scale)
-    physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
+    # K_high==0 (pure-NVFP4 Linear, e.g. rate-distortion low-budget): there is NO
+    # MXFP8 segment. Build EMPTY high buffers and skip the FP8 SF prepack entirely —
+    # cd.prepack_sf_fp8_b(..., K=0) launches a 0-block kernel ("invalid argument").
+    # The real-kernel path (MixedQuantLinear) detects K_high==0 and dispatches the
+    # single-phase NVFP4 GEMM (Phase-2 skipped), so these buffers are never read.
+    if K_high > 0:
+        bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale,
+                                                       global_scale=global_scale)
+        physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
+        W_hi_dec = bytes_hi.contiguous()
+        S_hi_dec = (torch.exp2(SFB_hi.float() - 127.0) * g).contiguous()
+    else:
+        bytes_hi = torch.empty((N, 0), dtype=torch.uint8, device=dev)
+        physSFB_hi = torch.empty((0,), dtype=torch.uint8, device=dev)
+        deq_hi = torch.empty((N, 0), dtype=torch.float32, device=dev)
+        W_hi_dec = torch.empty((N, 0), dtype=torch.uint8, device=dev)
+        S_hi_dec = torch.empty((N, 0), dtype=torch.float32, device=dev)
 
     W_deq = torch.cat([deq_lo, deq_hi], dim=-1).contiguous()
 
@@ -247,8 +270,6 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     cl = codes_lo.view(N_, K_low // 2, 2)
     W_lo_dec = (cl[:, :, 0] | (cl[:, :, 1] << 4)).to(torch.uint8).contiguous()
     S_lo_dec = (SFB_lo.view(torch.float8_e4m3fn).float() * g).contiguous()
-    W_hi_dec = bytes_hi.contiguous()
-    S_hi_dec = (torch.exp2(SFB_hi.float() - 127.0) * g).contiguous()
 
     return PackedWeight(
         N=N, K=K, K_low=K_low, K_high=K_high,
