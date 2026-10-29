@@ -1,0 +1,159 @@
+{
+  "meta": {
+    "model": "8b",
+    "name": "/home/luofan/models/llama-3-8b",
+    "batches": [
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "seq": 2048,
+    "iters": 13,
+    "budget": 0.125,
+    "protocol": "interleaved A/B paired ratios (format: FP8-endpoint vs FP4-endpoint; alloc: uniform-1/8 vs measured); GEMM split via cudaEvent hooks on MixedQuantLinear"
+  },
+  "alloc": {
+    "measured_avg_fp8": 0.125,
+    "bits_per_weight": 4.96875,
+    "uniform_avg_fp8": 0.125,
+    "rows": {
+      "1": {
+        "batch": 1,
+        "M_eff": 2048,
+        "e2e_uniform_over_measured": {
+          "a_min": 83.19142150878906,
+          "a_med": 83.42310333251953,
+          "b_min": 83.47731018066406,
+          "b_med": 84.08134460449219,
+          "ratio_pair_med": 0.9948266095667448,
+          "ratio_pair_min": 0.9849838790202665,
+          "ratio_pair_max": 1.004245370761049,
+          "ratio_min": 0.9965752529488999,
+          "ratio_med": 0.9921713755284369
+        },
+        "uniform_decomp": {
+          "clean_whole_ms": 83.83036804199219,
+          "whole_ms": 95.6612319946289,
+          "pack_ms": 13.46526400372386,
+          "gemm_ms": 40.80379202961922,
+          "rest_ms": 41.39217596128583,
+          "n_linear_calls": 224,
+          "gemm_share_instr": 0.4265447055073494,
+          "linear_share_instr": 0.5673045903944675,
+          "gemm_share_clean": 0.48674237012987753
+        },
+        "secs": 4.6
+      },
+      "2": {
+        "batch": 2,
+        "M_eff": 4096,
+        "e2e_uniform_over_measured": {
+          "a_min": 162.43040466308594,
+          "a_med": 164.12844848632812,
+          "b_min": 162.59027099609375,
+          "b_med": 164.19961547851562,
+          "ratio_pair_med": 0.9992592519148579,
+          "ratio_pair_min": 0.9906726895849354,
+          "ratio_pair_max": 1.0026057450394408,
+          "ratio_min": 0.9990167533885735,
+          "ratio_med": 0.999566582467443
+        },
+        "uniform_decomp": {
+          "clean_whole_ms": 163.07806396484375,
+          "whole_ms": 166.50816345214844,
+          "pack_ms": 21.332016322761774,
+          "gemm_ms": 69.97660811245441,
+          "rest_ms": 75.19953901693225,
+          "n_linear_calls": 224,
+          "gemm_share_instr": 0.42025932339686445,
+          "linear_share_instr": 0.5483732601582426,
+          "gemm_share_clean": 0.42909884021887773
+        },
+        "secs": 6.3
+      },
+      "4": {
+        "batch": 4,
+        "M_eff": 8192,
+        "e2e_uniform_over_measured": {
+          "a_min": 338.851806640625,
+          "a_med": 339.62965393066406,
+          "b_min": 339.89752197265625,
+          "b_med": 340.1094512939453,
+          "ratio_pair_med": 0.9986356336681648,
+          "ratio_pair_min": 0.9963552255464381,
+          "ratio_pair_max": 1.0058740050927415,
+          "ratio_min": 0.9969234393767796,
+          "ratio_med": 0.9985892854154571
+        },
+        "uniform_decomp": {
+          "clean_whole_ms": 338.77606201171875,
+          "whole_ms": 342.0130615234375,
+          "pack_ms": 38.5008317604661,
+          "gemm_ms": 130.68745604902506,
+          "rest_ms": 172.82477371394634,
+          "n_linear_calls": 224,
+          "gemm_share_instr": 0.3821124709883903,
+          "linear_share_instr": 0.49468370317750865,
+          "gemm_share_clean": 0.38576354915095623
+        },
+        "secs": 10.5
+      },
+      "8": {
+        "batch": 8,
+        "M_eff": 16384,
+        "e2e_uniform_over_measured": {
+          "a_min": 692.310546875,
+          "a_med": 692.5606689453125,
+          "b_min": 695.7840576171875,
+          "b_med": 695.916259765625,
+          "ratio_pair_med": 0.9953431336858447,
+          "ratio_pair_min": 0.9931847247434239,
+          "ratio_pair_max": 0.9962087834454684,
+          "ratio_min": 0.9950077747482703,
+          "ratio_med": 0.9951781686758654
+        },
+        "uniform_decomp": {
+          "clean_whole_ms": 692.7296752929688,
+          "whole_ms": 696.2018432617188,
+          "pack_ms": 74.01785524189472,
+          "gemm_ms": 261.93807931244373,
+          "rest_ms": 360.2459087073803,
+          "n_linear_calls": 224,
+          "gemm_share_instr": 0.37623870411669535,
+          "linear_share_instr": 0.4825553649504554,
+          "gemm_share_clean": 0.3781245248395993
+        },
+        "secs": 21.7
+      },
+      "16": {
+        "batch": 16,
+        "M_eff": 32768,
+        "e2e_uniform_over_measured": {
+          "a_min": 1382.7491455078125,
+          "a_med": 1383.95654296875,
+          "b_min": 1390.517333984375,
+          "b_med": 1391.037109375,
+          "ratio_pair_med": 0.994525333905508,
+          "ratio_pair_min": 0.9944049763549488,
+          "ratio_pair_max": 0.9953601355497177,
+          "ratio_min": 0.9944134544124642,
+          "ratio_med": 0.9949098651944438
+        },
+        "uniform_decomp": {
+          "clean_whole_ms": 1385.9481201171875,
+          "whole_ms": 1387.9893798828125,
+          "pack_ms": 143.13142397999763,
+          "gemm_ms": 521.2426885962486,
+          "rest_ms": 723.6152673065662,
+          "n_linear_calls": 224,
+          "gemm_share_instr": 0.3755379516234173,
+          "linear_share_instr": 0.4786593631086278,
+          "gemm_share_clean": 0.37609105350363004
+        },
+        "secs": 40.1
+      }
+    }
+  }
+}
