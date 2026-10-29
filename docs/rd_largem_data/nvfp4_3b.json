@@ -1,0 +1,157 @@
+{
+  "meta": {
+    "tag": "nvfp4_largem_3b",
+    "model": "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-nvfp4",
+    "argv": [
+      "/home/luofan/plaquant-largem/docs/baselines_scripts/bench_vllm.py",
+      "--model",
+      "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-nvfp4",
+      "--tag",
+      "nvfp4_largem_3b",
+      "--out",
+      "/home/luofan/vllm_e2e/nvfp4_3b.json",
+      "--skip-ppl",
+      "--prefill-lens",
+      "2048",
+      "--prefill-batches",
+      "1,2,4,8,16",
+      "--reps",
+      "5",
+      "--decode-lens",
+      ""
+    ],
+    "gpu": "3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "capability": [
+      12,
+      0
+    ],
+    "time": "2026-10-29 11:12:33",
+    "vllm": "0.32.0",
+    "load_s": 80.48216540296562,
+    "quantization_resolved": "compressed-tensors",
+    "dtype_resolved": "torch.bfloat16",
+    "max_model_len": 12288,
+    "hf_config_quant": {
+      "config_groups": {
+        "group_0": {
+          "format": "nvfp4-pack-quantized",
+          "input_activations": {
+            "actorder": null,
+            "block_structure": null,
+            "dynamic": "local",
+            "group_size": 16,
+            "num_bits": 4,
+            "observer": "static_minmax",
+            "observer_kwargs": {},
+            "scale_dtype": "torch.float8_e4m3fn",
+            "strategy": "tensor_group",
+            "symmetric": true,
+            "type": "float",
+            "zp_dtype": null
+          },
+          "output_activations": null,
+          "targets": [
+            "Linear"
+          ],
+          "weights": {
+            "actorder": null,
+            "block_structure": null,
+            "dynamic": false,
+            "group_size": 16,
+            "num_bits": 4,
+            "observer": "memoryless_minmax",
+            "observer_kwargs": {},
+            "scale_dtype": "torch.float8_e4m3fn",
+            "strategy": "tensor_group",
+            "symmetric": true,
+            "type": "float",
+            "zp_dtype": null
+          }
+        }
+      },
+      "format": "nvfp4-pack-quantized",
+      "global_compression_ratio": null,
+      "ignore": [
+        "lm_head"
+      ],
+      "kv_cache_scheme": null,
+      "quant_method": "compressed-tensors",
+      "quantization_status": "compressed",
+      "sparsity_config": {},
+      "transform_config": {},
+      "version": "0.19.0",
+      "total_num_heads": 24,
+      "total_num_kv_heads": 8
+    }
+  },
+  "ttft": {
+    "L2048_b1": {
+      "median_s": 0.03364954493008554,
+      "runs_s": [
+        0.03717336500994861,
+        0.03364954493008554,
+        0.036776699125766754,
+        0.03362944512628019,
+        0.033368281088769436
+      ]
+    },
+    "L2048_b2": {
+      "median_s": 0.06401622295379639,
+      "runs_s": [
+        0.06488410010933876,
+        0.06396706611849368,
+        0.06401622295379639,
+        0.06293429201468825,
+        0.06464010803028941
+      ]
+    },
+    "L2048_b4": {
+      "median_s": 0.08501353696919978,
+      "runs_s": [
+        0.08842158899642527,
+        0.08501353696919978,
+        0.08473286707885563,
+        0.08389811613596976,
+        0.08564136200584471
+      ]
+    },
+    "L2048_b8": {
+      "median_s": 0.15585292386822402,
+      "runs_s": [
+        0.15400880808010697,
+        0.15611711493693292,
+        0.15585292386822402,
+        0.15452559990808368,
+        0.15632945601828396
+      ]
+    },
+    "L2048_b16": {
+      "median_s": 0.2840834460221231,
+      "runs_s": [
+        0.2828518070746213,
+        0.2840834460221231,
+        0.2851897228974849,
+        0.28465399984270334,
+        0.2838114909827709
+      ]
+    }
+  },
+  "decode": {},
+  "memory": {
+    "max_memory_reserved_gib": 0.0,
+    "max_memory_allocated_gib": 0.0,
+    "total_gib": 94.97052001953125,
+    "nvidia_smi_compute_apps": [
+      "313046, 57646 MiB",
+      "314353, 550 MiB",
+      "314695, 79682 MiB",
+      "310183, 44038 MiB",
+      "309528, 44514 MiB",
+      "309752, 66936 MiB"
+    ]
+  },
+  "weight_bytes": 2391112480
+}
