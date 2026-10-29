@@ -2,6 +2,7 @@ import torch
 from promix.quantize.adaptive import (
     per_channel_variance_in_basis, tail_energy_fraction,
     derive_khigh, derive_per_layer_khigh, main_path_avg_bits,
+    ring_fisher_weight, ring_deltaD_weighted, allocate_by_budget,
 )
 from promix.quantize.rotation import build_main_transform
 from promix.eval.ptq import layer_index_of
@@ -82,3 +83,46 @@ def test_layer_index_of():
     assert layer_index_of("model.layers.3.self_attn.q_proj.module") == 3
     assert layer_index_of("model.layers.11.mlp.gate_proj") == 11
     assert layer_index_of("lm_head") is None
+
+
+# --- loss-weighted rate-distortion (Fisher proxy) --------------------------
+def test_ring_fisher_weight_sums_channels():
+    # 8 channels, ring 4 -> 2 rings; weight = per-ring channel sum
+    g = torch.tensor([1., 2., 3., 4., 0., 0., 10., 0.])
+    w = ring_fisher_weight(g, ring_size=4)
+    assert torch.allclose(w, torch.tensor([10., 10.], dtype=w.dtype))
+
+
+def test_ring_fisher_weight_clamps_negative():
+    w = ring_fisher_weight(torch.tensor([-5., 1., 1., 1.]), ring_size=2)
+    # negatives clamped to 0 before summing: ring0=0+1=1, ring1=1+1=2
+    assert torch.allclose(w, torch.tensor([1., 2.], dtype=w.dtype))
+
+
+def test_ring_deltaD_weighted_is_product():
+    dd = torch.tensor([2.0, -1.0, 0.5])
+    w = torch.tensor([3.0, 4.0, 10.0])
+    s = ring_deltaD_weighted(dd, w)
+    assert torch.allclose(s, torch.tensor([6.0, -4.0, 5.0], dtype=s.dtype))
+
+
+def test_ring_deltaD_weighted_normalize_is_rescale():
+    dd = torch.tensor([1.0, 1.0, 1.0, 1.0])
+    w = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    raw = ring_deltaD_weighted(dd, w, normalize=False)
+    nrm = ring_deltaD_weighted(dd, w, normalize=True)
+    # normalize divides by mean(w)=2.5 -> same internal order, just rescaled
+    assert torch.allclose(nrm * w.mean().double(), raw)
+
+
+def test_loss_weighting_can_flip_the_pick():
+    # Two layers, 2 rings each, budget = 1 ring. Pure ΔD picks layer0 ring1
+    # (ΔD=1.0 highest). But layer1 ring0 feeds a 100x more loss-sensitive path,
+    # so loss-weighting flips the pick to it.
+    deltaD = [torch.tensor([0.2, 1.0]), torch.tensor([0.9, 0.1])]
+    fisher = [torch.tensor([1.0, 1.0]), torch.tensor([100.0, 1.0])]
+    pure = allocate_by_budget(deltaD, target_mean_fp8=0.25)   # 1 of 4 rings
+    assert pure[0].tolist() == [False, True] and pure[1].tolist() == [False, False]
+    scores = [ring_deltaD_weighted(deltaD[i], fisher[i]) for i in range(2)]
+    lw = allocate_by_budget(scores, target_mean_fp8=0.25)
+    assert lw[1].tolist() == [True, False] and lw[0].tolist() == [False, False]

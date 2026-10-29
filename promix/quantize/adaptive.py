@@ -96,6 +96,73 @@ def ring_deltaD(x_rot, ring_size):
     return ring_mse(x_rot, ring_size, 'nvfp4') - ring_mse(x_rot, ring_size, 'mxfp8')
 
 
+# ---------------------------------------------------------------------------
+# Loss-weighted rate-distortion score (spec §9 fallback / §4.5 refinement).
+#
+# Pure ring_deltaD ranks rings by LOCAL activation-MSE reduction, implicitly
+# assuming every channel's error contributes equally to the final LM loss. It
+# doesn't: a channel feeding a loss-sensitive path matters more than one whose
+# error the network absorbs. The refinement weights each ring's ΔD by its
+# sensitivity to the final cross-entropy loss, estimated with an empirical
+# Fisher-diagonal proxy of the (rotated) activation entering each Linear:
+#
+#     F_c = (1/T) * sum_t (dL/da_c)^2          # per-channel, over T calib tokens
+#     w_j = sum_{c in ring j} F_c              # per-ring loss-sensitivity weight
+#     score_j = w_j * ΔD_j
+#
+# First-order Taylor: upgrading ring j FP4->FP8 reduces the activation error in
+# its channels by ~ΔD_j (MSE), and the induced change in loss is, to leading
+# order, sum_{c in ring} F_c * (per-channel error reduction) ≈ w_j * ΔD_j (ΔD_j
+# is the ring-mean per-channel MSE reduction, w_j the ring-summed Fisher). So the
+# product is the Fisher-proxy estimate of the LM-loss reduction from the upgrade,
+# which is the quantity the allocation should actually be maximizing.
+#
+# ZERO-REGRESSION: these are additive, opt-in helpers. The pure-ΔD path
+# (ring_deltaD -> allocate_by_budget) is untouched.
+# ---------------------------------------------------------------------------
+def ring_fisher_weight(grad_sq_sum, ring_size):
+    """Per-ring loss-sensitivity weight from accumulated per-channel squared
+    gradients of the LM loss w.r.t. the activation entering a Linear.
+
+    grad_sq_sum: (d,) tensor = sum_t (dL/da_c)^2 over calibration tokens
+                 (the un-normalized empirical Fisher diagonal; the 1/T factor
+                 is a global constant that does not affect ring ranking).
+    Returns (d//ring_size,): the Fisher summed over each ring's channels.
+    """
+    g = torch.as_tensor(grad_sq_sum, dtype=torch.float64).flatten().clamp_min(0)
+    d = g.numel()
+    if d % ring_size != 0:
+        raise ValueError(f"d={d} not a multiple of ring_size={ring_size}")
+    return g.reshape(d // ring_size, ring_size).sum(dim=1)
+
+
+def ring_deltaD_weighted(deltaD, fisher_weight, normalize=False, eps=1e-12):
+    """Loss-weighted rate-distortion score: w_j * ΔD_j.
+
+    deltaD:       per-ring ΔD = D_fp4 - D_fp8 (local MSE reduction).
+    fisher_weight: per-ring Fisher sum w_j from ring_fisher_weight.
+    normalize:    if True, divide w by its mean over THESE rings before the
+                  product (cosmetic only — a per-call positive rescale does not
+                  change this layer's internal ring order; and because
+                  allocate_by_budget ranks ALL rings globally, per-layer rescaling
+                  WOULD alter cross-layer order, so the allocation driver keeps
+                  normalize=False and ranks on the raw, globally-comparable
+                  w_j*ΔD_j. The flag is provided for inspection/reporting.).
+
+    The raw Fisher is comparable across layers (same loss, same tokens), so a ring
+    in a loss-sensitive layer can outrank a higher-ΔD ring in an insensitive one —
+    which is the whole point of the refinement.
+    """
+    dd = torch.as_tensor(deltaD, dtype=torch.float64).flatten()
+    w = torch.as_tensor(fisher_weight, dtype=torch.float64).flatten().clamp_min(0)
+    if dd.numel() != w.numel():
+        raise ValueError(f"deltaD ({dd.numel()}) and fisher_weight ({w.numel()}) "
+                         f"must have the same number of rings")
+    if normalize:
+        w = w / w.mean().clamp_min(eps)
+    return w * dd
+
+
 def allocate_by_budget(deltaD_per_layer, target_mean_fp8, deltaC_per_layer=None):
     """Global single-threshold rate-distortion allocation.
 
