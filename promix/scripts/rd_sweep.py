@@ -268,10 +268,20 @@ def run(model_key, config_path, phase, budgets, args):
             if "error" not in lat:
                 row["prefill_ms"] = lat["prefill_ms"]
                 row["decode_ms"] = lat["decode_ms"]
-                if "avg_fp8_realized" not in row and "khigh" in lat:
-                    bpw, realized = bits_per_weight(lat["khigh"])
-                    row["bits_per_weight"] = bpw
-                    row["avg_fp8_realized"] = realized
+                if "khigh" in lat:
+                    kh = lat["khigh"]
+                    # count REALLOCATED Linears (exclude o_proj, pinned 1/8) that
+                    # the fix now routes to the single-phase pure-NVFP4 path.
+                    row["n_khigh0"] = sum(
+                        1 for n, (h, K) in kh.items()
+                        if h == 0 and n.split(".")[-1] != "o_proj")
+                    row["n_targets"] = sum(
+                        1 for n in kh if n.split(".")[-1] != "o_proj")
+                    row["uniform_fallback"] = lat.get("uniform_fallback")
+                    if "avg_fp8_realized" not in row:
+                        bpw, realized = bits_per_weight(kh)
+                        row["bits_per_weight"] = bpw
+                        row["avg_fp8_realized"] = realized
                 print(f"  prefill={lat['prefill_ms']:.3f}ms decode={lat['decode_ms']:.3f}ms "
                       f"fallback={lat.get('uniform_fallback')} ({time.time()-t0:.0f}s)",
                       flush=True)
