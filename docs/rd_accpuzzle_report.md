@@ -125,13 +125,13 @@ precisely them. The long low-variance tail quantizes fine at NVFP4.
 | 1/128 | 7.4771 | 0.5435 | 31.7 % | 38.2 % | 27.2 % |
 | 1/96 | 7.1455 | 0.8751 | 51.1 % | 61.6 % | 31.7 % |
 | 1/64 | 6.8721 | 1.1485 | 67.1 % | 80.8 % | 35.2 % |
-| 1/48 | _pending_ | | | | 38.0 % |
-| 1/32 | _pending_ | | | | 42.3 % |
-| 1/24 | _pending_ | | | | 45.6 % |
-| 1/16 | _pending_ | | | | 50.8 % |
+| 1/48 | 6.7861 | 1.2345 | 72.1 % | 86.9 % | 38.0 % |
+| 1/32 | 6.7276 | 1.2930 | 75.5 % | 91.0 % | 42.3 % |
+| 1/24 | 6.6945 | 1.3261 | 77.4 % | 93.3 % | 45.6 % |
+| 1/16 | 6.6580 | 1.3626 | 79.6 % | 95.9 % | 50.8 % |
 
 Both models show PPL recovering **super-proportionally** to captured ΔD: at r=1/32,
-~42 % of the total ΔD is spent but 86 % (3B) / ~86 % (8B) of the full r=0→r=1 PPL drop
+~42 % of the total ΔD is spent but 86 % (3B) / 76 % (8B) of the full r=0→r=1 PPL drop
 is already gone (and ~90–95 % of the drop to the 1/8 operating point). PPL rises faster
 than the ΔD it has bought because a *log-loss is dominated by the worst-quantized
 directions*: the handful of highest-variance outlier rings, served NVFP4 at r=0, inject
@@ -139,7 +139,7 @@ catastrophic error that blows up the loss; the allocator spends its first rings 
 there, killing the catastrophe, after which the thousands of remaining low-variance
 rings contribute ΔD but almost no PPL.
 
-**Step vs. smooth ramp (is the knob dialable?).** **a smooth low-end ramp** for 3B: 1/256 13 %, 1/128 33 %, 1/32 86 % — finely tunable across 1/256..1/16, the coarse sweep's 1/32 step merely under-sampled it. 
+**Step vs. smooth ramp (is the knob dialable?).** **a smooth, steep S-ramp** for 3B, NOT a binary step: 1/256 recovers only 13 %, 1/128 33 %, 86 % at 1/32 — so the knob is genuinely dial-able across 1/256..1/16; the coarse sweep's "cliff at 1/32" was under-sampling. The single steepest segment is 1/128→1/96 (33%→71% recovered), i.e. the knee sits near 1/96, not at the coarse grid's 1/32. **a smooth, steep S-ramp** for 8B, NOT a binary step: 1/256 recovers only 17 %, 1/128 32 %, 76 % at 1/32 — so the knob is genuinely dial-able across 1/256..1/16; the coarse sweep's "cliff at 1/32" was under-sampling. The single steepest segment is 1/128→1/96 (32%→51% recovered), i.e. the knee sits near 1/96, not at the coarse grid's 1/32.
 
 ## 5. Mechanism and interpretation
 
@@ -188,3 +188,30 @@ python3 promix/scripts/rd_sweep.py --model {3b|8b} \
   --config promix/configs/llama-3.2-3b-mxfp8-nvfp4.yaml --phase ppl --skip_bf16 \
   --budgets 0,0.00390625,0.0078125,0.01041667,0.015625,0.02083333,0.03125,0.04166667,0.0625
 ```
+
+## 7. 8B break-even anatomy — why loss-weighted allocation stays ~flat on 8B
+
+Same R1-off regime as above. At the matched 1/8 budget the measured-MSE allocation and uniform (each Linear its own top-1/8 variance rings) are compared three ways.
+
+**(1) Selection-difference.**
+
+| model | budget rings | overlap | reallocated (added=dropped) |
+|---|---|---|---|
+| 8B | 2176 | 1276 (58.6 %) | 900 |
+| 3B | — | 65.2 % | — |
+
+PPL of the four ring-sets (wikitext-2): uniform **6.6376**, measured **6.6038**, overlap-only (uniform−dropped) **6.6352**, union (uniform+added) **6.5943**.
+
+- **X = cost of dropping** uniform's 900 rings (uniform→overlap-only) = **-0.0024** PPL.
+- **Y = benefit of adding** measured's 900 rings (uniform→union) = **+0.0433** PPL.
+- Net measured−uniform = **-0.0338** PPL.
+
+**Verdict (selection):** Y > X: the added rings are genuinely more valuable than the dropped ones, yet the net stays ~flat — i.e. the reallocation helps but the absolute per-ring PPL sensitivity is so small on 8B that even a correct move is in the noise. The ceiling is flat per-ring sensitivity, not bad selection.
+
+**(2) Granularity — cross-layer vs within-layer ΔD.**
+
+Per-layer total ΔD is nearly flat across layers in both models: CV(8B)=**0.0426**, CV(3B)=**0.0213**. The cross-layer non-uniformity is tiny (a few %), far smaller than the within-layer ring spread that drives the 42 %-in-top-1/32 concentration curve (§2). So the exploitable structure is WITHIN layers, which ring allocation already sees; there is no coarse cross-layer structure a global ring threshold is averaging out. 8B's break-even is **not** a granularity mismatch.
+
+**(3) Dataset (C4).** C4 was not available offline on the box (no cached `allenai/c4`), so the off-distribution check could not be run; left as follow-up.
+
+**Overall 8B verdict.** 8B's uniform-near-optimum is **fundamental — flat per-ring PPL sensitivity**, not a granularity mismatch (dataset-robustness untested — C4 unavailable offline): cross-layer ΔD is flat (ring granularity is adequate), uniform already wastes ~41 % of its budget on ~zero-value rings (X≈0), and even reallocating them optimally (Y) buys only ~0.04 PPL. A larger model has enough redundant capacity that WHICH rings are FP8 barely matters — the measured-MSE win shrinks monotonically with scale (1B −0.22, 3B −0.08, 8B −0.04 PPL at 1/8).
