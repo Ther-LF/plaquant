@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "tag": "bf16_largem_3b",
+    "model": "/home/luofan/models/Llama-3.2-3B",
+    "argv": [
+      "/home/luofan/plaquant-largem/docs/baselines_scripts/bench_vllm.py",
+      "--model",
+      "/home/luofan/models/Llama-3.2-3B",
+      "--tag",
+      "bf16_largem_3b",
+      "--out",
+      "/home/luofan/vllm_e2e/bf16_3b.json",
+      "--skip-ppl",
+      "--prefill-lens",
+      "2048",
+      "--prefill-batches",
+      "1,2,4,8,16",
+      "--reps",
+      "5",
+      "--decode-lens",
+      ""
+    ],
+    "gpu": "3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "capability": [
+      12,
+      0
+    ],
+    "time": "2026-10-29 11:14:14",
+    "vllm": "0.32.0",
+    "load_s": 53.795796936843544,
+    "quantization_resolved": null,
+    "dtype_resolved": "torch.bfloat16",
+    "max_model_len": 12288,
+    "hf_config_quant": null
+  },
+  "ttft": {
+    "L2048_b1": {
+      "median_s": 0.045392176834866405,
+      "runs_s": [
+        0.05045255087316036,
+        0.04551734705455601,
+        0.045255881967023015,
+        0.04508657404221594,
+        0.045392176834866405
+      ]
+    },
+    "L2048_b2": {
+      "median_s": 0.0857497570104897,
+      "runs_s": [
+        0.0857497570104897,
+        0.08593117096461356,
+        0.08512610313482583,
+        0.0854878630489111,
+        0.08579776505939662
+      ]
+    },
+    "L2048_b4": {
+      "median_s": 0.16056187800131738,
+      "runs_s": [
+        0.16056187800131738,
+        0.15811036014929414,
+        0.16024697897955775,
+        0.16234798403456807,
+        0.16087097488343716
+      ]
+    },
+    "L2048_b8": {
+      "median_s": 0.31036551389843225,
+      "runs_s": [
+        0.31036551389843225,
+        0.31077560409903526,
+        0.3105195879470557,
+        0.30897205602377653,
+        0.31024364614859223
+      ]
+    },
+    "L2048_b16": {
+      "median_s": 0.6082735320087522,
+      "runs_s": [
+        0.6090701511129737,
+        0.6063281290698797,
+        0.6072663459926844,
+        0.6082735320087522,
+        0.6129396450705826
+      ]
+    }
+  },
+  "decode": {},
+  "memory": {
+    "max_memory_reserved_gib": 0.0,
+    "max_memory_allocated_gib": 0.0,
+    "total_gib": 94.97052001953125,
+    "nvidia_smi_compute_apps": [
+      "315139, 550 MiB",
+      "315344, 79260 MiB",
+      "310183, 44038 MiB",
+      "309528, 44514 MiB",
+      "309752, 66936 MiB"
+    ]
+  },
+  "weight_bytes": 6442812107
+}
