@@ -63,9 +63,15 @@ def iter_target_wrappers(model):
 def _khigh_for(wrapper, K, high_fraction):
     """K_high for this Linear: prefer the value the quantizer was configured
     with (so the split matches the fake-quant baseline exactly); fall back to
-    the global high_fraction split."""
-    hbl = int(getattr(wrapper.quantizer, "high_bits_length", 0) or 0)
-    if hbl > 0:
+    the global high_fraction split only when it was never configured.
+
+    A CONFIGURED value of 0 means a pure-NVFP4 Linear (0 MXFP8 rings, e.g. from
+    rate-distortion allocation) and must be honored as 0 — not collapsed to the
+    global 1/8 fallback, which would serve a 1/8 MXFP8 segment the evaluated
+    model never had (silent served != evaluated mismatch)."""
+    hbl_raw = getattr(wrapper.quantizer, "high_bits_length", None)
+    if hbl_raw is not None:
+        hbl = int(hbl_raw)
         K_low = K - hbl
         assert K_low % 16 == 0 and hbl % 32 == 0, (
             f"configured K_high={hbl} not block-aligned for K={K}")
