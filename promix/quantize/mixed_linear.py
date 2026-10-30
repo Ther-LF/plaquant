@@ -522,6 +522,26 @@ class MixedQuantLinear(nn.Module):
             A = self._hpk.hadamard_pack_mixed(x2d, M, self.N, self.K_low, self.K_high)
         return self._gemm(A[0], A[1], A[2], A[3], M).reshape(*in_shape[:-1], self.N)
 
+    def can_gather_pack(self):
+        """True iff forward_gather_pack is available (vllm-perf r3 lever 3)."""
+        return (self._qpfm is not None and not self.is_pure_nvfp4
+                and hasattr(self._qpfm, "quant_pack_float_mixed_gather"))
+
+    def forward_gather_pack(self, x, col_order_i32):
+        """o_proj GEMM-route entry (vllm-perf r3 lever 3): the static column
+        reorder is folded into the qpfm pack's load (gidx indexing) — one
+        kernel instead of a torch gather + pack, no fp16 [M,K] round trip.
+        Byte-identical to forward(x[..., col_order]) on the GEMM route
+        (gather_pack_probe torch.equal). Caller must have checked
+        can_gather_pack() and not gemv_route(M) (the GEMV consumes fp16, so
+        it keeps the torch gather)."""
+        in_shape = x.shape
+        x2d = x.reshape(-1, self.K).contiguous()
+        M = x2d.shape[0]
+        a = self._qpfm.quant_pack_float_mixed_gather(
+            x2d, col_order_i32, M, self.N, self.K_low, self.K_high)
+        return self._gemm(a[0], a[1], a[2], a[3], M).reshape(*in_shape[:-1], self.N)
+
     def pack_only(self, x):
         """Timing seam: run just the per-forward activation quant+pack (no GEMM)."""
         x2d = x.reshape(-1, x.shape[-1])

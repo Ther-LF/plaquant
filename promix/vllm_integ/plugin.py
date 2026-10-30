@@ -266,6 +266,12 @@ class PromixLinearMethod(LinearMethodBase):
 
         if self.kind == "o_proj" and self.cfg.o_proj_reorder:
             layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
+            # vllm-perf r3 lever 3: int32 copy for the gather-folded qpfm pack
+            # (PROMIX_GATHER_PACK=0 keeps the separate torch gather everywhere).
+            if os.environ.get("PROMIX_GATHER_PACK", "1") != "0":
+                layer.promix_col_order_i32 = layer.promix_col_order.to(torch.int32).contiguous()
+            else:
+                layer.promix_col_order_i32 = None
             del layer.column_order
         # free the linear-layout params (data lives on inside mql / was prepacked)
         for pname in ("weight_lo_packed", "weight_lo_scale", "weight_hi_bytes",
@@ -296,6 +302,15 @@ class PromixLinearMethod(LinearMethodBase):
             x = matmul_hadU_cuda(x, layer.promix_had_K, layer.promix_had_Kfac,
                                  fold_scale=self.cfg.fold_had_scale).to(x_dtype)
         elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            # vllm-perf r3 lever 3: on the GEMM route, fold the static column
+            # reorder into the qpfm pack's load (one kernel, no fp16 [M,K]
+            # gather round trip). GEMV routes consume an fp16 activation, so
+            # they keep the torch gather. M is static per captured CUDA graph
+            # (r1), so this branch is capture-safe.
+            M = x.numel() // x.shape[-1]
+            if (getattr(layer, "promix_col_order_i32", None) is not None
+                    and mql.can_gather_pack() and not mql.gemv_route(M)):
+                return mql.forward_gather_pack(x, layer.promix_col_order_i32)
             x = x[..., layer.promix_col_order]
         return mql(x)
 
