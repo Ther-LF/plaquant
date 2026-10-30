@@ -229,7 +229,7 @@ __device__ __forceinline__ void pack_fp8_block_warp_v(const float q,
 //            AND held in SMEM as float for the pack.
 //   phase C  verbatim qpf pack of the low NVFP4 + high MXFP8 segments.
 // ===================================================================================
-template <int BLOCK, class TIn, class LayoutSF4, class LayoutSF8>
+template <int BLOCK, bool PACK, class TIn, class LayoutSF4, class LayoutSF8>
 __global__ __launch_bounds__(BLOCK)
 void vllm_arn_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ sf_lo,
                           LayoutSF4 layout4,
@@ -296,9 +296,10 @@ void vllm_arn_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ s
         out.data[j] = Converter::convert(xv * s_variance * wf);
       }
       xn_v[vrow + idx] = out;
-      *reinterpret_cast<V*>(smem + idx * width) = out;
+      if constexpr (PACK) *reinterpret_cast<V*>(smem + idx * width) = out;
     }
   }
+  if constexpr (!PACK) return;   // GEMV-routed M: norm-only (consumer uses xn)
   __syncthreads();
 
   // ---- phase C: pack — qpfm's parallel decomposition inside the row CTA:
@@ -325,14 +326,19 @@ void vllm_arn_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ s
 
 // ===================================================================================
 // Host entry.
-//   vllm_add_rms_norm_quant_pack(x, residual, weight, N_gemm, K_low, K_high, eps)
+//   vllm_add_rms_norm_quant_pack(x, residual, weight, N_gemm, K_low, K_high, eps,
+//                                do_pack=true)
 //     -> {code_lo(M,K_low/2), sfa_lo, code_hi(M,K_high), sfa_hi, xn(M,N), residual_out(M,N)}
 // Block size follows vLLM's fused_add_rms_norm rule EXACTLY (the cub reduction
 // order depends on it): block = min(hidden, num_tokens < 256 ? 1024 : 256).
+// do_pack=false (GEMV-routed decode M, chosen per captured graph size by the
+// caller) skips the pack phase entirely — the consumer uses xn — but STILL
+// allocates the pack outputs at their full (uninitialized) sizes so runtime
+// shapes match the op's fake impl (inductor asserts them).
 // ===================================================================================
 std::vector<torch::Tensor> vllm_add_rms_norm_quant_pack(
     torch::Tensor x, torch::Tensor residual, torch::Tensor weight,
-    int64_t N_gemm, int64_t K_low, int64_t K_high, double eps) {
+    int64_t N_gemm, int64_t K_low, int64_t K_high, double eps, bool do_pack) {
   TORCH_CHECK(x.is_cuda() && residual.is_cuda() && weight.is_cuda());
   TORCH_CHECK(x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kBFloat16,
               "x must be fp16/bf16");
@@ -366,50 +372,40 @@ std::vector<torch::Tensor> vllm_add_rms_norm_quant_pack(
   const int max_block_size = (Mi < 256) ? 1024 : 256;
   const int block = std::min((int)N, max_block_size);
   TORCH_CHECK(block % 32 == 0, "block must be warp-multiple");
-  const int smem_bytes = (int)N * (int)x.element_size();
+  const int smem_bytes = do_pack ? (int)N * (int)x.element_size() : 0;
 
+#define LAUNCH_VRQ_ONE(BLK, PACKF, TY)                                                   \
+  do {                                                                                   \
+    auto kernel = &vllm_arn_pack_kernel<BLK, PACKF, TY, decltype(layout4), decltype(layout8)>; \
+    static bool attr_set = false;                                                        \
+    if (!attr_set) {                                                                     \
+      vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
+                                          64 * 1024), "vrq smem attr");                  \
+      attr_set = true;                                                                   \
+    }                                                                                    \
+    kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                     \
+        code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,             \
+        code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,             \
+        reinterpret_cast<const TY*>(x.data_ptr()),                                       \
+        reinterpret_cast<const TY*>(residual.data_ptr()),                                \
+        reinterpret_cast<const TY*>(weight.data_ptr()),                                  \
+        reinterpret_cast<TY*>(resid_t.data_ptr()),                                       \
+        reinterpret_cast<TY*>(xn_t.data_ptr()),                                          \
+        (int)N, Klo, Khi, (float)eps);                                                   \
+  } while (0)
 #define LAUNCH_VRQ(TY)                                                                   \
   do {                                                                                   \
     if (block == 1024) {                                                                 \
-      auto kernel = &vllm_arn_pack_kernel<1024, TY, decltype(layout4), decltype(layout8)>; \
-      static bool attr_set = false;                                                      \
-      if (!attr_set) {                                                                   \
-        vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
-                                            64 * 1024), "vrq smem attr");                \
-        attr_set = true;                                                                 \
-      }                                                                                  \
-      kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                   \
-          code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,           \
-          code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,           \
-          reinterpret_cast<const TY*>(x.data_ptr()),                                     \
-          reinterpret_cast<const TY*>(residual.data_ptr()),                              \
-          reinterpret_cast<const TY*>(weight.data_ptr()),                                \
-          reinterpret_cast<TY*>(resid_t.data_ptr()),                                     \
-          reinterpret_cast<TY*>(xn_t.data_ptr()),                                        \
-          (int)N, Klo, Khi, (float)eps);                                                 \
+      if (do_pack) LAUNCH_VRQ_ONE(1024, true, TY); else LAUNCH_VRQ_ONE(1024, false, TY); \
     } else {                                                                             \
       TORCH_CHECK(block == 256, "unexpected block size ", block);                        \
-      auto kernel = &vllm_arn_pack_kernel<256, TY, decltype(layout4), decltype(layout8)>; \
-      static bool attr_set = false;                                                      \
-      if (!attr_set) {                                                                   \
-        vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
-                                            64 * 1024), "vrq smem attr");                \
-        attr_set = true;                                                                 \
-      }                                                                                  \
-      kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                   \
-          code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,           \
-          code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,           \
-          reinterpret_cast<const TY*>(x.data_ptr()),                                     \
-          reinterpret_cast<const TY*>(residual.data_ptr()),                              \
-          reinterpret_cast<const TY*>(weight.data_ptr()),                                \
-          reinterpret_cast<TY*>(resid_t.data_ptr()),                                     \
-          reinterpret_cast<TY*>(xn_t.data_ptr()),                                       \
-          (int)N, Klo, Khi, (float)eps);                                                 \
+      if (do_pack) LAUNCH_VRQ_ONE(256, true, TY); else LAUNCH_VRQ_ONE(256, false, TY);   \
     }                                                                                    \
   } while (0)
   if (x.scalar_type() == torch::kFloat16) LAUNCH_VRQ(half);
   else                                    LAUNCH_VRQ(__nv_bfloat16);
 #undef LAUNCH_VRQ
+#undef LAUNCH_VRQ_ONE
   vrq_check_cuda(cudaGetLastError(), "vllm_arn_pack launch");
   return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t, xn_t, resid_t};
 }
@@ -421,5 +417,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Returns {code_lo, sfa_lo, code_hi, sfa_hi, xn fp16, residual_out}.",
         pybind11::arg("x"), pybind11::arg("residual"), pybind11::arg("weight"),
         pybind11::arg("N_gemm"), pybind11::arg("K_low"), pybind11::arg("K_high"),
-        pybind11::arg("eps"));
+        pybind11::arg("eps"), pybind11::arg("do_pack") = true);
 }

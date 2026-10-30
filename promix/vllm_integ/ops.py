@@ -87,8 +87,12 @@ def _promix_rms_quant_pack(
            torch.Tensor, torch.Tensor]:
     e = _REGISTRY[handle]
     mql, vrq = e["mql"], e["vrq"]
+    # GEMV-routed M (decode small batch): the consumer uses xn, so skip the
+    # pack phase (do_pack=False) — the unfused baseline never packs here
+    # either. M is static per captured vLLM CUDA graph -> capture-safe branch.
+    do_pack = not mql.gemv_route(x.shape[0])
     out = vrq.vllm_add_rms_norm_quant_pack(
-        x, residual, weight, e["N"], mql.K_low, mql.K_high, eps)
+        x, residual, weight, e["N"], mql.K_low, mql.K_high, eps, do_pack)
     return tuple(out)
 
 
