@@ -22,9 +22,9 @@ MERGE_MEMBERS = {
 }
 
 
-def build_llm(ckpt, max_model_len=2176, gpu_mem=0.6):
+def build_llm(ckpt, max_model_len=2176, gpu_mem=0.6, enforce_eager=True):
     from vllm import LLM
-    return LLM(model=ckpt, dtype="float16", enforce_eager=True,
+    return LLM(model=ckpt, dtype="float16", enforce_eager=enforce_eager,
                max_model_len=max_model_len, gpu_memory_utilization=gpu_mem,
                disable_log_stats=True)
 

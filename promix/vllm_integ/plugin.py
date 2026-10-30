@@ -1,17 +1,16 @@
-"""Out-of-tree vLLM quantization plugin for ProMix (Phase 1, eager bring-up).
+"""Out-of-tree vLLM quantization plugin for ProMix.
 
 Registers the "promix" quantization method via vLLM's
 @register_quantization_config — NO vLLM fork. The exported checkpoint's
 config.json carries `quantization_config = {"quant_method": "promix", ...}`;
-importing this module before engine construction makes vLLM resolve it.
+the method resolves either via the `vllm.general_plugins` entry point
+(pyproject.toml — spawned workers / `vllm serve`) or a plain
+`import promix.vllm_integ.plugin` with VLLM_ENABLE_V1_MULTIPROCESSING=0.
 
-Phase-1 loading mode (gates): run the engine IN-PROCESS so a plain import
-suffices and the gate harnesses can hook the model:
-
-    VLLM_ENABLE_V1_MULTIPROCESSING=0  +  import promix.vllm_integ.plugin
-
-(The `vllm.general_plugins` entry-point packaging for spawned-worker loading is
-Phase-2 work, needed before serve/bench runs.)
+Phase 2: the per-layer apply path is wrapped in the opaque custom op
+`torch.ops.vllm.promix_linear` (see ops.py) so torch.compile tracing and
+piecewise/full CUDA-graph capture work with enforce_eager=False. Set
+PROMIX_EAGER_APPLY=1 to bypass the op (Phase-1 behavior, needs eager).
 
 Per quantized Linear (vLLM merged prefixes qkv_proj / o_proj / gate_up_proj /
 down_proj):
@@ -30,7 +29,6 @@ down_proj):
 """
 
 import os
-import re
 
 import torch
 
@@ -50,9 +48,19 @@ from vllm.model_executor.parameter import (
     PerTensorScaleParameter,
 )
 
+from promix.vllm_integ import ops as promix_ops
+
 logger = init_logger(__name__)
 
 KINDS = ("qkv_proj", "o_proj", "gate_up_proj", "down_proj")
+
+# Escape hatch: PROMIX_EAGER_APPLY=1 bypasses the custom op and calls the
+# kernels directly from apply() (Phase-1 behavior; requires enforce_eager).
+_EAGER_APPLY = os.environ.get("PROMIX_EAGER_APPLY", "0") == "1"
+
+# Register torch.ops.vllm.promix_linear in every process that imports the
+# plugin (entry point loads run before model construction / compilation).
+promix_ops.ensure_registered()
 
 
 @register_quantization_config("promix")
@@ -212,9 +220,12 @@ class PromixLinearMethod(LinearMethodBase):
                       "weight_hi_scale", "weight_global_scale"):
             if hasattr(layer, pname):
                 delattr(layer, pname)
+        # Phase 2: register the graph-safe custom-op runner for this layer.
+        layer.promix_handle = promix_ops.register_layer(
+            lambda x, layer=layer: self._apply_eager(layer, x), N)
 
-    def apply(self, layer, x, bias=None):
-        assert bias is None, "promix phase 1: bias-free linears only (llama)"
+    def _apply_eager(self, layer, x):
+        """The Phase-1 eager apply body (runs inside the custom op)."""
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
             from promix.quantize.hadamard import matmul_hadU_cuda
             x_dtype = x.dtype
@@ -223,6 +234,12 @@ class PromixLinearMethod(LinearMethodBase):
         elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
             x = x[..., layer.promix_col_order]
         return layer.promix_mql(x)
+
+    def apply(self, layer, x, bias=None):
+        assert bias is None, "promix phase 1: bias-free linears only (llama)"
+        if _EAGER_APPLY:
+            return self._apply_eager(layer, x)
+        return torch.ops.vllm.promix_linear(x, layer.promix_handle)
 
 
 def register():

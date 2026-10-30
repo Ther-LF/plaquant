@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promix"
+version = "0.2.0"
+description = "ProMix mixed-precision (NVFP4+MXFP8) quantized inference, incl. the out-of-tree vLLM plugin"
+requires-python = ">=3.9"
+
+# vLLM loads this in EVERY process (engine core + workers), which registers the
+# "promix" quantization method and the torch.ops.vllm.promix_linear custom op
+# before model construction — required for spawned-worker serve/bench runs.
+[project.entry-points."vllm.general_plugins"]
+promix_quant = "promix.vllm_integ.plugin:register"
+
+[tool.setuptools.packages.find]
+include = ["promix*"]
