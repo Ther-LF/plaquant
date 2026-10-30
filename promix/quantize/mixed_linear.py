@@ -83,11 +83,45 @@ _SMALLM_TABLE = {
     (4096, 14336): (32, 256),
 }
 
+# vllm-perf r3 lever 1: measured split-K/stream-K windows. Keyed by (N, K);
+# value = list of (m_lo, m_hi, cfg, splits, decomp) windows (first match wins)
+# for cd_splitk_ext's fused_gemm_prepacked_sk, measured by
+# promix/vllm_integ/splitk_probe.py under CUDA-graph replay on RTX Pro 6000
+# (r3_splitk_probe.json). cfg: 0=128x128, 1=128x64; decomp: 0=heuristic,
+# 1=split-K with `splits`, 2=stream-K. Windows kept only where the probed
+# endpoints beat the r2-best (min of shipping 128x128 and the _SMALLM_TABLE
+# cfg1) by >=5%:
+#   (3072,8192)   3B down   M 8..32 c0 splits=4 (1.06-1.16x vs r2-best),
+#                           M 64..128 c1 heuristic (1.22-1.30x)
+#   (4096,14336)  8B down   M 8..16 c0 splits=4 (1.48-1.66x!),
+#                           M 32..512 c0 stream-K (1.07-1.35x)
+#   (28672,4096)  8B gate_up M 8..256 c0 heuristic (1.09-1.21x)
+#   qkv (both), o (both), 3B gate_up: split-K never beats the r2 config -> no
+#   window (the serial-K latency there is already near the small-N CTA floor).
+# Split-K takes priority over _SMALLM_TABLE inside its windows. NUMERICS: the
+# FP32 partial sums are reduced in a different (deterministic) order than the
+# serial mainloop -> NOT torch.equal, cosine ~1.0 (gated by splitk_probe + the
+# T2 decode-route gate). The prefill path (M >= 1024 chunks) never routes
+# here, so the T2 prefill gate stays byte-identical.
+_SPLITK_TABLE = {
+    (3072, 8192): [(8, 32, 0, 4, 1), (64, 128, 1, 1, 0)],
+    (4096, 14336): [(8, 16, 0, 4, 1), (32, 512, 0, 1, 2)],
+    (28672, 4096): [(8, 256, 0, 1, 0)],
+}
+
+
+def _splitk_env_scale():
+    """PROMIX_SPLITK_MMAX caps the split-K window (0 disables routing)."""
+    try:
+        return int(os.environ.get("PROMIX_SPLITK_MMAX", "1024"))
+    except ValueError:
+        return 1024
+
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
-                 cd_sm=None):
+                 cd_sm=None, cd_sk=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -174,6 +208,12 @@ class MixedQuantLinear(nn.Module):
         # Config per (shape, M) measured by promix/vllm_integ/gemm_probe.py
         # under CUDA-GRAPH REPLAY timing (r1 lesson) — see _smallm_cfg.
         self._cd_sm = cd_sm
+        # vllm-perf r3 lever 1: split-K/stream-K fused-GEMM ext (cd_splitk_ext).
+        # At M<=16 (decode b8/b16) the serial-K mainloop on N/128..N/64 CTAs is
+        # the structural latency floor (r2); split-K partitions the union
+        # [NV|MX] k-tile domain across CTAs and reduces once. Routed by the
+        # measured _SPLITK_TABLE windows.
+        self._cd_sk = cd_sk
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -307,6 +347,19 @@ class MixedQuantLinear(nn.Module):
             return 1    # 128x64 NV4/MX2
         return None
 
+    def _splitk_cfg(self, M):
+        """vllm-perf r3: pick a cd_splitk_ext (cfg, splits, decomp) for
+        GEMM-routed M, or None. Measured per shape x M under CUDA-graph replay
+        (splitk_probe) — see _SPLITK_TABLE. M is static per captured vLLM CUDA
+        graph, so the branch is capture-safe (r1 pattern)."""
+        if self._cd_sk is None or self.is_pure_nvfp4:
+            return None
+        mcap = _splitk_env_scale()
+        for m_lo, m_hi, cfg, splits, decomp in _SPLITK_TABLE.get((self.N, self.K), ()):
+            if m_lo <= M <= min(m_hi, mcap):
+                return cfg, splits, decomp
+        return None
+
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
@@ -327,8 +380,19 @@ class MixedQuantLinear(nn.Module):
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 self.bias, M, self.N, self.K_low, self.K_high, self.g_w)
+        skc = self._splitk_cfg(M)
         cfg = self._smallm_cfg(M)
-        if cfg is not None:
+        if skc is not None:
+            # vllm-perf r3 lever 1: K split across CTAs + one FP32 workspace
+            # reduction (deterministic). Same prepacked SF buffers (the SF atom
+            # depends only on SFVecSize). Cosine~1 vs serial (reduction order),
+            # gated by splitk_probe + T2 decode-route.
+            D = self._cd_sk.fused_gemm_prepacked_sk(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                M, self.N, self.K_low, self.K_high, self.g_w,
+                skc[0], skc[1], skc[2])
+        elif cfg is not None:
             # vllm-perf r2 lever 1: small-M tile config (same math, same prepacked
             # SF buffers — the interleaved SF atom depends only on SFVecSize, not
             # tile; torch.equal-gated vs the shipping kernel by gemm_probe).
@@ -457,6 +521,26 @@ class MixedQuantLinear(nn.Module):
         else:
             A = self._hpk.hadamard_pack_mixed(x2d, M, self.N, self.K_low, self.K_high)
         return self._gemm(A[0], A[1], A[2], A[3], M).reshape(*in_shape[:-1], self.N)
+
+    def can_gather_pack(self):
+        """True iff forward_gather_pack is available (vllm-perf r3 lever 3)."""
+        return (self._qpfm is not None and not self.is_pure_nvfp4
+                and hasattr(self._qpfm, "quant_pack_float_mixed_gather"))
+
+    def forward_gather_pack(self, x, col_order_i32):
+        """o_proj GEMM-route entry (vllm-perf r3 lever 3): the static column
+        reorder is folded into the qpfm pack's load (gidx indexing) — one
+        kernel instead of a torch gather + pack, no fp16 [M,K] round trip.
+        Byte-identical to forward(x[..., col_order]) on the GEMM route
+        (gather_pack_probe torch.equal). Caller must have checked
+        can_gather_pack() and not gemv_route(M) (the GEMV consumes fp16, so
+        it keeps the torch gather)."""
+        in_shape = x.shape
+        x2d = x.reshape(-1, self.K).contiguous()
+        M = x2d.shape[0]
+        a = self._qpfm.quant_pack_float_mixed_gather(
+            x2d, col_order_i32, M, self.N, self.K_low, self.K_high)
+        return self._gemm(a[0], a[1], a[2], a[3], M).reshape(*in_shape[:-1], self.N)
 
     def pack_only(self, x):
         """Timing seam: run just the per-forward activation quant+pack (no GEMM)."""

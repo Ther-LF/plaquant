@@ -58,9 +58,13 @@ KINDS = ("qkv_proj", "o_proj", "gate_up_proj", "down_proj")
 # kernels directly from apply() (Phase-1 behavior; requires enforce_eager).
 _EAGER_APPLY = os.environ.get("PROMIX_EAGER_APPLY", "0") == "1"
 
-# Register torch.ops.vllm.promix_linear in every process that imports the
-# plugin (entry point loads run before model construction / compilation).
+# Register torch.ops.vllm.promix_linear (+ the r3 producer-fusion ops) in
+# every process that imports the plugin (entry point loads run before model
+# construction / compilation), and install the norm->quant_pack fusion pass
+# out-of-tree (PROMIX_NORM_FUSE=0 disables).
 promix_ops.ensure_registered()
+from promix.vllm_integ.fusion_pass import install_promix_fusion_pass  # noqa: E402
+install_promix_fusion_pass()
 
 
 @register_quantization_config("promix")
@@ -174,13 +178,20 @@ class PromixLinearMethod(LinearMethodBase):
         from promix.quantize.mixed_linear import MixedQuantLinear
         from promix.quantize.weight_pack import PackedWeight
         from promix.vllm_integ.kernels import (load_kernels, load_decode_gemv,
-                                               load_smallm, load_qpfm, load_had_pack)
+                                               load_smallm, load_qpfm, load_had_pack,
+                                               load_splitk, load_norm_pack)
         cd, qpf = load_kernels()
         dg = load_decode_gemv()   # None when PROMIX_DECODE_GEMV=0
         # vllm-perf r2: small-M GEMM configs (lever 1), single-launch mixed pack
         # (lever 2c), fused Hadamard+pack down_proj producer (lever 2a).
         cd_sm = load_smallm()     # None when PROMIX_SMALLM=0
         qpfm = load_qpfm()        # None when PROMIX_QPFM=0
+        # vllm-perf r3: split-K/stream-K small-M GEMM (lever 1), fused
+        # vLLM-RMSNorm + quant/pack producer for qkv/gate_up (lever 2).
+        cd_sk = load_splitk()     # None when PROMIX_SPLITK=0
+        vrq = None
+        if self.kind in ("qkv_proj", "gate_up_proj"):
+            vrq = load_norm_pack()   # None when PROMIX_NORM_FUSE=0
         hpk, hpk28 = (None, None)
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
             hpk, hpk28 = load_had_pack()   # (None, None) when PROMIX_HAD_PACK=0
@@ -248,12 +259,19 @@ class PromixLinearMethod(LinearMethodBase):
             layer.promix_had_Kfac = Kfac
         mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
                                out_dtype=torch.float16, qpf=qpf, dg=dg,
-                               qpfm=qpfm, cd_sm=cd_sm, hpk=hpk, hpk28=hpk28,
+                               qpfm=qpfm, cd_sm=cd_sm, cd_sk=cd_sk,
+                               hpk=hpk, hpk28=hpk28,
                                had28=None if had_K is None else had_K.cpu())
         layer.promix_mql = mql.to(dev)
 
         if self.kind == "o_proj" and self.cfg.o_proj_reorder:
             layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
+            # vllm-perf r3 lever 3: int32 copy for the gather-folded qpfm pack
+            # (PROMIX_GATHER_PACK=0 keeps the separate torch gather everywhere).
+            if os.environ.get("PROMIX_GATHER_PACK", "1") != "0":
+                layer.promix_col_order_i32 = layer.promix_col_order.to(torch.int32).contiguous()
+            else:
+                layer.promix_col_order_i32 = None
             del layer.column_order
         # free the linear-layout params (data lives on inside mql / was prepacked)
         for pname in ("weight_lo_packed", "weight_lo_scale", "weight_hi_bytes",
@@ -261,8 +279,11 @@ class PromixLinearMethod(LinearMethodBase):
             if hasattr(layer, pname):
                 delattr(layer, pname)
         # Phase 2: register the graph-safe custom-op runner for this layer.
+        # mql/vrq ride along for the r3 norm->quant_pack fusion pass (qkv/gate_up
+        # only — the norm-fed sites); handle_can_norm_fuse gates on them.
         layer.promix_handle = promix_ops.register_layer(
-            lambda x, layer=layer: self._apply_eager(layer, x), N)
+            lambda x, layer=layer: self._apply_eager(layer, x), N,
+            mql=layer.promix_mql if vrq is not None else None, vrq=vrq)
 
     def _apply_eager(self, layer, x):
         """The Phase-1 eager apply body (runs inside the custom op)."""
@@ -281,6 +302,15 @@ class PromixLinearMethod(LinearMethodBase):
             x = matmul_hadU_cuda(x, layer.promix_had_K, layer.promix_had_Kfac,
                                  fold_scale=self.cfg.fold_had_scale).to(x_dtype)
         elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            # vllm-perf r3 lever 3: on the GEMM route, fold the static column
+            # reorder into the qpfm pack's load (one kernel, no fp16 [M,K]
+            # gather round trip). GEMV routes consume an fp16 activation, so
+            # they keep the torch gather. M is static per captured CUDA graph
+            # (r1), so this branch is capture-safe.
+            M = x.numel() // x.shape[-1]
+            if (getattr(layer, "promix_col_order_i32", None) is not None
+                    and mql.can_gather_pack() and not mql.gemv_route(M)):
+                return mql.forward_gather_pack(x, layer.promix_col_order_i32)
             x = x[..., layer.promix_col_order]
         return mql(x)
 

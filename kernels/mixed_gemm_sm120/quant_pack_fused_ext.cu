@@ -121,11 +121,15 @@ __device__ __forceinline__ int rtn_idx_m(float absx, const float* v, int n) {
 // grid.z == 0 -> NVFP4 low segment (thread per 16-block, cols [0, K_low));
 // grid.z == 1 -> MXFP8 high segment (warp per 32-block, cols [K_low, K_low+K_high)).
 // Both read the SAME wider (M, K) activation x in place via row_stride=K.
-template <class TIn, class LayoutSF4, class LayoutSF8>
+// GATHER (vllm-perf r3 lever 3): when true, column c is read at x[r*K + gidx[c]]
+// — folds the o_proj static column reorder (previously a separate torch gather
+// kernel + an fp16 [M,K] round trip) into the pack's load. Values identical to
+// gather-then-pack by construction (torch.equal-gated by gather_pack_probe).
+template <bool GATHER, class TIn, class LayoutSF4, class LayoutSF8>
 __global__ void qpf_mixed_kernel(
     uint8_t* __restrict__ data_lo, uint8_t* __restrict__ sf_lo, LayoutSF4 layout4,
     uint8_t* __restrict__ data_hi, uint8_t* __restrict__ sf_hi, LayoutSF8 layout8,
-    const TIn* __restrict__ x, int rows, int K,
+    const TIn* __restrict__ x, const int* __restrict__ gidx, int rows, int K,
     int K_low, int K_high, int nblk_lo, int nblk_hi) {
   if (blockIdx.z == 0) {
     // ---- NVFP4 low: one thread per 16-element block ----
@@ -135,7 +139,11 @@ __global__ void qpf_mixed_kernel(
     int base = r * K + b * 16;                       // col_off = 0
     float xf[16]; float bmax = 0.0f;
 #pragma unroll
-    for (int j = 0; j < 16; ++j) { float f = to_float_m(x[base + j]); xf[j] = f; bmax = fmaxf(bmax, fabsf(f)); }
+    for (int j = 0; j < 16; ++j) {
+      float f = GATHER ? to_float_m(x[r * K + gidx[b * 16 + j]])
+                       : to_float_m(x[base + j]);
+      xf[j] = f; bmax = fmaxf(bmax, fabsf(f));
+    }
     float ideal = fmaxf(bmax / 6.0f, 0.001953125f);
     unsigned char sfb; float scale;
     e4m3_ceil_m(ideal, sfb, scale);
@@ -161,7 +169,8 @@ __global__ void qpf_mixed_kernel(
     if (warp >= rows * nblk_hi) return;
     int r = warp / nblk_hi, b = warp % nblk_hi;
     int base = r * K + K_low + b * 32;               // col_off = K_low
-    float f = to_float_m(x[base + lane]);
+    float f = GATHER ? to_float_m(x[r * K + gidx[K_low + b * 32 + lane]])
+                     : to_float_m(x[base + lane]);
     float a = fabsf(f);
 #pragma unroll
     for (int o = 16; o > 0; o >>= 1) a = fmaxf(a, __shfl_xor_sync(0xffffffffu, a, o));
@@ -180,7 +189,7 @@ __global__ void qpf_mixed_kernel(
 }
 
 template <class LayoutSF4, class LayoutSF8>
-static void launch_qpf_mixed(torch::Tensor x,
+static void launch_qpf_mixed(torch::Tensor x, const int* gidx,
                              uint8_t* data_lo, uint8_t* sf_lo, LayoutSF4 layout4,
                              uint8_t* data_hi, uint8_t* sf_hi, LayoutSF8 layout8,
                              int rows, int K, int K_low, int K_high,
@@ -191,9 +200,14 @@ static void launch_qpf_mixed(torch::Tensor x,
   long gx = ((units_lo > units_hi ? units_lo : units_hi) + tpb - 1) / tpb;
   dim3 grid((unsigned)gx, 1, 2);
 #define LAUNCHM(TY, PTR)                                                                \
-  qpf_mixed_kernel<TY, LayoutSF4, LayoutSF8><<<grid, tpb, 0, stream>>>(                 \
-      data_lo, sf_lo, layout4, data_hi, sf_hi, layout8, PTR, rows, K, K_low, K_high,    \
-      nblk_lo, nblk_hi)
+  do {                                                                                  \
+    if (gidx) qpf_mixed_kernel<true, TY, LayoutSF4, LayoutSF8><<<grid, tpb, 0, stream>>>( \
+        data_lo, sf_lo, layout4, data_hi, sf_hi, layout8, PTR, gidx, rows, K, K_low,    \
+        K_high, nblk_lo, nblk_hi);                                                      \
+    else qpf_mixed_kernel<false, TY, LayoutSF4, LayoutSF8><<<grid, tpb, 0, stream>>>(   \
+        data_lo, sf_lo, layout4, data_hi, sf_hi, layout8, PTR, nullptr, rows, K, K_low, \
+        K_high, nblk_lo, nblk_hi);                                                      \
+  } while (0)
   auto st = x.scalar_type();
   if (st == torch::kFloat32)       LAUNCHM(float, x.data_ptr<float>());
   else if (st == torch::kFloat16)  LAUNCHM(half, reinterpret_cast<const half*>(x.data_ptr<at::Half>()));
@@ -221,7 +235,43 @@ std::vector<torch::Tensor> quant_pack_float_mixed(torch::Tensor x, int64_t M, in
   auto sf_lo   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto data_hi = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
   auto sf_hi   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
-  launch_qpf_mixed(x, data_lo.data_ptr<uint8_t>(), sf_lo.data_ptr<uint8_t>(), layout4,
+  launch_qpf_mixed(x, /*gidx=*/nullptr,
+                   data_lo.data_ptr<uint8_t>(), sf_lo.data_ptr<uint8_t>(), layout4,
+                   data_hi.data_ptr<uint8_t>(), sf_hi.data_ptr<uint8_t>(), layout8,
+                   Mi, K, Klo, Khi, nblk_lo, nblk_hi, stream);
+  data_lo = data_lo.view({Mi, Klo / 2});
+  data_hi = data_hi.view({Mi, Khi});
+  return {data_lo, sf_lo, data_hi, sf_hi};
+}
+
+// vllm-perf r3 lever 3: gather-folded variant for the o_proj column reorder.
+// gidx (int32, numel K) maps packed column c -> source column gidx[c] of x, so
+// the previously separate `x[..., col_order]` gather kernel + its fp16 [M,K]
+// HBM round trip disappear into the pack's load. Byte-identical outputs to
+// quant_pack_float_mixed(x[:, gidx]) by construction.
+std::vector<torch::Tensor> quant_pack_float_mixed_gather(
+    torch::Tensor x, torch::Tensor gidx, int64_t M, int64_t N,
+    int64_t K_low, int64_t K_high) {
+  TORCH_CHECK(x.is_cuda(), "x CUDA");
+  TORCH_CHECK(gidx.is_cuda() && gidx.scalar_type() == torch::kInt32 &&
+              gidx.is_contiguous(), "gidx must be contiguous int32 CUDA");
+  TORCH_CHECK(K_low % 16 == 0, "K_low%16 (NVFP4 block-16)");
+  TORCH_CHECK(K_high % 32 == 0, "K_high%32 (MXFP8 block-32)");
+  init_grids_once_m();
+  x = x.contiguous();
+  int Mi = (int)M, Ni = (int)N, Klo = (int)K_low, Khi = (int)K_high, K = Klo + Khi;
+  TORCH_CHECK((int64_t)gidx.numel() == (int64_t)K, "gidx numel != K");
+  int nblk_lo = Klo / 16, nblk_hi = Khi / 32;
+  auto dev = x.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
+  auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi, 1));
+  auto data_lo = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
+  auto sf_lo   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto data_hi = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
+  auto sf_hi   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  launch_qpf_mixed(x, gidx.data_ptr<int>(),
+                   data_lo.data_ptr<uint8_t>(), sf_lo.data_ptr<uint8_t>(), layout4,
                    data_hi.data_ptr<uint8_t>(), sf_hi.data_ptr<uint8_t>(), layout8,
                    Mi, K, Klo, Khi, nblk_lo, nblk_hi, stream);
   data_lo = data_lo.view({Mi, Klo / 2});
@@ -235,4 +285,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "returns {data_lo(M,K_low/2), sfa_lo, data_hi(M,K_high), sfa_hi}",
         pybind11::arg("x"), pybind11::arg("M"), pybind11::arg("N"),
         pybind11::arg("K_low"), pybind11::arg("K_high"));
+  m.def("quant_pack_float_mixed_gather", &quant_pack_float_mixed_gather,
+        "quant_pack_float_mixed with the o_proj column reorder folded into the "
+        "pack's load (gidx int32[K]: packed col c reads x[:, gidx[c]])",
+        pybind11::arg("x"), pybind11::arg("gidx"), pybind11::arg("M"),
+        pybind11::arg("N"), pybind11::arg("K_low"), pybind11::arg("K_high"));
 }
