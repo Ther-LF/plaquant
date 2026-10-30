@@ -7,9 +7,12 @@ across M, GEMM-only, warm, median, idle GPU:
   2. torchfp4  — torch-NATIVE NVFP4 tensor-core GEMM: torch._scaled_mm_v2 with
                  float4_e2m1fn_x2 data + BlockWise1x16 e4m3 scales (SWIZZLE_32_4_4),
                  i.e. the framework's own FP4 path (cuBLASLt), no custom kernel.
-  3. dequant   — "no kernel work" floor: NVFP4-packed weight dequantized to bf16
+  3. torchmix2 — torch-native 2-LAUNCH MIXED: _scaled_mm_v2 NVFP4 over K_low +
+                 _scaled_mm_v2 MXFP8 (BlockWise1x32, e8m0) over K_high + add —
+                 the framework-native rendering of OUR algorithm, no custom kernel.
+  4. dequant   — "no kernel work" floor: NVFP4-packed weight dequantized to bf16
                  in plain torch per call, then torch.mm in bf16 (naive W4 path).
-  4. bf16      — torch.mm bf16 cuBLAS (same-stack FP16-class anchor).
+  5. bf16      — torch.mm bf16 cuBLAS (same-stack FP16-class anchor).
 
 All paths time the GEMM proper (activation/weight quantization is outside the
 timed region for 1 and 2, matching how the fused kernel is benchmarked; path 3
@@ -104,6 +107,14 @@ def native_fp4_mm(Afp4, Bfp4_t, sA, sB):
         None, torch.bfloat16)
 
 
+def native_mxfp8_mm(A8, B8_t, sA, sB):
+    return torch._scaled_mm_v2(
+        A8, B8_t,
+        [sA], [ST.BlockWise1x32], [SW.SWIZZLE_32_4_4],
+        [sB], [ST.BlockWise1x32], [SW.SWIZZLE_32_4_4],
+        None, torch.bfloat16)
+
+
 def native_fp4_validate():
     """(a) exactness: all codes=1.0, unit scales -> out == K.
        (b) real data: quantized A,B with real block scales vs dequant reference."""
@@ -130,18 +141,32 @@ def native_fp4_validate():
     return exact, cos
 
 
-def median_ms(fn, iters=50, warmup=15):
-    for _ in range(warmup):
-        fn()
+def bench_cell(fns, spin_fn, iters=50, warmup=10, spin_ms=400):
+    """Clock-robust protocol: (1) warm-spin the GPU to ramp clocks (no lock
+    permission on this box), (2) time all candidates INTERLEAVED round-robin so
+    every candidate sees the same clock/contention state (rd_relat protocol)."""
+    import time as _t
     torch.cuda.synchronize()
-    s = []
+    t0 = _t.time()
+    while (_t.time() - t0) * 1000 < spin_ms:
+        spin_fn()
+    torch.cuda.synchronize()
+    for fn in fns.values():
+        for _ in range(warmup):
+            fn()
+    torch.cuda.synchronize()
+    res = {k: [] for k in fns}
     for _ in range(iters):
-        st = torch.cuda.Event(enable_timing=True); en = torch.cuda.Event(enable_timing=True)
-        st.record(); fn(); en.record(); torch.cuda.synchronize()
-        s.append(st.elapsed_time(en))
-    s.sort()
-    n = len(s)
-    return (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2), s[0]
+        for k, fn in fns.items():
+            st = torch.cuda.Event(enable_timing=True); en = torch.cuda.Event(enable_timing=True)
+            st.record(); fn(); en.record(); torch.cuda.synchronize()
+            res[k].append(st.elapsed_time(en))
+    out = {}
+    for k, s in res.items():
+        s.sort()
+        n = len(s)
+        out[k] = ((s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2), s[0])
+    return out
 
 
 def main():
@@ -186,6 +211,13 @@ def main():
             Bc, SFB_nv, _ = nvmod.quantize_nvfp4(W)
             Bp_nv = nvmod.pack_fp4(Bc)
 
+            # torch-native 2-launch mixed weights: NVFP4 on K_low + MXFP8 on K_high
+            Wp_lo, Wsc_lo, _ = quant_nvfp4_ref(W[:, :K_low].contiguous())
+            Blo = Wp_lo.view(torch.float4_e2m1fn_x2)
+            sB_lo = to_blocked(Wsc_lo).to(torch.float8_e4m3fn)
+            Whi8 = W[:, K_low:].contiguous().to(torch.float8_e4m3fn)
+            sB_hi = to_blocked(torch.ones(N, K_high // 32, device=DEV)).to(torch.float8_e8m0fnu)
+
             for M in ms:
                 x = torch.randn(M, K, device=DEV)
                 x[:, K_low:] *= 3.0
@@ -198,7 +230,6 @@ def main():
                         A_lo, pSFA_lo, mql.W_lo_packed, mql.physSFB_lo,
                         A_hi, pSFA_hi, mql.W_hi_bytes, mql.physSFB_hi,
                         M, N, K_low, K_high)
-                t_fused, min_fused = median_ms(fused)
 
                 # 2) torch-native FP4 (prequantized A, GEMM only)
                 Ap, Asc, _ = quant_nvfp4_ref(x)
@@ -208,7 +239,6 @@ def main():
 
                 def torchfp4():
                     return native_fp4_mm(Afp4, Bt, sA, sB)
-                t_tfp4, min_tfp4 = median_ms(torchfp4)
 
                 # 2b) our pure-NVFP4 full-K GEMM (r=0, apples-to-apples vs torch native)
                 Xq, SFA_nv, _ = nvmod.quantize_nvfp4(x)
@@ -216,7 +246,20 @@ def main():
 
                 def purenv():
                     return nvext.nvfp4_gemm(Ap_nv, SFA_nv, Bp_nv, SFB_nv, M, N, K)
-                t_nv, min_nv = median_ms(purenv)
+
+                # 2c) torch-native 2-launch MIXED (NVFP4 K_low + MXFP8 K_high + add):
+                #     the framework-native rendering of OUR algorithm, no custom kernel
+                Ap_lo, Asc_lo, _ = quant_nvfp4_ref(x[:, :K_low].contiguous())
+                Alo = Ap_lo.view(torch.float4_e2m1fn_x2)
+                sA_lo = to_blocked(Asc_lo).to(torch.float8_e4m3fn)
+                Ahi8 = x[:, K_low:].contiguous().to(torch.float8_e4m3fn)
+                sA_hi = to_blocked(torch.ones(M, K_high // 32, device=DEV)).to(torch.float8_e8m0fnu)
+                Blo_t, Whi8_t = Blo.t(), Whi8.t()
+
+                def torchmixed2():
+                    lo = native_fp4_mm(Alo, Blo_t, sA_lo, sB_lo)
+                    hi = native_mxfp8_mm(Ahi8, Whi8_t, sA_hi, sB_hi)
+                    return lo + hi
 
                 # 3) naive dequant-FP4 -> bf16 mm (dequant inside timed region)
                 xbf = x.to(torch.bfloat16).contiguous()
@@ -227,12 +270,19 @@ def main():
                     vals = torch.stack((lut[lo], lut[hi]), dim=-1).view(N, K)
                     w = (vals.view(N, K // 16, 16) * Wsc_f.unsqueeze(-1)).view(N, K)
                     return xbf @ w.to(torch.bfloat16).t()
-                t_dq, min_dq = median_ms(dequant_mm, iters=30, warmup=8)
 
                 # 4) bf16 cuBLAS
                 def bf16mm():
                     return xbf @ Wbf.t()
-                t_bf, min_bf = median_ms(bf16mm)
+                cell = bench_cell(dict(fused=fused, torchfp4=torchfp4, purenv=purenv,
+                                       mix2=torchmixed2, dequant=dequant_mm, bf16=bf16mm),
+                                  spin_fn=bf16mm)
+                t_fused, min_fused = cell["fused"]
+                t_tfp4, min_tfp4 = cell["torchfp4"]
+                t_nv, min_nv = cell["purenv"]
+                t_mix2, min_mix2 = cell["mix2"]
+                t_dq, min_dq = cell["dequant"]
+                t_bf, min_bf = cell["bf16"]
 
                 flops = 2.0 * M * N * K
                 tf = lambda t: flops / (t * 1e-3) / 1e12
@@ -240,6 +290,7 @@ def main():
                            fused_ms=t_fused, fused_min_ms=min_fused,
                            torchfp4_ms=t_tfp4, torchfp4_min_ms=min_tfp4,
                            pure_nvfp4_ms=t_nv, pure_nvfp4_min_ms=min_nv,
+                           torchmixed2_ms=t_mix2, torchmixed2_min_ms=min_mix2,
                            dequant_ms=t_dq, dequant_min_ms=min_dq,
                            bf16_ms=t_bf, bf16_min_ms=min_bf,
                            fused_tflops=tf(t_fused), torchfp4_tflops=tf(t_tfp4),
@@ -249,19 +300,24 @@ def main():
                            fused_vs_torchfp4=t_tfp4 / t_fused,
                            fused_vs_dequant=t_dq / t_fused,
                            torchfp4_vs_bf16=t_bf / t_tfp4,
+                           fused_vs_torchmixed2=t_mix2 / t_fused,
                            purenv_vs_torchfp4=t_tfp4 / t_nv)
                 rows.append(rec)
                 print(f"{mdl} {name:8s} M={M:5d} N={N:6d} K={K:6d}: "
                       f"ours {t_fused:.4f}ms ({rec['fused_tflops']:.0f}TF) | "
                       f"torchFP4 {t_tfp4:.4f}ms ({rec['torchfp4_tflops']:.0f}TF) | "
                       f"pureNV {t_nv:.4f}ms ({rec['pure_nvfp4_tflops']:.0f}TF) | "
+                      f"mix2 {t_mix2:.4f}ms | "
                       f"dequant {t_dq:.4f}ms | bf16 {t_bf:.4f}ms | "
                       f"ours/bf16 {rec['fused_vs_bf16']:.2f}x "
                       f"ours/torchFP4 {rec['fused_vs_torchfp4']:.2f}x "
+                      f"ours/mix2 {rec['fused_vs_torchmixed2']:.2f}x "
                       f"ours/dequant {rec['fused_vs_dequant']:.2f}x", flush=True)
                 del x, xbf, Ap, Asc, Afp4, sA, Xq, SFA_nv, Ap_nv
+                del Ap_lo, Asc_lo, Alo, sA_lo, Ahi8, sA_hi
                 torch.cuda.empty_cache()
             del mql, W, Wp, Wsc, Bfp4, sB, Wbf, Bc, SFB_nv, Bp_nv
+            del Wp_lo, Wsc_lo, Blo, sB_lo, Whi8, sB_hi
             torch.cuda.empty_cache()
 
     with open(args.out, "w") as f:
