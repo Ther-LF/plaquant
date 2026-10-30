@@ -95,6 +95,18 @@ def load_qpfm():
     return _load_ext("qpfm", "quant_pack_fused_ext.cu", extra_flags=act_mse_cflags())
 
 
+def load_splitk():
+    """vllm-perf r3 lever 1: stream-K/split-K dual-format fused GEMM
+    (cd_splitk_ext) for the latency-bound small-M regime — partitions the
+    UNION k-tile domain [NV | MX] across CTAs and reduces the shared FP32
+    accumulator once via the CUTLASS SM90 stream-K workspace fixup.
+    Disabled via PROMIX_SPLITK=0 (routing additionally gated by the measured
+    per-shape window table in mixed_linear)."""
+    if os.environ.get("PROMIX_SPLITK", "1") == "0":
+        return None
+    return _load_ext("sk", "cd_splitk_ext.cu")
+
+
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
     the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).
