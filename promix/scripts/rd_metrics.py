@@ -111,7 +111,8 @@ def _avg(xs):
     return (sum(xs) / len(xs)) if xs else None
 
 
-def eval_all_metrics(model, config, tokenizer, do_zeroshot, zs_limit=None):
+def eval_all_metrics(model, config, tokenizer, do_zeroshot, zs_limit=None,
+                     do_c4=True):
     """Run wikitext PPL + C4 PPL + zero-shot on an already-built model."""
     model.to(DEV)
     model.seqlen = config["eval"]["max_length"]
@@ -124,11 +125,13 @@ def eval_all_metrics(model, config, tokenizer, do_zeroshot, zs_limit=None):
     ppl_wt = float(evaluate_ppl(model, wt, DEV, batch_size=bs))
     print(f"    wikitext PPL={ppl_wt:.4f} ({time.time()-t:.0f}s)", flush=True)
 
-    t = time.time()
-    c4 = get_c4(nsamples=256, seed=seed, seqlen=model.seqlen,
-                tokenizer=tokenizer, eval_mode=True)
-    ppl_c4 = float(evaluate_ppl(model, c4, DEV, batch_size=bs))
-    print(f"    c4 PPL={ppl_c4:.4f} ({time.time()-t:.0f}s)", flush=True)
+    ppl_c4 = None
+    if do_c4:
+        t = time.time()
+        c4 = get_c4(nsamples=256, seed=seed, seqlen=model.seqlen,
+                    tokenizer=tokenizer, eval_mode=True)
+        ppl_c4 = float(evaluate_ppl(model, c4, DEV, batch_size=bs))
+        print(f"    c4 PPL={ppl_c4:.4f} ({time.time()-t:.0f}s)", flush=True)
 
     zs = None
     if do_zeroshot:
@@ -155,6 +158,9 @@ def main():
     ap.add_argument("--configs", default="bf16,uniform,measured",
                     help="comma subset of bf16,uniform,measured")
     ap.add_argument("--no_zeroshot", action="store_true")
+    ap.add_argument("--no_c4", action="store_true",
+                    help="skip C4 PPL (e.g. when allenai/c4 is not "
+                         "downloadable from the run host)")
     ap.add_argument("--zs_limit", type=int, default=None,
                     help="optional lm-eval per-task doc limit (debug/smoke)")
     ap.add_argument("--out", default="/home/luofan/RD_METRICS.json")
@@ -189,7 +195,8 @@ def main():
         t = time.time()
         m = build_bf16(config)
         print(f"[bf16] built ({time.time()-t:.0f}s)", flush=True)
-        results["bf16"] = eval_all_metrics(m, config, tok, do_zs, args.zs_limit)
+        results["bf16"] = eval_all_metrics(m, config, tok, do_zs, args.zs_limit,
+                 do_c4=not args.no_c4)
         del m
         cleanup_memory()
         save()
@@ -202,7 +209,8 @@ def main():
         frac, hi, tot = rv.avg_fp8_fraction(m)
         print(f"[uniform] built avg_fp8={frac:.4f} ({hi}/{tot}) "
               f"({time.time()-t:.0f}s)", flush=True)
-        r = eval_all_metrics(m, config, tok, do_zs, args.zs_limit)
+        r = eval_all_metrics(m, config, tok, do_zs, args.zs_limit,
+                 do_c4=not args.no_c4)
         r["avg_fp8"] = frac
         results["uniform_1_8"] = r
         del m
@@ -230,7 +238,8 @@ def main():
         print(f"[measured] built avg_fp8={frac:.4f} ({hi}/{tot}) "
               f"budget_rings={budget}/{total_rings} ({time.time()-t:.0f}s)",
               flush=True)
-        r = eval_all_metrics(m, config, tok, do_zs, args.zs_limit)
+        r = eval_all_metrics(m, config, tok, do_zs, args.zs_limit,
+                 do_c4=not args.no_c4)
         r["avg_fp8"] = frac
         results["measured_1_8"] = r
         del m

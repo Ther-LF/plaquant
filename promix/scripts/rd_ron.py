@@ -69,7 +69,13 @@ def resolve_paths(config):
     """
     name = config["model"]["name"]
     lname = name.lower()
-    if "13b" in lname:
+    if "qwen" in lname:
+        # Qwen (rd-qwen cross-family track): no local-dir remap, artifacts are
+        # keyed by the HF basename. MUST be checked before the Llama size
+        # branches — "qwen3-8b" contains "8b" and would otherwise be remapped
+        # onto the llama-3-8b artifacts.
+        short, local = os.path.basename(name), None
+    elif "13b" in lname:
         # NB: must be checked BEFORE "3b" ("13b" contains it as a substring).
         short, local = "Llama-2-13b-hf", "/home/luofan/models/Llama-2-13b-hf"
     elif "3b" in lname:
