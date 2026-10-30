@@ -625,7 +625,11 @@ class MixedQuantLinear(nn.Module):
         x_lo = xh[:, :self.K_low].contiguous()
         Y = self._marlin.gemm(x_lo)
         if self._hi_marlin_route(xh.shape[0]):
-            self._marlin_hi.gemm_add(Y, xh[:, self.K_low:].contiguous())
+            # bf16 slice-cast: marlin's e8m0 kernels are bf16-activation-only
+            # (see MarlinHigh.gemm_add); the W4A4 reference quantizes this
+            # slice to E4M3, so bf16 stays the more-accurate numerics class.
+            self._marlin_hi.gemm_add(
+                Y, xh[:, self.K_low:].to(torch.bfloat16))
         else:
             self._dg.decode_gemv_w8a16_hi_add(
                 Y, xh, self.W_hi_dec, self.S_hi_dec,

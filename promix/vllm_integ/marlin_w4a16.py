@@ -139,20 +139,23 @@ class MarlinHigh:
         from vllm.scalar_type import scalar_types
         self.type_id = scalar_types.float8_e4m3fn.id
 
-    def gemm_add(self, Y, x_hi):
-        """x_hi: contiguous (M, K_high) fp16. Computes
-        H = x_hi @ (E4M3(w) * 2^(e-127)).T via marlin's native MXFP8 path
-        (e8m0 scales decoded in-kernel — the pow2 scale x fp8 product is exact
-        in fp16) and folds the per-tensor g in the accumulate step:
-        Y += g * H (one fp32-opmath elementwise, exactly the dequant
-        convention of the hi_add GEMV / fused-GEMM high phase)."""
+    def gemm_add(self, Y, x_hi_bf16):
+        """x_hi_bf16: contiguous (M, K_high) bf16 — marlin's e8m0-scale (MXFP8)
+        kernels are compiled for bf16 activations ONLY (feasibility probe:
+        fp16-activation group-32 fp8 kernels do not exist in vLLM 0.32), so the
+        caller casts the fp16 high slice to bf16 (the W4A4 reference quantizes
+        the same slice to E4M3, so bf16 is still ~5 extra mantissa bits).
+        Computes H = x_hi @ (E4M3(w) * 2^(e-127)).T via marlin's native MXFP8
+        path (pow2 scale x fp8 exact) and folds the per-tensor g in the
+        accumulate: Y += g * H (fp32 opmath, the dequant convention of the
+        hi_add GEMV / fused-GEMM high phase)."""
         H = torch.ops.vllm.marlin_gemm(
-            a=x_hi, b_q_weight=self.qweight, b_bias=None, b_scales=self.scales,
+            a=x_hi_bf16, b_q_weight=self.qweight, b_bias=None, b_scales=self.scales,
             a_scales=None, global_scale=None, b_zeros=None,
             workspace=self.workspace, b_q_type_id=self.type_id,
-            size_m=x_hi.shape[0], size_n=self.N, size_k=self.K_high,
+            size_m=x_hi_bf16.shape[0], size_n=self.N, size_k=self.K_high,
             use_atomic_add=False, use_fp32_reduce=True)
-        Y.add_(H, alpha=self.g)
+        Y.add_(H.to(torch.float16), alpha=self.g)
         return Y
 
 
@@ -167,7 +170,8 @@ def prepack_marlin_high(W_hi_bytes, SF_hi_bytes, g, N, K_high):
     + gptq_marlin_repack num_bits=8 + e8m0 scale permute +
     mxfp8_marlin_process_scales); like the low-segment prepack we refuse the
     pad path (all promix shapes are tile-aligned: K_high in {384,512,1024,1792}
-    is a multiple of 128)."""
+    is a multiple of 128). The apply consumes bf16 activations (the only
+    a_dtype marlin's e8m0 kernels are compiled for)."""
     from vllm.model_executor.layers.quantization.utils.marlin_utils import (
         marlin_padded_nk, marlin_permute_scales)
     from vllm.model_executor.layers.quantization.utils.marlin_utils_fp8 import (

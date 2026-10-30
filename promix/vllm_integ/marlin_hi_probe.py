@@ -96,7 +96,7 @@ def main():
                 continue
             # ---- bench: hi companion only ----
             Y = y_r5.clone()
-            x_hi = xm[:, K_low:].contiguous()
+            x_hi = xm[:, K_low:].to(torch.bfloat16)
             t_mar_hi = bench_graph(lambda: mh.gemm_add(Y, x_hi))
             row["t_marlin_hi_us"] = t_mar_hi
             if M <= 32:
