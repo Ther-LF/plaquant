@@ -146,6 +146,23 @@ _MARLIN_TABLE = {
     (4096, 14336): (2, 8),      # 8B down  (1.71-3.05x; M16 1.02 stop)
 }
 
+# vllm-perf r5 lever 1: per-shape smallest M where the MXFP8-marlin high
+# companion (MarlinHigh.gemm_add: marlin fp8 TC GEMM + alpha-add) beats the
+# hi_add GEMV (which scales ~linearly in M — the r4 bottleneck). Measured by
+# promix/vllm_integ/marlin_hi_probe.py under CUDA-graph replay. Below the
+# crossover (and when PROMIX_MARLIN_HI=0 / prepack unavailable) the route
+# keeps the hi_add GEMV. Values filled from r5_marlin_hi_probe.json.
+_MARLIN_HI_TABLE = {
+    (5120, 3072): 8,
+    (3072, 3072): 8,
+    (16384, 3072): 8,
+    (3072, 8192): 8,
+    (6144, 4096): 8,
+    (4096, 4096): 8,
+    (28672, 4096): 8,
+    (4096, 14336): 8,
+}
+
 
 def _marlin_env_mmax():
     """PROMIX_MARLIN_MMAX caps the Marlin window (0 disables routing)."""
@@ -265,6 +282,10 @@ class MixedQuantLinear(nn.Module):
         # priority over the W4A4 GEMM tables inside its window.
         self._marlin = None
         self._marlin_win = None
+        # vllm-perf r5 lever 1: MXFP8-marlin high companion (MarlinHigh) + its
+        # measured per-shape crossover vs the hi_add GEMV.
+        self._marlin_hi = None
+        self._marlin_hi_mlo = 8
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -550,12 +571,17 @@ class MixedQuantLinear(nn.Module):
                 and decode_mode() == "w4a16"
                 and hasattr(self._dg, "decode_gemv_w4a16_mb"))
 
-    def attach_marlin(self, marlin_low, hi_warps=16):
+    def attach_marlin(self, marlin_low, hi_warps=16, marlin_high=None):
         """vllm-perf r4 lever 1: attach the load-time Marlin repack of the low
         segment (promix.vllm_integ.marlin_w4a16.MarlinLow). The high segment
         rides decode_gemv_w8a16_hi_add on the decode-GEMV fp32 scale buffers,
         so the route additionally requires dg + fp32 S_hi_dec (default loader
-        config; the opt-in sf8 experiment keeps uint8 scales and skips Marlin)."""
+        config; the opt-in sf8 experiment keeps uint8 scales and skips Marlin).
+
+        r5 lever 1: `marlin_high` (MarlinHigh) is the MXFP8-marlin tensor-core
+        high companion; inside the measured _MARLIN_HI_TABLE window it replaces
+        the hi_add GEMV (which scales ~linearly in M). None keeps the pure-r4
+        route."""
         if (self._dg is None or self.is_pure_nvfp4 or self.S_hi_dec is None
                 or self.S_hi_dec.dtype != torch.float32
                 or not hasattr(self._dg, "decode_gemv_w8a16_hi_add")):
@@ -563,7 +589,15 @@ class MixedQuantLinear(nn.Module):
         self._marlin = marlin_low
         self._marlin_win = _MARLIN_TABLE.get((self.N, self.K))
         self._marlin_hi_warps = int(hi_warps)
+        self._marlin_hi = marlin_high
+        self._marlin_hi_mlo = _MARLIN_HI_TABLE.get((self.N, self.K), 8)
         return True
+
+    def _hi_marlin_route(self, M):
+        """True iff the high segment at this M rides the MXFP8-marlin companion
+        (r5) rather than the hi_add GEMV (r4). Capture-safe (M static per
+        captured graph, r1 pattern)."""
+        return self._marlin_hi is not None and M >= self._marlin_hi_mlo
 
     def marlin_route(self, M):
         """True iff forward(x) at this flattened M takes the Marlin W4A16
@@ -576,19 +610,26 @@ class MixedQuantLinear(nn.Module):
         capture-safe (r1 pattern)."""
         if self._marlin is None or self._marlin_win is None or M == 1:
             return False
+        if M > 32 and not self._hi_marlin_route(M):
+            return False      # hi_add kernel bound (M<=32)
         m_lo, m_hi = self._marlin_win
         return m_lo <= M <= min(m_hi, _marlin_env_mmax())
 
     def _marlin_forward(self, x2d):
-        """W4A16 small-M route: Marlin fp4 GEMM on the low columns + in-place
-        MXFP8 high-segment add. x2d: contiguous (M, K) fp16/bf16/fp32. Returns
-        fp16 (M, N). The activation is consumed EXACTLY (no quantization)."""
+        """W4A16 small-M route: Marlin fp4 GEMM on the low columns + MXFP8
+        high-segment add — the r5 marlin companion (TC, near-flat in M) inside
+        its window, the r4 hi_add GEMV below it. x2d: contiguous (M, K)
+        fp16/bf16/fp32. Returns fp16 (M, N). The activation is consumed
+        EXACTLY (no quantization)."""
         xh = x2d if x2d.dtype == torch.float16 else x2d.to(torch.float16)
         x_lo = xh[:, :self.K_low].contiguous()
         Y = self._marlin.gemm(x_lo)
-        self._dg.decode_gemv_w8a16_hi_add(
-            Y, xh, self.W_hi_dec, self.S_hi_dec,
-            self.N, self.K_low, self.K_high, self._marlin_hi_warps)
+        if self._hi_marlin_route(xh.shape[0]):
+            self._marlin_hi.gemm_add(Y, xh[:, self.K_low:].contiguous())
+        else:
+            self._dg.decode_gemv_w8a16_hi_add(
+                Y, xh, self.W_hi_dec, self.S_hi_dec,
+                self.N, self.K_low, self.K_high, self._marlin_hi_warps)
         return Y
 
     def fp16_route(self, M):

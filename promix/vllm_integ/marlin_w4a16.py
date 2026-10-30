@@ -39,6 +39,13 @@ def marlin_enabled():
     return os.environ.get("PROMIX_MARLIN", "1") != "0"
 
 
+def marlin_hi_enabled():
+    """vllm-perf r5 lever 1: MXFP8-marlin high-segment companion (replaces the
+    hi_add GEMV inside its measured M-window). PROMIX_MARLIN_HI=0 restores the
+    r4 hi_add-only behavior (the lever's serve A/B control)."""
+    return os.environ.get("PROMIX_MARLIN_HI", "1") != "0"
+
+
 def marlin_workspace(device):
     """Shared per-device Marlin workspace (zero-initialized global-sync buffer;
     the kernel leaves it re-zeroed, so sharing + CUDA-graph replay are safe —
@@ -114,3 +121,70 @@ def prepack_marlin_low(W_lo_packed, SF_lo_bytes, g, N, K_low):
         torch.tensor(float(g), dtype=torch.float32, device=dev), torch.half)
     gscale = (gscale / scale_factor).to(torch.float32)
     return MarlinLow(qweight, scales, gscale, N, K_low, marlin_workspace(dev))
+
+
+class MarlinHigh:
+    """vllm-perf r5 lever 1: load-time repacked MXFP8-marlin state for one
+    Linear's high segment — the tensor-core companion that replaces the
+    linear-in-M hi_add GEMV (r4's named bottleneck: 7x the per-byte cost of
+    the marlin low at M=16, closing every window by M=16-24)."""
+
+    def __init__(self, qweight, scales, g, N, K_high, workspace):
+        self.qweight = qweight
+        self.scales = scales
+        self.g = float(g)
+        self.N = N
+        self.K_high = K_high
+        self.workspace = workspace
+        from vllm.scalar_type import scalar_types
+        self.type_id = scalar_types.float8_e4m3fn.id
+
+    def gemm_add(self, Y, x_hi):
+        """x_hi: contiguous (M, K_high) fp16. Computes
+        H = x_hi @ (E4M3(w) * 2^(e-127)).T via marlin's native MXFP8 path
+        (e8m0 scales decoded in-kernel — the pow2 scale x fp8 product is exact
+        in fp16) and folds the per-tensor g in the accumulate step:
+        Y += g * H (one fp32-opmath elementwise, exactly the dequant
+        convention of the hi_add GEMV / fused-GEMM high phase)."""
+        H = torch.ops.vllm.marlin_gemm(
+            a=x_hi, b_q_weight=self.qweight, b_bias=None, b_scales=self.scales,
+            a_scales=None, global_scale=None, b_zeros=None,
+            workspace=self.workspace, b_q_type_id=self.type_id,
+            size_m=x_hi.shape[0], size_n=self.N, size_k=self.K_high,
+            use_atomic_add=False, use_fp32_reduce=True)
+        Y.add_(H, alpha=self.g)
+        return Y
+
+
+def prepack_marlin_high(W_hi_bytes, SF_hi_bytes, g, N, K_high):
+    """One-time load-side repack of the checkpoint high-segment buffers into
+    marlin's native MXFP8 format. W_hi_bytes: uint8 (N, K_high) raw E4M3 codes;
+    SF_hi_bytes: uint8 (N, K_high/32) raw UE8M0 block scales; g: per-tensor
+    fp32 global (NOT folded into the scales — e8m0 only holds powers of two —
+    it rides the companion's add alpha, see MarlinHigh.gemm_add).
+
+    Mirrors vLLM's `prepare_mxfp8_layer_for_marlin` exactly (pack_fp8_to_int32
+    + gptq_marlin_repack num_bits=8 + e8m0 scale permute +
+    mxfp8_marlin_process_scales); like the low-segment prepack we refuse the
+    pad path (all promix shapes are tile-aligned: K_high in {384,512,1024,1792}
+    is a multiple of 128)."""
+    from vllm.model_executor.layers.quantization.utils.marlin_utils import (
+        marlin_padded_nk, marlin_permute_scales)
+    from vllm.model_executor.layers.quantization.utils.marlin_utils_fp8 import (
+        mxfp8_marlin_process_scales, pack_fp8_to_int32)
+    from vllm import _custom_ops as ops
+
+    assert W_hi_bytes.dtype == torch.uint8 and W_hi_bytes.shape == (N, K_high)
+    assert SF_hi_bytes.dtype == torch.uint8 and SF_hi_bytes.shape == (N, K_high // 32)
+    padded_n, padded_k = marlin_padded_nk(N, K_high, 32)
+    assert (padded_n, padded_k) == (N, K_high), \
+        f"marlin hi: unpadded shape required, got N={N} K_high={K_high} -> {padded_n}x{padded_k}"
+    dev = W_hi_bytes.device
+    qweight = ops.gptq_marlin_repack(
+        b_q_weight=pack_fp8_to_int32(
+            W_hi_bytes.view(torch.float8_e4m3fn), size_k_first=False).T.contiguous(),
+        size_k=K_high, size_n=N, num_bits=8)
+    scales = SF_hi_bytes.view(torch.float8_e8m0fnu).to(torch.float32).T.contiguous()
+    scales = marlin_permute_scales(s=scales, size_k=K_high, size_n=N, group_size=32)
+    scales = mxfp8_marlin_process_scales(scales)
+    return MarlinHigh(qweight, scales, g, N, K_high, marlin_workspace(dev))

@@ -270,17 +270,33 @@ class PromixLinearMethod(LinearMethodBase):
         # second copy of the low-segment weight bytes (the fused prefill GEMM
         # keeps the original layout). PROMIX_MARLIN=0 disables (and skips the
         # memory). Routed by the measured _MARLIN_TABLE windows (M=8..32).
-        from promix.vllm_integ.marlin_w4a16 import marlin_enabled, prepack_marlin_low
+        from promix.vllm_integ.marlin_w4a16 import (marlin_enabled,
+                                                    marlin_hi_enabled,
+                                                    prepack_marlin_high,
+                                                    prepack_marlin_low)
         if marlin_enabled() and dg is not None and K_high > 0:
             try:
                 ml = prepack_marlin_low(packed.W_lo_packed,
                                         layer.weight_lo_scale.data.contiguous(),
                                         g, N, K_low)
+                # vllm-perf r5 lever 1: MXFP8-marlin high companion — the r4
+                # hi_add GEMV scales ~linearly in M (7x the marlin low's
+                # per-byte cost at M=16, closing every window by M=16-24);
+                # marlin's native MXFP8 path (e8m0 group-32 scales, exactly our
+                # checkpoint layout) runs the high segment on tensor cores
+                # near-flat in M. g rides the companion's add alpha. Memory:
+                # a second copy of the high-segment bytes (~K_high/K of the
+                # weight). PROMIX_MARLIN_HI=0 restores the r4 hi_add-only route.
+                mh = None
+                if marlin_hi_enabled():
+                    mh = prepack_marlin_high(packed.W_hi_bytes,
+                                             layer.weight_hi_scale.data.contiguous(),
+                                             g, N, K_high)
                 # hi_add companion rows/block: large N saturates with 32
                 # warps, small N stays launch-bound at 16 (r4_marlin_probe
                 # t_hi_add sweep; same heuristic family as _dec_warps).
                 if not layer.promix_mql.attach_marlin(
-                        ml, hi_warps=32 if N >= 4096 else 16):
+                        ml, hi_warps=32 if N >= 4096 else 16, marlin_high=mh):
                     logger.info("promix %s: marlin route unavailable (sf8/dg)", self.key)
             except Exception as e:
                 logger.warning("promix %s: marlin prepack failed (%r) — "
