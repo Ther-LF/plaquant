@@ -132,7 +132,11 @@ def quantize_sharq(model, args):
 
 def quantize_micromix(model, args):
     from model_utils import reorder_model_llama
+    from smooth import smooth_lm
     name = _model_name(args.model)
+    # mirror MicroMix main.py --do_quant: SmoothQuant scaling BEFORE reorder
+    act_scale = torch.load(f"./saved/{name}.pt", weights_only=False)
+    smooth_lm(model, act_scale)
     reorder_index = torch.load(
         f"./saved/{name}_reorder_index_wikitext2.pt", weights_only=False)
     p6_nums = torch.load(
