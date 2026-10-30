@@ -2,82 +2,60 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ProMix — Sorted ΔD Concentration (rate-distortion allocation)</title>
+<title>ProMix — per-ring ΔD by rank (is there a knee?)</title>
 <style>
-  :root{--ink:#1a1a2e;--muted:#6b7280;--grid:#e6e8ee;--surface:#ffffff;
-        --c3b:#2563eb;--c8b:#e07a3f;--knee:#c026d3;}
-  body{margin:0;background:#f7f8fa;color:var(--ink);
-       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
-  .wrap{max-width:900px;margin:32px auto;background:var(--surface);
-        border:1px solid var(--grid);border-radius:14px;padding:28px 32px;}
-  h1{font-size:20px;margin:0 0 4px;}
-  .sub{color:var(--muted);font-size:13px;margin:0 0 20px;}
-  svg{width:100%;height:auto;display:block;}
-  .legend{display:flex;gap:22px;align-items:center;margin:14px 2px 0;font-size:13px;}
-  .legend span{display:inline-flex;align-items:center;gap:7px;}
-  .sw{width:22px;height:3px;border-radius:2px;display:inline-block;}
-  .note{margin-top:18px;font-size:13px;color:#374151;border-top:1px solid var(--grid);padding-top:14px;}
-  .note b{color:var(--ink);}
-  code{background:#f0f2f6;padding:1px 5px;border-radius:4px;font-size:12px;}
+  :root{--ink:#1a1a2e;--muted:#6b7280;--grid:#e6e8ee;--surface:#fff;--c3b:#2563eb;--c8b:#e07a3f;}
+  body{margin:0;background:#f7f8fa;color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:960px;margin:28px auto;background:var(--surface);border:1px solid var(--grid);border-radius:14px;padding:26px 30px;}
+  h1{font-size:19px;margin:0 0 4px;} .sub{color:var(--muted);font-size:13px;margin:0 0 6px;}
+  svg{width:100%;height:auto;display:block;} .legend{display:flex;gap:20px;font-size:13px;margin:6px 2px 0;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;} .sw{width:14px;height:14px;border-radius:3px;display:inline-block;}
+  .note{margin-top:14px;font-size:13px;color:#374151;border-top:1px solid var(--grid);padding-top:12px;}
+  .note b{color:var(--ink);} code{background:#f0f2f6;padding:1px 5px;border-radius:4px;font-size:12px;}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Sorted ΔD concentration — where the mixed-precision benefit lives</h1>
-  <p class="sub">Rings ranked by ΔD = MSE(FP4)−MSE(FP8). Cumulative fraction of total ΔD captured by the top-k rings
-     (global, all Linears, dense-R-on). Steep head → a Pareto knee; flat tail → smooth error↔cost dialing.</p>
-  <svg id="chart" viewBox="0 0 820 440" role="img" aria-label="Cumulative ΔD vs top-k ring fraction, log x"></svg>
+  <h1>Per-ring ΔD, by rank band — the knee you couldn't see in the cumulative plot</h1>
+  <p class="sub">Average ΔD (=MSE_FP4−MSE_FP8) <b>per ring</b> within each rank band, rings sorted by ΔD descending.
+     Left two charts = linear-y (the cliff); right note explains. Reconstructed from the committed cumulative data (12 bands) — exact per-ring spectrum pending from whydecay.</p>
+  <svg id="chart" viewBox="0 0 920 430" role="img"></svg>
   <div class="legend">
     <span><i class="sw" style="background:var(--c3b)"></i>Llama-3.2-3B</span>
     <span><i class="sw" style="background:var(--c8b)"></i>Llama-3-8B</span>
-    <span><i class="sw" style="background:var(--knee)"></i>1/8 shipped · 1/32 knee</span>
   </div>
   <div class="note">
-    <b>Read it:</b> the top <b>1/32</b> of rings (3.1%) already carry <b>~42%</b> of all the error-reduction on both
-    models (steep head = the natural accuracy-per-bit knee); past <b>1/8</b> the curve flattens (61%→75%→92% at
-    1/8→1/4→1/2), so adding more high-precision buys steadily-diminishing, smoothly-dialable returns.
-    <b>Both trade-off modes exist, on different parts of one curve.</b> ΔD is non-negative everywhere and rank-tied to
-    channel variance (Spearman ρ=0.9999) → the outlier directions PCA sorts to the top are exactly what the allocator protects first.
+    <b>Now you see it:</b> the top band (rings ranked ~1–1.5%) has per-ring ΔD ≈ <b>0.13–0.15</b>; by the 1/8 band it's
+    <b>~0.007</b> (≈18× lower) and the tail is <b>~0.0007</b> (≈180× lower). That steep drop across the first ~5 bands
+    <b>IS the knee</b> — a handful of outlier rings dominate, the rest are near-flat. The <code>cumulative</code> plot
+    looked smooth because summing a steep-then-flat curve always rises smoothly; the raw per-ring values show the cliff.
+    <br><b>So both your readings hold:</b> cut at the steep head (~1/32–1/16) = Pareto-knee / max accuracy-per-bit;
+    the long flat tail (≥1/8) = smooth, low-sensitivity dialing.
   </div>
 </div>
 <script>
-const data = {
- "3b":[[0.00390625,0.1134],[0.0078125,0.2138],[0.0104167,0.2717],[0.015625,0.3471],[0.0208333,0.3762],[0.03125,0.4222],[0.0416667,0.4568],[0.0625,0.5098],[0.125,0.6141],[0.25,0.7471],[0.5,0.9220],[1.0,1.0]],
- "8b":[[0.00390625,0.1531],[0.0078125,0.2725],[0.0104167,0.3169],[0.015625,0.3521],[0.0208333,0.3801],[0.03125,0.4226],[0.0416667,0.4559],[0.0625,0.5079],[0.125,0.6154],[0.25,0.7580],[0.5,0.9462],[1.0,1.0]]
-};
-const W=820,H=440,L=64,R=24,T=24,B=54, iw=W-L-R, ih=H-T-B;
-const xmin=Math.log10(0.0039), xmax=Math.log10(1.0);
-const X=f=>L+(Math.log10(f)-xmin)/(xmax-xmin)*iw;
-const Y=v=>T+(1-v)*ih;
-const svg=document.getElementById('chart');
-const ns="http://www.w3.org/2000/svg";
-function el(t,a){const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
-// grid + y ticks
-[0,0.25,0.5,0.75,1.0].forEach(v=>{
-  svg.appendChild(el('line',{x1:L,y1:Y(v),x2:W-R,y2:Y(v),stroke:'#e6e8ee','stroke-width':1}));
-  const tx=el('text',{x:L-8,y:Y(v)+4,'text-anchor':'end',fill:'#6b7280','font-size':11});tx.textContent=(v*100)+'%';svg.appendChild(tx);
-});
-// x ticks (fractions)
-[[0.0039,'1/256'],[0.03125,'1/32'],[0.0625,'1/16'],[0.125,'1/8'],[0.25,'1/4'],[0.5,'1/2'],[1.0,'all']].forEach(([f,lab])=>{
-  svg.appendChild(el('line',{x1:X(f),y1:T,x2:X(f),y2:T+ih,stroke:'#f0f2f6','stroke-width':1}));
-  const tx=el('text',{x:X(f),y:H-30,'text-anchor':'middle',fill:'#6b7280','font-size':11});tx.textContent=lab;svg.appendChild(tx);
-});
-svg.appendChild(el('text',{x:L+iw/2,y:H-8,'text-anchor':'middle',fill:'#374151','font-size':12.5})).textContent='top-k ring fraction (log)';
-const yl=el('text',{x:16,y:T+ih/2,'text-anchor':'middle',fill:'#374151','font-size':12.5,transform:`rotate(-90 16 ${T+ih/2})`});yl.textContent='cumulative ΔD captured';svg.appendChild(yl);
-// knee + shipped markers
-[[0.03125,'var(--knee)'],[0.125,'var(--knee)']].forEach(([f])=>{
-  svg.appendChild(el('line',{x1:X(f),y1:T,x2:X(f),y2:T+ih,stroke:'#c026d3','stroke-width':1.5,'stroke-dasharray':'4 4',opacity:0.55}));
-});
-// series
-function draw(key,color){
-  const pts=data[key];
-  let d='';pts.forEach((p,i)=>{d+=(i?'L':'M')+X(p[0]).toFixed(1)+' '+Y(p[1]).toFixed(1)+' ';});
-  svg.appendChild(el('path',{d,fill:'none',stroke:color,'stroke-width':2.5,'stroke-linejoin':'round'}));
-  pts.forEach(p=>svg.appendChild(el('circle',{cx:X(p[0]),cy:Y(p[1]),r:3,fill:color})));
+// band = [label(top-k frac), ringsInBand, perRingAvgDeltaD]  (perRing = ΔcumFrac*totalΔD / Δk)
+const T3=45.1176, T8=68.608;
+const C3=[[0.0039,0.1134,40],[0.0078,0.2138,80],[0.0104,0.2717,107],[0.0156,0.3471,161],[0.0208,0.3762,215],[0.03125,0.4222,322],[0.0417,0.4568,429],[0.0625,0.5098,644],[0.125,0.6141,1288],[0.25,0.7471,2576],[0.5,0.9220,5152],[1.0,1.0,10304]];
+const C8=[[0.0039,0.1531,68],[0.0078,0.2725,136],[0.0104,0.3169,181],[0.0156,0.3521,272],[0.0208,0.3801,363],[0.03125,0.4226,544],[0.0417,0.4559,725],[0.0625,0.5079,1088],[0.125,0.6154,2176],[0.25,0.7580,4352],[0.5,0.9462,8704],[1.0,1.0,17408]];
+const LABELS=['top','1/128','1/96','1/64','1/48','1/32','1/24','1/16','1/8','1/4','1/2','tail'];
+function perRing(C,T){let out=[],pc=0,pk=0;for(const [f,cum,k] of C){out.push((cum-pc)*T/(k-pk));pc=cum;pk=k;}return out;}
+const d3=perRing(C3,T3), d8=perRing(C8,T8);
+const W=920,H=430,L=58,R=18,Tp=20,B=52,iw=W-L-R,ih=H-Tp-B;
+const ymax=0.16, Y=v=>Tp+(1-v/ymax)*ih;
+const svg=document.getElementById('chart'),ns="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+[0,0.04,0.08,0.12,0.16].forEach(v=>{svg.appendChild(el('line',{x1:L,y1:Y(v),x2:W-R,y2:Y(v),stroke:'#e6e8ee'}));
+  const t=el('text',{x:L-8,y:Y(v)+4,'text-anchor':'end',fill:'#6b7280','font-size':11});t.textContent=v.toFixed(2);svg.appendChild(t);});
+const n=12,gw=iw/n;
+for(let i=0;i<n;i++){
+  const x0=L+i*gw, bw=gw*0.38;
+  svg.appendChild(el('rect',{x:x0+gw*0.08,y:Y(d3[i]),width:bw,height:Y(0)-Y(d3[i]),fill:'#2563eb',rx:2}));
+  svg.appendChild(el('rect',{x:x0+gw*0.08+bw+3,y:Y(d8[i]),width:bw,height:Y(0)-Y(d8[i]),fill:'#e07a3f',rx:2}));
+  const t=el('text',{x:x0+gw/2,y:H-30,'text-anchor':'middle',fill:'#6b7280','font-size':10.5});t.textContent=LABELS[i];svg.appendChild(t);
 }
-draw('3b','#2563eb');draw('8b','#e07a3f');
-// annotate 1/32 value
-const a=el('text',{x:X(0.03125)+6,y:Y(0.42)-6,fill:'#c026d3','font-size':11,'font-weight':600});a.textContent='top 1/32 → 42%';svg.appendChild(a);
+svg.appendChild(el('text',{x:L+iw/2,y:H-8,'text-anchor':'middle',fill:'#374151','font-size':12.5})).textContent='rank band (rings sorted by ΔD, high→low)';
+const yl=el('text',{x:15,y:Tp+ih/2,'text-anchor':'middle',fill:'#374151','font-size':12.5,transform:`rotate(-90 15 ${Tp+ih/2})`});yl.textContent='avg ΔD per ring';svg.appendChild(yl);
 </script>
 </body>
 </html>
