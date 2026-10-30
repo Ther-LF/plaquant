@@ -90,4 +90,12 @@ are not comparable across tokenizers — only within-family gaps are).
 
 ## 2. Results
 
-(pending — filled in by the experiment phase)
+**bf16 bridge (no rotation, no quant), Qwen3-8B** (recorded as THE baseline —
+no committed reference exists for Qwen in this repo): wikitext-2 **9.7247**,
+C4 **13.2993** (same protocol as the Llama suite: seqlen 2048, batch 16,
+evaluate_ppl token-pooled exp(mean NLL); `BRIDGE_qwen3_8b.json`). Note
+Qwen3-8B's absolute PPL is higher than Llama-3-8B's 6.14 — different tokenizer
+(vocab 151936 vs 128256) and training mix; only within-family deltas are
+meaningful.
+
+(uniform-1/8 and measured-MSE-1/8 pending — basis Step 0 in progress)
