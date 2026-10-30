@@ -94,7 +94,8 @@ split-K / stream-K in the fused glue (R3 lever, see §5).
 |---|---|
 | T2 prefill path, post-graphs (`--graphs`) | **Byte-identical to the R1/Phase-2 baseline**: PPL 8.37029131329681 vs ref 8.3674, |dPPL|=0.0029; top-1 89.786% = the known Phase-1 engine-glue regime, every digit equal to `vllm_perf_round1_data/gate_t2_graphs.json` — qpfm + the new wiring are bit-invisible on the prefill path. |
 | T2 through the decode route (`--decode-route-m 16`) | **PASS: PPL 8.3603 vs ref 8.3674 → signed ΔPPL = −0.0071 (improvement direction).** Exercises qpfm at every Linear + the 128x64 GEMM on 3B o/down at M=8..16 + the GEMV tail routes. NOTE the R1 doc's −0.108 for this gate is NOT the comparison point: R1's gate ran BEFORE its own threshold re-fit (all M≤16 through the W4A16 GEMV, which skips activation quant → big PPL gain); under the final shipped per-shape crossovers (M≤2-4 GEMV) most 16-token steps run the fused W4A4 GEMM ≈ the reference quantization, so ≈0 delta with a small GEMV-tail improvement is the expected green result. |
-| T2 decode-route M=1 subset (`--decode-route-m 1 --graphs --max-chunks 30`) | TBD |
+| T2 decode-route M=1 subset (`--decode-route-m 1 --graphs --max-chunks 30`) | **PASS — byte-identical to the R1 result** (PPL 8.462834401645244 vs subset ref 8.8014, signed ΔPPL −0.339, every digit equal to `vllm_perf_round1_data/gate_t2_decode_m1.json`): the M=1 GEMV path is untouched by this round, bit-provenly. |
+| T2 decode-route m16 CONTROL (same gate, `PROMIX_SMALLM=0 PROMIX_QPFM=0`) | TBD |
 
 ## 5. Scoreboard — three-way serve bench
 

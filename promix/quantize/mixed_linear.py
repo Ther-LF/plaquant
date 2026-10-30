@@ -222,12 +222,29 @@ class MixedQuantLinear(nn.Module):
           * "w4a4": legacy SINGLE-LAUNCH quant-activation + weight-stream GEMV.
         Both stream identical weight bytes; both are bit-faithful to the fused path
         (same dequantized weight, FP32 accumulate). w4a16 additionally keeps the
-        activation exact, so it is strictly more accurate at decode."""
+        activation exact, so it is strictly more accurate at decode.
+
+        vllm-perf r2 (secondary lever): when S_*_dec hold the checkpoint's RAW
+        1-byte scales (uint8: E4M3 low / UE8M0 high), the _sf8 kernel variants
+        stream those and fold the per-tensor g in-kernel — bit-exact to the fp32
+        buffers (float(E4M3)*g and ldexpf(g, e-127) reproduce the precomputed
+        products exactly; sf8_probe torch.equal-gated), ~18% less low-segment
+        weight-stream traffic."""
+        sf8 = (self.S_lo_dec is not None and self.S_lo_dec.dtype == torch.uint8)
         if decode_mode() == "w4a4":
+            if sf8:
+                raise RuntimeError(
+                    "PROMIX_DECODE_MODE=w4a4 needs fp32 decode scales — set "
+                    "PROMIX_DECODE_SF8=0 so the loader derives them")
             D = self._dg.decode_gemv_fused(x2d, self.W_lo_dec, self.S_lo_dec,
                                            self.W_hi_dec, self.S_hi_dec,
                                            self.N, self.K_low, self.K_high,
                                            self._dec_warps)
+        elif sf8:
+            D = self._dg.decode_gemv_w4a16_sf8(x2d, self.W_lo_dec, self.S_lo_dec,
+                                               self.W_hi_dec, self.S_hi_dec,
+                                               self.N, self.K_low, self.K_high,
+                                               self._dec_warps, self.g_w)
         else:
             D = self._dg.decode_gemv_w4a16(x2d, self.W_lo_dec, self.S_lo_dec,
                                            self.W_hi_dec, self.S_hi_dec,
@@ -345,10 +362,18 @@ class MixedQuantLinear(nn.Module):
                 # vllm-perf r1: batched weight-only W4A16 GEMV for captured decode
                 # batch sizes (M static per CUDA graph). w4a4 mode has no batched
                 # GEMV — it falls through to the fused W4A4 tensor-core GEMM.
-                D = self._dg.decode_gemv_w4a16_mb(
-                    x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
-                    self.W_hi_dec, self.S_hi_dec,
-                    self.N, self.K_low, self.K_high, self._dec_warps_mb)
+                # r2: _sf8 variant when the decode scales are raw 1-byte (see
+                # _decode_gemv docstring).
+                if self.S_lo_dec.dtype == torch.uint8:
+                    D = self._dg.decode_gemv_w4a16_mb_sf8(
+                        x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
+                        self.W_hi_dec, self.S_hi_dec,
+                        self.N, self.K_low, self.K_high, self._dec_warps_mb, self.g_w)
+                else:
+                    D = self._dg.decode_gemv_w4a16_mb(
+                        x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
+                        self.W_hi_dec, self.S_hi_dec,
+                        self.N, self.K_low, self.K_high, self._dec_warps_mb)
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
             return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
