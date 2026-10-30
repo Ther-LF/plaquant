@@ -598,6 +598,177 @@ static torch::Tensor dispatch_w4a16(const AT* xptr, torch::Tensor Wlo, torch::Te
   return D;
 }
 
+// ========================================================================================
+// BATCHED W4A16 DECODE GEMV (vllm-perf round-1): small-M decode steps (vLLM CUDA-graph
+// capture pads decode batches to fixed sizes 1,2,4,8,16,...).  At M=2..32 the 128x128
+// fused tensor-core GEMM is still ~1/8..1/64 tile-utilized, while the weight-streaming
+// GEMV amortizes the SAME packed weight bytes over all M rows (decode stays weight-
+// bandwidth-bound).  Design: warp-per-output-row n with MB fp32 accumulators per lane;
+// the (M,K) activation is staged K-TILED in shared memory (KT elems per row, smem =
+// M*KT*4 <= 48 KB) so every weight byte is dotted against all M rows from smem, and the
+// activation gmem traffic stays one L2-resident pass per block.  Per-lane accumulation
+// order over k is IDENTICAL to gemv_w4a16 (same lane-strided uint32 walk, tiles visited
+// in ascending k), so each row's result is bit-identical to the M=1 kernel.
+template <int WARPS, int MB, typename AT>
+__global__ void gemv_w4a16_mb(
+    const AT* __restrict__ x,                // (M, K) raw activation, row-major
+    const uint8_t* __restrict__ Wlo, const float* __restrict__ Slo,
+    const uint8_t* __restrict__ Whi, const float* __restrict__ Shi,
+    float* __restrict__ D,                   // (M, N) fp32
+    int M, int N, int Klow, int Khigh, int KT) {
+  extern __shared__ float sx[];              // M * KT staged activation tile
+  const int K = Klow + Khigh;
+  const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  const int n = blockIdx.x * WARPS + warp;
+  const bool rowok = (n < N);                // NO early return: all threads must reach
+                                             // the __syncthreads() in the tile loops.
+  const uint32_t* wl = rowok ? reinterpret_cast<const uint32_t*>(Wlo + (size_t)n * (Klow / 2)) : nullptr;
+  const float*    sl = rowok ? Slo + (size_t)n * (Klow / 16) : nullptr;
+  const uint32_t* wh = rowok ? reinterpret_cast<const uint32_t*>(Whi + (size_t)n * Khigh) : nullptr;
+  const float*    sh = rowok ? Shi + (size_t)n * (Khigh / 32) : nullptr;
+  float acc[MB];
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) acc[m] = 0.f;
+
+  // ---- NVFP4 low segment, K-tiled (each uint32 = 8 codes; scale sl[w>>1]) ----
+  for (int k0 = 0; k0 < Klow; k0 += KT) {
+    int kt = min(KT, Klow - k0);
+    __syncthreads();                         // previous tile fully consumed
+    for (int idx = threadIdx.x; idx < M * kt; idx += blockDim.x) {
+      int m = idx / kt, i = idx - m * kt;
+      sx[m * KT + i] = a_to_f(x[(size_t)m * K + k0 + i]);
+    }
+    __syncthreads();
+    if (rowok) {
+      int w0 = k0 >> 3, w1 = (k0 + kt) >> 3;  // global uint32 index range of tile
+      for (int w = w0 + lane; w < w1; w += 32) {
+        uint32_t v = wl[w];
+        float sc = sl[w >> 1];
+        int i0 = 8 * w - k0;                  // tile-local element index (mult of 8)
+        float wv[8];
+        #pragma unroll
+        for (int c = 0; c < 8; c++) wv[c] = fp4_decode((v >> (4 * c)) & 0xF) * sc;
+        #pragma unroll
+        for (int m = 0; m < MB; ++m) {
+          if (m < M) {
+            const float4* s4 = reinterpret_cast<const float4*>(sx + m * KT + i0);
+            float4 a0 = s4[0], a1 = s4[1];    // 2x LDS.128 instead of 8 scalar LDS
+            acc[m] += a0.x * wv[0]; acc[m] += a0.y * wv[1];
+            acc[m] += a0.z * wv[2]; acc[m] += a0.w * wv[3];
+            acc[m] += a1.x * wv[4]; acc[m] += a1.y * wv[5];
+            acc[m] += a1.z * wv[6]; acc[m] += a1.w * wv[7];
+          }
+        }
+      }
+    }
+  }
+  // ---- MXFP8 high segment, K-tiled (each uint32 = 4 FP8 bytes; scale sh[w>>3]) ----
+  for (int k0 = 0; k0 < Khigh; k0 += KT) {
+    int kt = min(KT, Khigh - k0);
+    __syncthreads();
+    for (int idx = threadIdx.x; idx < M * kt; idx += blockDim.x) {
+      int m = idx / kt, i = idx - m * kt;
+      sx[m * KT + i] = a_to_f(x[(size_t)m * K + Klow + k0 + i]);
+    }
+    __syncthreads();
+    if (rowok) {
+      int w0 = k0 >> 2, w1 = (k0 + kt) >> 2;
+      for (int w = w0 + lane; w < w1; w += 32) {
+        uint32_t v = wh[w];
+        float sc = sh[w >> 3];
+        int i0 = 4 * w - k0;                  // tile-local element index (mult of 4)
+        float wv[4];
+        #pragma unroll
+        for (int c = 0; c < 4; c++) {
+          __nv_fp8_e4m3 f; f.__x = (uint8_t)((v >> (8 * c)) & 0xFF);
+          wv[c] = float(f) * sc;
+        }
+        #pragma unroll
+        for (int m = 0; m < MB; ++m) {
+          if (m < M) {
+            const float4 a0 = *reinterpret_cast<const float4*>(sx + m * KT + i0);
+            acc[m] += a0.x * wv[0]; acc[m] += a0.y * wv[1];
+            acc[m] += a0.z * wv[2]; acc[m] += a0.w * wv[3];
+          }
+        }
+      }
+    }
+  }
+  // per-m warp reduction + store (D is (M, N))
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) {
+    float a = acc[m];
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) a += __shfl_down_sync(0xffffffffu, a, o);
+    if (lane == 0 && rowok && m < M) D[(size_t)m * N + n] = a;
+  }
+}
+
+template <int WARPS, int MB, typename AT>
+static void launch_w4a16_mb(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                            torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                            int M, int N, int Klow, int Khigh, cudaStream_t stream) {
+  // KT: largest multiple of 256 with M*KT*4 <= 48 KB (no smem opt-in), cap 4096.
+  // The 256 alignment keeps each tile's uint32 count a multiple of 32 in BOTH
+  // segments, so every lane's k-walk is the exact strided sequence of the M=1
+  // kernel -> per-row results stay bit-identical to decode_gemv_w4a16.
+  int KT = ((48 * 1024 / 4) / M) & ~255;
+  if (KT > 4096) KT = 4096;
+  TORCH_CHECK(KT >= 256, "decode_gemv_w4a16_mb: M too large for 48KB staging");
+  size_t smem = (size_t)M * KT * sizeof(float);
+  int blocks = (N + WARPS - 1) / WARPS;
+  gemv_w4a16_mb<WARPS, MB, AT><<<blocks, WARPS * 32, smem, stream>>>(
+      xptr, Wlo.data_ptr<uint8_t>(), Slo.data_ptr<float>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      D.data_ptr<float>(), M, N, Klow, Khigh, KT);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <int MB, typename AT>
+static void dispatch_w4a16_mb_w(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                int M, int N, int Kl, int Kh, cudaStream_t s, int64_t warps) {
+  switch (warps) {
+    case 8:  launch_w4a16_mb<8,  MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s); break;
+    case 32: launch_w4a16_mb<32, MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s); break;
+    default: launch_w4a16_mb<16, MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s); break;
+  }
+}
+
+template <typename AT>
+static void dispatch_w4a16_mb(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                              torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                              int M, int N, int Kl, int Kh, cudaStream_t s, int64_t warps) {
+  if      (M <= 2)  dispatch_w4a16_mb_w<2>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s, warps);
+  else if (M <= 4)  dispatch_w4a16_mb_w<4>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s, warps);
+  else if (M <= 8)  dispatch_w4a16_mb_w<8>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s, warps);
+  else              dispatch_w4a16_mb_w<16>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, s, warps);
+}
+
+torch::Tensor decode_gemv_w4a16_mb(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
+                                   torch::Tensor Whi, torch::Tensor Shi,
+                                   int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
+  TORCH_CHECK(x.is_cuda() && x.dim() == 2, "x must be cuda (M, K)");
+  auto xc = x.contiguous();
+  int M = (int)xc.size(0);
+  TORCH_CHECK(xc.size(1) == Klow + Khigh, "x K dim must be Klow+Khigh");
+  TORCH_CHECK(M >= 1 && M <= 16, "decode_gemv_w4a16_mb supports M in [1, 16]");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(x.device()));
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh;
+  if (xc.scalar_type() == torch::kFloat16)
+    dispatch_w4a16_mb(reinterpret_cast<const __half*>(xc.data_ptr<at::Half>()),
+                      Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, stream, warps);
+  else if (xc.scalar_type() == torch::kBFloat16)
+    dispatch_w4a16_mb(reinterpret_cast<const __nv_bfloat16*>(xc.data_ptr<at::BFloat16>()),
+                      Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, stream, warps);
+  else {
+    TORCH_CHECK(xc.scalar_type() == torch::kFloat32, "x must be fp16/bf16/fp32");
+    dispatch_w4a16_mb(xc.data_ptr<float>(), Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, stream, warps);
+  }
+  return D;
+}
+
 torch::Tensor decode_gemv_w4a16(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
                                 torch::Tensor Whi, torch::Tensor Shi,
                                 int64_t N, int64_t Klow, int64_t Khigh, int64_t warps) {
@@ -678,6 +849,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
         pybind11::arg("warps") = 8);
+  m.def("decode_gemv_w4a16_mb", &decode_gemv_w4a16_mb,
+        "BATCHED weight-only W4A16 decode GEMV (vllm-perf r1): x (M,K) raw activation, "
+        "M in [1,16] (vLLM captured decode batch sizes). Warp-per-row, K-tiled smem "
+        "activation staging; per-row results bit-identical to decode_gemv_w4a16. "
+        "Returns (M,N) fp32. warps = rows/block in {8,16,32}",
+        pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 16);
   m.def("quant_act", &quant_act,
         "fast in-kernel activation quantize -> dequantized fp32 (K,), bit-exact to "
         "fake_quantize_nvfp4/mxfp8 (M=1)",

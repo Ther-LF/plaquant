@@ -30,6 +30,14 @@ def main():
     ap.add_argument("--graphs", action="store_true",
                     help="run with enforce_eager=False (torch.compile + CUDA "
                          "graphs) — the Phase-2 graph-equivalence re-gate")
+    ap.add_argument("--decode-route-m", type=int, default=0,
+                    help="vllm-perf r1: cap max_num_batched_tokens to this value "
+                         "so EVERY forward step is a small-M chunk that routes "
+                         "through the decode GEMV (M<=PROMIX_DECODE_M_MAX). This "
+                         "scores the full wikitext PPL THROUGH the decode path "
+                         "(W4A16 = activation-quant OFF, so PPL is expected to "
+                         "IMPROVE vs the W4A4 shared-g reference; report the "
+                         "delta either way). 0 = normal prefill-path gate.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -41,8 +49,16 @@ def main():
     if args.max_chunks:
         nchunks = min(nchunks, args.max_chunks)
 
+    llm_kw = {}
+    if args.decode_route_m > 0:
+        # Chunked prefill with a tiny token budget: every engine step scores at
+        # most decode_route_m prompt tokens -> flattened M <= decode_route_m ->
+        # the promix decode GEMV route (M=1 single-row / batched W4A16 kernel).
+        llm_kw = dict(max_num_batched_tokens=args.decode_route_m,
+                      max_num_seqs=max(1, min(args.decode_route_m, 8)),
+                      enable_chunked_prefill=True)
     llm = build_llm(args.ckpt, max_model_len=S + 128,
-                    enforce_eager=not args.graphs)
+                    enforce_eager=not args.graphs, **llm_kw)
     from vllm import SamplingParams, TokensPrompt
     sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=1)
     prompts = [TokensPrompt(prompt_token_ids=ids[i].tolist()) for i in range(nchunks)]
@@ -68,8 +84,18 @@ def main():
     agree_pct = 100.0 * agree / total
     dppl = abs(ppl_vllm - ppl_ref)
     lp_diff = (v_lp - ref_lp[:nchunks].double()).abs()
-    gate_ppl = dppl <= 0.1
-    gate_top1 = agree_pct >= 99.9
+    if args.decode_route_m > 0:
+        # Decode-route numerics gate: W4A16 decode intentionally differs from the
+        # W4A4 shared-g reference (activation quant OFF -> MORE accurate), so the
+        # gate is "no degradation beyond 0.1 PPL" (signed), and top-1-vs-W4A4-ref
+        # is reported but not gated (the logits legitimately differ).
+        gate_ppl = (ppl_vllm - ppl_ref) <= 0.1
+        gate_top1 = True
+        print(f"T2-DECODE-ROUTE (M<={args.decode_route_m}) signed dPPL = "
+              f"{ppl_vllm - ppl_ref:+.4f} (improvement if negative)", flush=True)
+    else:
+        gate_ppl = dppl <= 0.1
+        gate_top1 = agree_pct >= 99.9
     verdict = "PASS" if (gate_ppl and gate_top1) else "FAIL"
     print(f"T2 ppl_vllm={ppl_vllm:.4f} ppl_ref={ppl_ref:.4f} |d|={dppl:.4f} "
           f"(gate<=0.1 {'ok' if gate_ppl else 'FAIL'})", flush=True)
@@ -80,11 +106,15 @@ def main():
           f"max={lp_diff.max():.5f}", flush=True)
     print(f"GATE_T2_{verdict}", flush=True)
     out = args.out or os.path.join(
-        args.ckpt, "gate_t2_graphs.json" if args.graphs else "gate_t2.json")
+        args.ckpt,
+        f"gate_t2_decode_m{args.decode_route_m}.json" if args.decode_route_m > 0
+        else ("gate_t2_graphs.json" if args.graphs else "gate_t2.json"))
     with open(out, "w") as f:
         json.dump({"verdict": verdict, "graphs": args.graphs,
+                   "decode_route_m": args.decode_route_m,
                    "ppl_vllm": ppl_vllm, "ppl_ref": ppl_ref,
-                   "dppl": dppl, "top1_agreement_pct": agree_pct,
+                   "dppl": dppl, "dppl_signed": ppl_vllm - ppl_ref,
+                   "top1_agreement_pct": agree_pct,
                    "positions": total, "chunks": nchunks,
                    "logprob_absdiff_mean": lp_diff.mean().item(),
                    "logprob_absdiff_max": lp_diff.max().item()}, f, indent=2)

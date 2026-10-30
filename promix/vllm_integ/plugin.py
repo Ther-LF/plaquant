@@ -173,8 +173,9 @@ class PromixLinearMethod(LinearMethodBase):
     def process_weights_after_loading(self, layer):
         from promix.quantize.mixed_linear import MixedQuantLinear
         from promix.quantize.weight_pack import PackedWeight
-        from promix.vllm_integ.kernels import load_kernels
+        from promix.vllm_integ.kernels import load_kernels, load_decode_gemv
         cd, qpf = load_kernels()
+        dg = load_decode_gemv()   # None when PROMIX_DECODE_GEMV=0
 
         N, K = layer.promix_N, layer.promix_K
         K_low, K_high = layer.promix_K_low, layer.promix_K_high
@@ -203,8 +204,21 @@ class PromixLinearMethod(LinearMethodBase):
             physSFB_lo=physSFB_lo,
             W_hi_bytes=W_hi, physSFB_hi=physSFB_hi,
             W_deq=None, bias=None, g_w=g)
+        # vllm-perf r1: decode-GEMV buffers, derived at load time (no exporter /
+        # checkpoint change). The GEMV streams the SAME packed code bytes the
+        # fused GEMM uses (checkpoint weight_lo_packed == nv.pack_fp4 == the
+        # GEMV's even-k-low-nibble layout; weight_hi_bytes is raw FP8), plus raw
+        # FP32 effective block scales with the per-tensor g folded in — exactly
+        # pack_weight_mixed's W_*_dec/S_*_dec recipe.
+        if dg is not None and K_high > 0:
+            packed.W_lo_dec = packed.W_lo_packed                     # shared bytes
+            packed.S_lo_dec = (layer.weight_lo_scale.data
+                               .view(torch.float8_e4m3fn).float() * g).contiguous()
+            packed.W_hi_dec = packed.W_hi_bytes                      # shared bytes
+            packed.S_hi_dec = (torch.exp2(
+                layer.weight_hi_scale.data.float() - 127.0) * g).contiguous()
         mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
-                               out_dtype=torch.float16, qpf=qpf)
+                               out_dtype=torch.float16, qpf=qpf, dg=dg)
         layer.promix_mql = mql.to(dev)
 
         if self.kind == "o_proj" and self.cfg.o_proj_reorder:
