@@ -88,6 +88,17 @@ split-K / stream-K in the fused glue (R3 lever, see §5).
   (silu_and_mul_nvfp4_quant / rms_norm_dynamic_per_token_quant custom ops + the
   rms_quant_fusion / act_quant_fusion compile passes, with file:line refs).
 
+## 3b. Secondary lever — 1-byte decode scales (probe: `r2_sf8_probe.json`)
+
+Built and wired behind `PROMIX_DECODE_SF8` (`decode_gemv_w4a16_sf8` / `_mb_sf8`: stream
+the checkpoint's raw E4M3/UE8M0 scale bytes, fold the per-tensor g in-kernel).
+**Bit-exact everywhere** (torch.equal vs the fp32-scale r1 kernels, all 8 shapes,
+M=1..16 — `float(E4M3)*g` and `ldexpf(g,e-127)` reproduce the precomputed fp32
+products exactly). **Measured SLOWER: 0.92-0.98x** under graph replay at M=1/2/4 on
+every shape — the in-kernel scale decode (E4M3 cvt, ldexpf) costs more than the ~18%
+low-segment byte saving; R1's "+8-12% decode-b1" estimate is REFUTED. DEFAULT-OFF;
+kernels + probe kept as the documented negative.
+
 ## 4. Numerics gates (3B, mandatory)
 
 | gate | result |
