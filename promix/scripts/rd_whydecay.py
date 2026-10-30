@@ -325,6 +325,25 @@ def run(mk, args):
 
     m, ring_map, order, dd = structure_metrics(stats)
     res["structure"] = m
+    if args.dump_dd:
+        vv = torch.cat([torch.as_tensor(stats[n]["ring_var"]).double()
+                        for n in sorted(stats)])
+        idx = order.tolist()
+        dump = dict(
+            model=mk, hf=config["model"]["name"], regime="dense-R-on",
+            ring_size=S, total_rings=int(dd.numel()),
+            note=("per-ring measured deltaD = mse_nvfp4 - mse_mxfp8, sorted "
+                  "descending; q/k/v share the attn input stream and gate/up "
+                  "share the mlp input stream, so their per-ring stats "
+                  "coincide within a layer"),
+            deltaD_sorted=[float(dd[i]) for i in idx],
+            ring_var=[float(vv[i]) for i in idx],
+            layer=[layer_idx(ring_map[i][0]) for i in idx],
+            proj_type=[ring_map[i][0].split(".")[-1] for i in idx],
+            ring_in_linear=[ring_map[i][1] for i in idx],
+        )
+        json.dump(dump, open(args.dump_dd, "w"))
+        print(f"[{mk}] dumped {dd.numel()} rings -> {args.dump_dd}", flush=True)
     print(f"[{mk}] STRUCTURE dd_gini={m['dd_gini']:.4f} "
           f"top1/32={m['dd_top1_32_share']*100:.1f}% top1/8={m['dd_top1_8_share']*100:.1f}% "
           f"CV={m['dd_cv']:.3f} rho={m['spearman_dd_var']:.4f} "
@@ -395,6 +414,9 @@ def main():
     ap.add_argument("--calib_samples", type=int, default=16)
     ap.add_argument("--ring_size", type=int, default=64)
     ap.add_argument("--structure_only", action="store_true")
+    ap.add_argument("--dump_dd", default=None,
+                    help="path to dump the full sorted per-ring deltaD "
+                         "spectrum (with layer/proj-type labels)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     run(args.model, args)
