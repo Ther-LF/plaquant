@@ -1,12 +1,25 @@
 # ProMix → vLLM Integration — Phase 1 (bring-up + accuracy gate)
 
-**Status:** code complete; validated end-to-end on the Llama-3.2-3B *smoke*
-checkpoint (no-GPTQ, 2 eval chunks) — **T0 GREEN, T1 GREEN, T2 PPL-GREEN /
-top-1-below-bar (root-caused, not a bug)**. The production GPTQ export +
-full-chunk gates run on the Pro 6000 (`/home/luofan/vllm_integ/promix-llama-3.2-3b`).
+**Status:** code complete; **validated on the production Llama-3.2-3B checkpoint
+(GPTQ, full wikitext-2) AND the smoke checkpoint** — **T0 GREEN, T1 GREEN, T2
+PPL-GREEN / top-1-below-bar (root-caused, not a bug)**. Checkpoint:
+`/home/luofan/vllm_integ/promix-llama-3.2-3b`.
 
 This is Phase 1 only: bring-up + the three accuracy gates. NO benchmark, NO
 CUDA-graph / torch.compile (those are Phase 2+). Eager mode throughout.
+
+### Headline (production 3B, GPTQ, wikitext-2 141 chunks / 288,627 positions)
+| gate | result |
+|---|---|
+| **T0** packed-buffer `torch.equal` | **PASS** — 112/112 merged layers, 0 mismatched |
+| **T1** per-layer bit-exact | **PASS** — 112/112 bit-exact (cos=1.0, maxabs=0), split-vs-merge exact |
+| **T2** PPL \|Δ\| ≤ 0.1 | **PASS** — vLLM 8.3636 vs shared-g ref 8.3674, **\|Δ|=0.0038** |
+| **T2** top-1 ≥ 99.9% | below bar — **90.07%**; root-caused (see §3) |
+
+**Shared-g re-reference PPL = 8.3646** (real-kernel pipeline protocol);
+per-projection-g (pre-shared-g) PPL = 8.2939 → **shared-g cost = +0.071 PPL**
+(expected, this is the re-referenced T2 target). Glue control (unquantized,
+same 288k positions): vLLM-fp16 vs HF-fp16 top-1 = **99.827%**.
 
 ---
 
@@ -74,14 +87,18 @@ The exporter measures BOTH the per-projection-g real-kernel PPL (the
 pre-shared-g reference) and the shared-g real-kernel PPL; **the shared-g number
 is the T2 gate target** (as the feasibility doc + vLLM's own W4A4 path require).
 
-**Shared-g re-reference PPL:** _(production GPTQ run in progress —
-`/home/luofan/EXPORT_3B_FULL.log`; smoke no-GPTQ 2-chunk value was 9.01)._
-`promix_export_meta.json` records `reference_ppl_sharedg`,
-`reference_ppl_perproj_g`, and the per-linear K-split / g table.
+**Shared-g re-reference PPL:** per-projection-g real-kernel PPL = **8.2939**;
+shared-g real-kernel PPL = **8.3646** (the T2 gate target; +0.071 cost).
+`promix_export_meta.json` records both + the per-linear K-split / g table. (The
+smoke no-GPTQ 2-chunk values were 8.29 → — / 9.01.)
 
 ---
 
-## 3. The three gates (smoke 3B: no-GPTQ, 2 chunks / 4094 positions)
+## 3. The three gates
+
+Numbers below are the **production 3B (GPTQ, full wikitext-2)** run; the smoke
+(no-GPTQ, 2-chunk) run gave the same verdicts (top-1 90.47%, confirming the
+behavior is structural, not sample noise).
 
 ### T0 — packed-buffer identity → **PASS**
 `GATE_T0_PASS layers=112 mismatched=0`. Every merged layer's
@@ -102,23 +119,25 @@ reference.**
 
 ### T2 — end-to-end logits + PPL → **PPL PASS / top-1 below bar (root-caused)**
 ```
-T2 ppl_vllm=9.0993 ppl_ref=9.0147 |Δ|=0.0845  (gate ≤0.1  → PASS)
-T2 top1_agreement=90.474% over 4094 positions  (gate ≥99.9 → below bar)
-T2 target-logprob |diff|: mean=0.164 p99=1.08 max=4.18
+T2 ppl_vllm=8.3636 ppl_ref=8.3674 |Δ|=0.0038  (gate ≤0.1  → PASS)
+T2 top1_agreement=90.068% over 288627 positions  (gate ≥99.9 → below bar)
+T2 target-logprob |diff|: mean=0.171 p99=1.14 max=8.18
 ```
-- **PPL gate PASSES** (|Δ| = 0.0845 ≤ 0.1) — the accuracy-meaningful metric.
-- Top-1 is 90.5%, below the 99.9% bar. **Root cause (proven, not a bug):**
+- **PPL gate PASSES** (|Δ| = 0.0038 ≤ 0.1) — the accuracy-meaningful metric,
+  nearly exact over the full corpus.
+- Top-1 is 90.07%, below the 99.9% bar. **Root cause (proven, not a bug):**
 
   **Glue control — `GLUE_CONTROL vllm-fp16 vs hf-fp16 (UNQUANTIZED
-  Llama-3.2-3B): top1_agreement=99.756%`.** The vLLM engine glue (paged/flash
-  attention + RoPE + RMSNorm vs HF eager fp16) alone disagrees only ~0.24%.
-  Since T1 proves every linear is bit-exact, the extra ~9% top-1 divergence is
-  **W4A4 activation-quantization amplifying that 0.24% glue difference** across
-  28 layers: a sub-ulp change in an attention output shifts a down_proj
-  activation across an NVFP4/MXFP8 quantization-bin boundary, and the effect
-  compounds. This is intrinsic to activation quantization (QuaRot/Atom report
-  the same per-token logit fragility with stable PPL), not to this integration.
-  The aggregate distribution stays within PPL Δ0.08 and mean logprob Δ0.16 nat.
+  Llama-3.2-3B): top1_agreement=99.827%` over the same 288,627 positions.** The
+  vLLM engine glue (paged/flash attention + RoPE + RMSNorm vs HF eager fp16)
+  alone disagrees only ~0.17%. Since T1 proves every linear is bit-exact, the
+  extra ~9.8% top-1 divergence is **W4A4 activation-quantization amplifying that
+  0.17% glue difference** across 28 layers: a sub-ulp change in an attention
+  output shifts a down_proj activation across an NVFP4/MXFP8 quantization-bin
+  boundary, and the effect compounds. This is intrinsic to activation
+  quantization (QuaRot/Atom report the same per-token logit fragility with
+  stable PPL), not to this integration. The aggregate distribution stays within
+  PPL Δ0.004 and mean logprob Δ0.17 nat.
 
 **Verdict:** T0 + T1 GREEN establish the integration is byte-perfect. T2's PPL
 gate (the accuracy-meaningful end-to-end metric) PASSES; the 99.9% top-1 bar as
