@@ -20,10 +20,10 @@ NVFP4 LOW segment of our dual-format weights:
 W4A16 numerics: like the shipped M<=4 GEMV routes, this path SKIPS activation
 quantization — the decode-route gate moves in the improvement direction (more
 accurate), it is NOT byte-identical to the W4A4 GEMM route. Prefill M never
-routes here (window capped at M=32).
+routes here (measured windows close by M=16; hi_add kernel bound M<=32).
 
 MEMORY COST (honest): the Marlin repack is a second copy of the low-segment
-weight bytes (~ +44% quantized-weight bytes; ~0.9 GiB on 8B) because the fused
+weight bytes (~ +44% quantized-weight bytes; measured 3.36 GiB on 8B — available KV 64.53 -> 61.17 GiB) because the fused
 prefill GEMM still needs the original packed layout. PROMIX_MARLIN=0 skips the
 prepack and the route entirely.
 """
