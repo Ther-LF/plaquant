@@ -43,6 +43,21 @@ def decode_mode():
     return os.environ.get("PROMIX_DECODE_MODE", "w4a16").strip().lower()
 
 
+# vllm-perf round-1: largest flattened batch M routed through the decode GEMV.
+# vLLM CUDA-graph capture pads decode batches to fixed sizes, so inside each
+# captured graph M is static and this Python-side branch is capture-safe (the
+# branch is evaluated once per captured size, never on-device). M=1 uses the
+# round-12 single-row kernel; 2 <= M <= PROMIX_DECODE_M_MAX uses the batched
+# W4A16 GEMV (decode_gemv_w4a16_mb), which amortizes the same packed weight
+# stream over all M rows. Set PROMIX_DECODE_M_MAX=1 to restore the round-12
+# M=1-only behavior; larger M always runs the fused tensor-core GEMM.
+def decode_m_max():
+    try:
+        return int(os.environ.get("PROMIX_DECODE_M_MAX", "16"))
+    except ValueError:
+        return 16
+
+
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
@@ -129,6 +144,17 @@ class MixedQuantLinear(nn.Module):
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
+        # batched (M>1) decode GEMV rows/block: w32 won the vllm-perf r1 sweep on
+        # every shape at M>=2 (amortizes the shared activation staging hardest).
+        self._dec_warps_mb = 32
+        # Per-shape batched-decode crossover vs the fused tensor-core GEMM,
+        # measured by promix/vllm_integ/decode_probe.py on RTX Pro 6000 (r1):
+        # GEMV wins at M<=4 on EVERY shape (1.2-3.2x); at M<=8 on mid-size
+        # weights; at M<=16 only on the smallest (<16M packed elems). The GEMV
+        # cost grows ~linearly in M (LDS/FMA-bound per row) while the fused GEMM
+        # is ~flat below its 128-row tile, hence the N*K-dependent crossover.
+        nk = self.N * self.K
+        self._dec_m_max_shape = 16 if nk <= 16e6 else (8 if nk <= 32e6 else 4)
         # Set by wire_real_kernel when cd_bias is wired AND the epilogue-eligible
         # prefill path may use it (i.e. a real fp16 bias exists to fold).
         self.bias_in_epilogue = (cd_bias is not None)
@@ -249,8 +275,20 @@ class MixedQuantLinear(nn.Module):
         # Pure-NVFP4 (K_high==0) has no decode-GEMV (its weight-high buffers are
         # empty); route M==1 through the single-phase prefill GEMM (correct, just
         # not the bandwidth-optimized decode kernel).
-        if self._dg is not None and M == 1 and not self.is_pure_nvfp4:
-            D = self._decode_gemv(x2d)             # memory-bound W4A4 GEMV (decode)
+        use_dec = (self._dg is not None and not self.is_pure_nvfp4
+                   and self.W_lo_dec is not None)
+        if use_dec and M == 1:
+            D = self._decode_gemv(x2d)             # memory-bound M=1 GEMV (decode)
+        elif (use_dec and 1 < M <= min(decode_m_max(), self._dec_m_max_shape)
+              and decode_mode() == "w4a16"
+              and hasattr(self._dg, "decode_gemv_w4a16_mb")):
+            # vllm-perf r1: batched weight-only W4A16 GEMV for captured decode
+            # batch sizes (M static per CUDA graph). w4a4 mode has no batched
+            # GEMV — it falls through to the fused W4A4 tensor-core GEMM.
+            D = self._dg.decode_gemv_w4a16_mb(
+                x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
+                self.W_hi_dec, self.S_hi_dec,
+                self.N, self.K_low, self.K_high, self._dec_warps_mb)
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
             return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)

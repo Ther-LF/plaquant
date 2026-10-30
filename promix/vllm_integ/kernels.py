@@ -56,3 +56,22 @@ def load_kernels():
                verbose=False)
     _cache["cd"], _cache["qpf"] = cd, qpf
     return cd, qpf
+
+
+def load_decode_gemv():
+    """Decode GEMV ext (vllm-perf r1): weight-only W4A16 / legacy W4A4 GEMVs for
+    small-M (captured decode batch) steps. Returns None when disabled via
+    PROMIX_DECODE_GEMV=0 (restores the Phase-2/3 all-M fused-GEMM behavior).
+    Cached per process; same build env as load_kernels."""
+    if os.environ.get("PROMIX_DECODE_GEMV", "1") == "0":
+        return None
+    if "dg" in _cache:
+        return _cache["dg"]
+    load_kernels()  # ensures TORCH_CUDA_ARCH_LIST / TORCH_EXTENSIONS_DIR are set
+    from torch.utils.cpp_extension import load
+    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    dg = load(name="decode_gemv_ext",
+              sources=[os.path.join(KERN, "decode_gemv_ext.cu")],
+              extra_cuda_cflags=flags, verbose=False)
+    _cache["dg"] = dg
+    return dg
