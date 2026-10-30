@@ -39,6 +39,7 @@ from vllm.model_executor.layers.linear import (
     LinearBase,
     LinearMethodBase,
     UnquantizedLinearMethod,
+    register_weight_loader_v2_supported_method,
 )
 from vllm.model_executor.layers.quantization import register_quantization_config
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
@@ -115,6 +116,7 @@ class PromixConfig(QuantizationConfig):
         return None                            # embeddings / attention / rest
 
 
+@register_weight_loader_v2_supported_method
 class PromixLinearMethod(LinearMethodBase):
     def __init__(self, cfg: PromixConfig, key: str):
         self.cfg = cfg
