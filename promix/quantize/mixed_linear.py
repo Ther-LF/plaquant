@@ -83,11 +83,32 @@ _SMALLM_TABLE = {
     (4096, 14336): (32, 256),
 }
 
+# vllm-perf r3 lever 1: measured split-K/stream-K windows. Keyed by (N, K);
+# value = (m_lo, m_hi, cfg, splits, decomp) for cd_splitk_ext's
+# fused_gemm_prepacked_sk, from promix/vllm_integ/splitk_probe.py under
+# CUDA-graph replay on RTX Pro 6000 (r3_splitk_probe.json). decomp: 1=split-K
+# with `splits`, 2=stream-K. Inside the window split-K takes priority over the
+# r2 small-M table (it beat cfg1 there by the measured margins); outside both
+# windows the shipping 128x128 config runs. NUMERICS: the FP32 partial sums
+# are reduced in a different (deterministic) order than the serial mainloop ->
+# NOT torch.equal, cosine ~1.0 (gated by splitk_probe + the T2 decode-route
+# gate). The prefill path (large M) never routes here, so the T2 prefill gate
+# stays byte-identical.
+_SPLITK_TABLE = {}
+
+
+def _splitk_env_scale():
+    """PROMIX_SPLITK_MMAX caps the split-K window (0 disables routing)."""
+    try:
+        return int(os.environ.get("PROMIX_SPLITK_MMAX", "1024"))
+    except ValueError:
+        return 1024
+
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
-                 cd_sm=None):
+                 cd_sm=None, cd_sk=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -174,6 +195,12 @@ class MixedQuantLinear(nn.Module):
         # Config per (shape, M) measured by promix/vllm_integ/gemm_probe.py
         # under CUDA-GRAPH REPLAY timing (r1 lesson) — see _smallm_cfg.
         self._cd_sm = cd_sm
+        # vllm-perf r3 lever 1: split-K/stream-K fused-GEMM ext (cd_splitk_ext).
+        # At M<=16 (decode b8/b16) the serial-K mainloop on N/128..N/64 CTAs is
+        # the structural latency floor (r2); split-K partitions the union
+        # [NV|MX] k-tile domain across CTAs and reduces once. Routed by the
+        # measured _SPLITK_TABLE windows.
+        self._cd_sk = cd_sk
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -307,6 +334,18 @@ class MixedQuantLinear(nn.Module):
             return 1    # 128x64 NV4/MX2
         return None
 
+    def _splitk_cfg(self, M):
+        """vllm-perf r3: pick a cd_splitk_ext (cfg, splits, decomp) for
+        GEMM-routed M, or None. Measured per shape x M under CUDA-graph replay
+        (splitk_probe) — see _SPLITK_TABLE. M is static per captured vLLM CUDA
+        graph, so the branch is capture-safe (r1 pattern)."""
+        if self._cd_sk is None or self.is_pure_nvfp4:
+            return None
+        win = _SPLITK_TABLE.get((self.N, self.K))
+        if win is not None and win[0] <= M <= min(win[1], _splitk_env_scale()):
+            return win[2], win[3], win[4]
+        return None
+
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
@@ -327,8 +366,19 @@ class MixedQuantLinear(nn.Module):
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 self.bias, M, self.N, self.K_low, self.K_high, self.g_w)
+        skc = self._splitk_cfg(M)
         cfg = self._smallm_cfg(M)
-        if cfg is not None:
+        if skc is not None:
+            # vllm-perf r3 lever 1: K split across CTAs + one FP32 workspace
+            # reduction (deterministic). Same prepacked SF buffers (the SF atom
+            # depends only on SFVecSize). Cosine~1 vs serial (reduction order),
+            # gated by splitk_probe + T2 decode-route.
+            D = self._cd_sk.fused_gemm_prepacked_sk(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                M, self.N, self.K_low, self.K_high, self.g_w,
+                skc[0], skc[1], skc[2])
+        elif cfg is not None:
             # vllm-perf r2 lever 1: small-M tile config (same math, same prepacked
             # SF buffers — the interleaved SF atom depends only on SFVecSize, not
             # tile; torch.equal-gated vs the shipping kernel by gemm_probe).

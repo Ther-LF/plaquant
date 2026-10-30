@@ -107,6 +107,18 @@ def load_splitk():
     return _load_ext("sk", "cd_splitk_ext.cu")
 
 
+def load_norm_pack():
+    """vllm-perf r3 lever 2: fused vLLM-RMSNorm + NVFP4/MXFP8 quant/pack
+    producer (vllm_rms_quant_pack_ext). The norm stage is a bit-exact replica
+    of vLLM's fused_add_rms_norm CUDA kernel (same vec8 loops, cub BlockReduce,
+    block-size rule), the pack stage is the verbatim qpf device code — so the
+    norm->pack fusion pass is bit-invisible end-to-end. Must carry the same
+    act-MSE flags as qpf. Disabled via PROMIX_NORM_FUSE=0."""
+    if os.environ.get("PROMIX_NORM_FUSE", "1") == "0":
+        return None
+    return _load_ext("vrq", "vllm_rms_quant_pack_ext.cu", extra_flags=act_mse_cflags())
+
+
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
     the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).
