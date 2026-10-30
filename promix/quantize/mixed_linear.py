@@ -109,6 +109,35 @@ _SPLITK_TABLE = {
     (28672, 4096): [(8, 256, 0, 1, 0)],
 }
 
+# vllm-perf r4 lever 1: Marlin W4A16 tensor-core small-M windows. Keyed by
+# (N, K); value = inclusive [m_lo, m_hi] window where the Marlin fp4 low-GEMM
+# + decode_gemv_w8a16_hi_add high-companion route beats the best W4A4 GEMM
+# route (r2 small-M cfg + r3 split-K tables INCLUDED in the baseline, plus its
+# qpfm pack + fp16 cast), measured by promix/vllm_integ/marlin_probe.py under
+# CUDA-graph replay on RTX Pro 6000. Routing additionally requires
+# !gemv_route(M) (M<=4 stays on the bit-proven GEMV paths) and M <= 32 (the
+# hi_add kernel bound; prefill M never routes here). W4A16 numerics: the
+# activation is NOT quantized on this route (same class as the GEMV routes —
+# decode-route PPL moves in the improvement direction; T2-decode gated).
+_MARLIN_TABLE = {
+    (5120, 3072): (8, 32),      # 3B qkv
+    (3072, 3072): (8, 32),      # 3B o
+    (16384, 3072): (8, 32),     # 3B gate_up
+    (3072, 8192): (8, 32),      # 3B down
+    (6144, 4096): (8, 32),      # 8B qkv
+    (4096, 4096): (8, 32),      # 8B o
+    (28672, 4096): (8, 32),     # 8B gate_up
+    (4096, 14336): (8, 32),     # 8B down
+}
+
+
+def _marlin_env_mmax():
+    """PROMIX_MARLIN_MMAX caps the Marlin window (0 disables routing)."""
+    try:
+        return int(os.environ.get("PROMIX_MARLIN_MMAX", "32"))
+    except ValueError:
+        return 32
+
 
 def _splitk_env_scale():
     """PROMIX_SPLITK_MMAX caps the split-K window (0 disables routing)."""
@@ -214,6 +243,12 @@ class MixedQuantLinear(nn.Module):
         # [NV|MX] k-tile domain across CTAs and reduces once. Routed by the
         # measured _SPLITK_TABLE windows.
         self._cd_sk = cd_sk
+        # vllm-perf r4 lever 1: Marlin W4A16 small-M route state (MarlinLow from
+        # promix.vllm_integ.marlin_w4a16, attached by the vLLM plugin via
+        # attach_marlin). Routed by the measured _MARLIN_TABLE windows; takes
+        # priority over the W4A4 GEMM tables inside its window.
+        self._marlin = None
+        self._marlin_win = None
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -438,6 +473,11 @@ class MixedQuantLinear(nn.Module):
                         x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
                         self.W_hi_dec, self.S_hi_dec,
                         self.N, self.K_low, self.K_high, self._dec_warps_mb)
+        elif self.marlin_route(M):
+            # vllm-perf r4 lever 1: Marlin W4A16 tensor-core route (M=8..32).
+            # Weight-only like the GEMV routes (activation consumed exactly);
+            # fp16 output already — only bias remains.
+            D = self._marlin_forward(x2d.contiguous())
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
             return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
@@ -492,6 +532,53 @@ class MixedQuantLinear(nn.Module):
         return (1 < M <= min(decode_m_max(), self._dec_m_max_shape)
                 and decode_mode() == "w4a16"
                 and hasattr(self._dg, "decode_gemv_w4a16_mb"))
+
+    def attach_marlin(self, marlin_low, hi_warps=16):
+        """vllm-perf r4 lever 1: attach the load-time Marlin repack of the low
+        segment (promix.vllm_integ.marlin_w4a16.MarlinLow). The high segment
+        rides decode_gemv_w8a16_hi_add on the decode-GEMV fp32 scale buffers,
+        so the route additionally requires dg + fp32 S_hi_dec (default loader
+        config; the opt-in sf8 experiment keeps uint8 scales and skips Marlin)."""
+        if (self._dg is None or self.is_pure_nvfp4 or self.S_hi_dec is None
+                or self.S_hi_dec.dtype != torch.float32
+                or not hasattr(self._dg, "decode_gemv_w8a16_hi_add")):
+            return False
+        self._marlin = marlin_low
+        self._marlin_win = _MARLIN_TABLE.get((self.N, self.K))
+        self._marlin_hi_warps = int(hi_warps)
+        return True
+
+    def marlin_route(self, M):
+        """True iff forward(x) at this flattened M takes the Marlin W4A16
+        tensor-core route (r4 lever 1). Window = measured _MARLIN_TABLE, minus
+        the GEMV routes (which keep priority at M<=4). M is static per captured
+        vLLM CUDA graph, so the branch is capture-safe (r1 pattern)."""
+        if self._marlin is None or self._marlin_win is None:
+            return False
+        if self.gemv_route(M):
+            return False
+        m_lo, m_hi = self._marlin_win
+        return m_lo <= M <= min(m_hi, _marlin_env_mmax())
+
+    def _marlin_forward(self, x2d):
+        """W4A16 small-M route: Marlin fp4 GEMM on the low columns + in-place
+        MXFP8 high-segment add. x2d: contiguous (M, K) fp16/bf16/fp32. Returns
+        fp16 (M, N). The activation is consumed EXACTLY (no quantization)."""
+        xh = x2d if x2d.dtype == torch.float16 else x2d.to(torch.float16)
+        x_lo = xh[:, :self.K_low].contiguous()
+        Y = self._marlin.gemm(x_lo)
+        self._dg.decode_gemv_w8a16_hi_add(
+            Y, xh, self.W_hi_dec, self.S_hi_dec,
+            self.N, self.K_low, self.K_high, self._marlin_hi_warps)
+        return Y
+
+    def fp16_route(self, M):
+        """True iff forward(x) at this M consumes the RAW fp16 activation (GEMV
+        or Marlin W4A16 routes) rather than the quantize+pack GEMM route. Used
+        by the vLLM plugin: fp16 routes need the torch Hadamard (down_proj) /
+        torch gather (o_proj) to run first, while the GEMM route uses the fused
+        pack producers instead."""
+        return self.gemv_route(M) or self.marlin_route(M)
 
     def can_had_pack(self):
         """True iff forward_had_pack is available for this Linear's K."""

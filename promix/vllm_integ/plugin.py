@@ -264,6 +264,24 @@ class PromixLinearMethod(LinearMethodBase):
                                had28=None if had_K is None else had_K.cpu())
         layer.promix_mql = mql.to(dev)
 
+        # vllm-perf r4 lever 1: Marlin W4A16 small-M route — repack the low
+        # segment into vLLM's Marlin fp4 layout ONCE at load (tile-interleaved
+        # qweight + S0E5M3 scales + folded global scale). Honest memory cost: a
+        # second copy of the low-segment weight bytes (the fused prefill GEMM
+        # keeps the original layout). PROMIX_MARLIN=0 disables (and skips the
+        # memory). Routed by the measured _MARLIN_TABLE windows (M=8..32).
+        from promix.vllm_integ.marlin_w4a16 import marlin_enabled, prepack_marlin_low
+        if marlin_enabled() and dg is not None and K_high > 0:
+            try:
+                ml = prepack_marlin_low(packed.W_lo_packed,
+                                        layer.weight_lo_scale.data.contiguous(),
+                                        g, N, K_low)
+                if not layer.promix_mql.attach_marlin(ml):
+                    logger.info("promix %s: marlin route unavailable (sf8/dg)", self.key)
+            except Exception as e:
+                logger.warning("promix %s: marlin prepack failed (%r) — "
+                               "W4A4 GEMM route kept", self.key, e)
+
         if self.kind == "o_proj" and self.cfg.o_proj_reorder:
             layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
             # vllm-perf r3 lever 3: int32 copy for the gather-folded qpfm pack
@@ -295,7 +313,7 @@ class PromixLinearMethod(LinearMethodBase):
             # activation, so they keep the torch Hadamard. M is static per
             # captured CUDA graph (r1), so this branch is capture-safe.
             M = x.numel() // x.shape[-1]
-            if mql.can_had_pack() and not mql.gemv_route(M):
+            if mql.can_had_pack() and not mql.fp16_route(M):
                 return mql.forward_had_pack(x)
             from promix.quantize.hadamard import matmul_hadU_cuda
             x_dtype = x.dtype
@@ -309,7 +327,7 @@ class PromixLinearMethod(LinearMethodBase):
             # (r1), so this branch is capture-safe.
             M = x.numel() // x.shape[-1]
             if (getattr(layer, "promix_col_order_i32", None) is not None
-                    and mql.can_gather_pack() and not mql.gemv_route(M)):
+                    and mql.can_gather_pack() and not mql.fp16_route(M)):
                 return mql.forward_gather_pack(x, layer.promix_col_order_i32)
             x = x[..., layer.promix_col_order]
         return mql(x)

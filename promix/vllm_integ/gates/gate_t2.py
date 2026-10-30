@@ -38,6 +38,12 @@ def main():
                          "(W4A16 = activation-quant OFF, so PPL is expected to "
                          "IMPROVE vs the W4A4 shared-g reference; report the "
                          "delta either way). 0 = normal prefill-path gate.")
+    ap.add_argument("--kv-cache-dtype", default=None,
+                    help="vllm-perf r4 lever 2: pass kv_cache_dtype to the "
+                         "engine (e.g. fp8 — scales default 1.0, no checkpoint "
+                         "calibration). The reference is fp16-KV, so the gate "
+                         "reports the SIGNED dPPL of the KV quantization; "
+                         "|d|<=0.1 is the clause.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -57,6 +63,8 @@ def main():
         llm_kw = dict(max_num_batched_tokens=args.decode_route_m,
                       max_num_seqs=max(1, min(args.decode_route_m, 8)),
                       enable_chunked_prefill=True)
+    if args.kv_cache_dtype:
+        llm_kw["kv_cache_dtype"] = args.kv_cache_dtype
     llm = build_llm(args.ckpt, max_model_len=S + 128,
                     enforce_eager=not args.graphs, **llm_kw)
     from vllm import SamplingParams, TokensPrompt
@@ -112,6 +120,7 @@ def main():
     with open(out, "w") as f:
         json.dump({"verdict": verdict, "graphs": args.graphs,
                    "decode_route_m": args.decode_route_m,
+                   "kv_cache_dtype": args.kv_cache_dtype,
                    "ppl_vllm": ppl_vllm, "ppl_ref": ppl_ref,
                    "dppl": dppl, "dppl_signed": ppl_vllm - ppl_ref,
                    "top1_agreement_pct": agree_pct,
