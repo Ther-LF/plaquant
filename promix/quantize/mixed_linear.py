@@ -60,7 +60,8 @@ def decode_m_max():
 
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
-                 qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
+                 qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
+                 cd_sm=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -141,6 +142,12 @@ class MixedQuantLinear(nn.Module):
         # memory on first call). Only used by forward_swiglu_pack when K==14336.
         self._hpk28 = hpk28
         self._had28 = had28
+        # vllm-perf r2 lever 1: small-M fused-GEMM config ext (cd_smallm_ext).
+        # The shipping 128x128 NV4/MX2 config leaves most SMs idle below its
+        # 128-row M tile (N/128 CTAs); the 128x64 tiles double the CTA count.
+        # Config per (shape, M) measured by promix/vllm_integ/gemm_probe.py
+        # under CUDA-GRAPH REPLAY timing (r1 lesson) — see _smallm_cfg.
+        self._cd_sm = cd_sm
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -245,6 +252,15 @@ class MixedQuantLinear(nn.Module):
         a_hi = self._cd.quant_pack_fp8(bytes_hi, SFA_hi, M, self.N, self.K_high, True)
         return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
 
+    def _smallm_cfg(self, M):
+        """vllm-perf r2: pick a cd_smallm_ext config for GEMM-routed small M, or
+        None for the shipping 128x128 kernel. Measured per shape x M under
+        CUDA-graph replay (gemm_probe): placeholder until the probe lands —
+        finalized table is encoded below."""
+        if self._cd_sm is None or M > 512:
+            return None
+        return 1    # 128x64 NV4/MX2 (r24 small-M winner); refined post-probe
+
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
@@ -265,11 +281,21 @@ class MixedQuantLinear(nn.Module):
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 self.bias, M, self.N, self.K_low, self.K_high, self.g_w)
-        D = self._cd.fused_gemm_prepacked(
-            A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
-            A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-            M, self.N, self.K_low, self.K_high, self.g_w,
-        )
+        cfg = self._smallm_cfg(M)
+        if cfg is not None:
+            # vllm-perf r2 lever 1: small-M tile config (same math, same prepacked
+            # SF buffers — the interleaved SF atom depends only on SFVecSize, not
+            # tile; torch.equal-gated vs the shipping kernel by gemm_probe).
+            D = self._cd_sm.fused_gemm_prepacked_cfg(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                M, self.N, self.K_low, self.K_high, self.g_w, cfg)
+        else:
+            D = self._cd.fused_gemm_prepacked(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                M, self.N, self.K_low, self.K_high, self.g_w,
+            )
         D = D.to(self.out_dtype)
         if self.bias is not None:
             D = D + self.bias.to(D.dtype)
@@ -283,20 +309,17 @@ class MixedQuantLinear(nn.Module):
         # Pure-NVFP4 (K_high==0) has no decode-GEMV (its weight-high buffers are
         # empty); route M==1 through the single-phase prefill GEMM (correct, just
         # not the bandwidth-optimized decode kernel).
-        use_dec = (self._dg is not None and not self.is_pure_nvfp4
-                   and self.W_lo_dec is not None)
-        if use_dec and M == 1:
-            D = self._decode_gemv(x2d)             # memory-bound M=1 GEMV (decode)
-        elif (use_dec and 1 < M <= min(decode_m_max(), self._dec_m_max_shape)
-              and decode_mode() == "w4a16"
-              and hasattr(self._dg, "decode_gemv_w4a16_mb")):
-            # vllm-perf r1: batched weight-only W4A16 GEMV for captured decode
-            # batch sizes (M static per CUDA graph). w4a4 mode has no batched
-            # GEMV — it falls through to the fused W4A4 tensor-core GEMM.
-            D = self._dg.decode_gemv_w4a16_mb(
-                x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
-                self.W_hi_dec, self.S_hi_dec,
-                self.N, self.K_low, self.K_high, self._dec_warps_mb)
+        if self.gemv_route(M):
+            if M == 1:
+                D = self._decode_gemv(x2d)         # memory-bound M=1 GEMV (decode)
+            else:
+                # vllm-perf r1: batched weight-only W4A16 GEMV for captured decode
+                # batch sizes (M static per CUDA graph). w4a4 mode has no batched
+                # GEMV — it falls through to the fused W4A4 tensor-core GEMM.
+                D = self._dg.decode_gemv_w4a16_mb(
+                    x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
+                    self.W_hi_dec, self.S_hi_dec,
+                    self.N, self.K_low, self.K_high, self._dec_warps_mb)
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
             return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
@@ -336,6 +359,50 @@ class MixedQuantLinear(nn.Module):
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._hpk.hadamard_swiglu_pack_mixed(
                 g2d, u2d, M, self.N, self.K_low, self.K_high)
         return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
+
+    def gemv_route(self, M):
+        """True iff forward(x) at this flattened M takes a decode-GEMV route.
+        Used by the vLLM plugin for down_proj: the GEMV consumes an fp16
+        activation (so the torch Hadamard must run first), while the GEMM route
+        can use the fused Hadamard+pack producer instead."""
+        use_dec = (self._dg is not None and not self.is_pure_nvfp4
+                   and self.W_lo_dec is not None)
+        if not use_dec:
+            return False
+        if M == 1:
+            return True
+        return (1 < M <= min(decode_m_max(), self._dec_m_max_shape)
+                and decode_mode() == "w4a16"
+                and hasattr(self._dg, "decode_gemv_w4a16_mb"))
+
+    def can_had_pack(self):
+        """True iff forward_had_pack is available for this Linear's K."""
+        if self.is_pure_nvfp4:
+            return False
+        if self.K == 8192:
+            return self._hpk is not None and hasattr(self._hpk, "hadamard_pack_mixed")
+        if self.K == 14336:
+            return (self._hpk28 is not None and self._had28 is not None
+                    and hasattr(self._hpk28, "hadamard28_pack_mixed"))
+        return False
+
+    def forward_had_pack(self, x):
+        """vllm-perf r2 lever 2: down_proj GEMM-route entry — fused online
+        Hadamard + NVFP4/MXFP8 quant/pack in ONE kernel (replaces the
+        fast_hadamard_transform launch + fp16 [M,K] HBM round-trip + the pack
+        launches). The Hadamard runs in fp32 with the reference library's
+        fp32-trait stage order (the hpk gate), vs the current torch path's
+        fp16-input library call — numerically tighter, gated by cosine + PPL.
+        Caller must have checked can_had_pack() and not gemv_route(M)."""
+        in_shape = x.shape
+        x2d = x.reshape(-1, self.K).contiguous()
+        M = x2d.shape[0]
+        if self.K == 14336:
+            A = self._hpk28.hadamard28_pack_mixed(
+                x2d, self._had28, M, self.N, self.K_low, self.K_high)
+        else:
+            A = self._hpk.hadamard_pack_mixed(x2d, M, self.N, self.K_low, self.K_high)
+        return self._gemm(A[0], A[1], A[2], A[3], M).reshape(*in_shape[:-1], self.N)
 
     def pack_only(self, x):
         """Timing seam: run just the per-forward activation quant+pack (no GEMM)."""

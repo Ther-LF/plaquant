@@ -269,7 +269,10 @@ __device__ __forceinline__ void transform_512(float x_vals[4][4]) {
 //   (A 512-thread + fp16-reshuffle + coalesced-had28 variant was tried and was ~2x
 //   SLOWER — at the forced 1 CTA/SM the extra threads/sync/second-pass hurt ILP.)
 // ===================================================================================
-template <class TIn, class LayoutSF4, class LayoutSF8>
+// SWIGLU=false (vllm-perf r2): phase 0 loads an ALREADY-ACTIVATED row x (the
+// vLLM down_proj input is SiluAndMul output); `up` ignored. Transform/pack
+// phases byte-identical.
+template <class TIn, class LayoutSF4, class LayoutSF8, bool SWIGLU = true>
 __global__ __launch_bounds__(kH28Threads)
 void hadamard28_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ sf_lo,
                             LayoutSF4 layout4,
@@ -285,9 +288,9 @@ void hadamard28_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__
   const int warp = tid >> 5, lane = tid & 31;
   const long rowoff = (long)r * I;
 
-  // ---- phase 0+1: SwiGLU + H_512 + scale, per group, into smem ----------------
+  // ---- phase 0+1: SwiGLU (or plain load) + H_512 + scale, per group, into smem --
   const TIn* gr = gate + rowoff;
-  const TIn* ur = up + rowoff;
+  const TIn* ur = SWIGLU ? up + rowoff : nullptr;
 #pragma unroll
   for (int gi = 0; gi < 4; ++gi) {
     const int g = warp + gi * kH28Warps;
@@ -300,11 +303,15 @@ void hadamard28_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__
       const int goff = gbase + col;                 // global column in the 14336 row
 #pragma unroll
       for (int i = 0; i < 4; ++i) {
-        const float gf = to_float_28(gr[goff + i]);
-        const float uf = to_float_28(ur[goff + i]);
-        const float sv = __fdiv_rn(gf, 1.0f + expf(-gf));  // ATen SiLU (fp32)
-        const float sb = round_28(sv, TIn{});               // rounded SiLU output
-        x_vals[c][i] = round_28(sb * uf, TIn{});            // rounded product
+        if constexpr (SWIGLU) {
+          const float gf = to_float_28(gr[goff + i]);
+          const float uf = to_float_28(ur[goff + i]);
+          const float sv = __fdiv_rn(gf, 1.0f + expf(-gf));  // ATen SiLU (fp32)
+          const float sb = round_28(sv, TIn{});               // rounded SiLU output
+          x_vals[c][i] = round_28(sb * uf, TIn{});            // rounded product
+        } else {
+          x_vals[c][i] = to_float_28(gr[goff + i]);
+        }
       }
     }
     transform_512(x_vals);
@@ -415,6 +422,60 @@ std::vector<torch::Tensor> hadamard28_swiglu_pack_mixed(torch::Tensor gate, torc
   return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t};
 }
 
+// vllm-perf r2: fused Hadamard(28x512) + quant/pack of an ALREADY-ACTIVATED row
+// (the vLLM down_proj input is SiluAndMul output). SWIGLU=false phase 0.
+std::vector<torch::Tensor> hadamard28_pack_mixed(torch::Tensor x, torch::Tensor had28,
+                                                 int64_t M, int64_t N_gemm, int64_t K_low,
+                                                 int64_t K_high) {
+  TORCH_CHECK(x.is_cuda(), "x must be CUDA");
+  TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
+  TORCH_CHECK(K_low + K_high == kGroups * kGroupN, "K_low+K_high must be 14336");
+  TORCH_CHECK(K_low % 32 == 0, "K_low % 32 (MXFP8 block alignment vs 512-group)");
+  TORCH_CHECK(K_high % 32 == 0 || K_high == 0, "K_high % 32");
+  TORCH_CHECK(had28.is_cuda() == false || had28.is_cpu(), "had28 provided on cpu");
+
+  auto had28_cpu = had28.to(torch::kCPU).to(torch::kFloat32).contiguous();
+  TORCH_CHECK(had28_cpu.numel() == 28 * 28, "had28 must be 28x28");
+  init_grids_once_28(had28_cpu.data_ptr<float>());
+
+  int Mi = (int)M, Ni = (int)N_gemm, Klo = (int)K_low, Khi = (int)K_high;
+  auto dev = x.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
+  auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi > 0 ? Khi : 32, 1));
+  auto code_lo_t = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
+  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto code_hi_t = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
+  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  const float scale = 1.0f / std::sqrt((float)(kGroups * kGroupN));   // 1/sqrt(14336)
+
+  constexpr int kSmemBytes = kGroups * kTsStride * (int)sizeof(float);  // ~56.1 KB
+  auto st = x.scalar_type();
+#define LAUNCH_H28X(TY)                                                                     \
+  do {                                                                                      \
+    auto kernel = &hadamard28_pack_kernel<TY, decltype(layout4), decltype(layout8), false>; \
+    static bool attr_set = false;                                                           \
+    if (!attr_set) {                                                                        \
+      h28_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
+                                          kSmemBytes), "h28x smem attr");                    \
+      attr_set = true;                                                                       \
+    }                                                                                        \
+    dim3 grid((unsigned)Mi, 1, 1);                                                           \
+    kernel<<<grid, kH28Threads, kSmemBytes, stream>>>(                                       \
+        code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,                 \
+        code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,                 \
+        reinterpret_cast<const TY*>(x.data_ptr()), nullptr, Klo, Khi, scale);                \
+  } while (0)
+  if (st == torch::kFloat16)       LAUNCH_H28X(half);
+  else if (st == torch::kBFloat16) LAUNCH_H28X(__nv_bfloat16);
+  else TORCH_CHECK(false, "hadamard28_pack_mixed: x must be float16/bfloat16");
+#undef LAUNCH_H28X
+  h28_check_cuda(cudaGetLastError(), "hadamard28_pack_x launch");
+  code_lo_t = code_lo_t.view({Mi, Klo / 2});
+  code_hi_t = code_hi_t.view({Mi, Khi});
+  return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t};
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("hadamard28_swiglu_pack_mixed", &hadamard28_swiglu_pack_mixed,
         "FUSED silu(gate)*up -> Hadamard(28x512)/sqrt(14336) (fp32, SMEM) -> fp16 -> "
@@ -423,4 +484,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("gate"), pybind11::arg("up"), pybind11::arg("had28"),
         pybind11::arg("M"), pybind11::arg("N_gemm"), pybind11::arg("K_low"),
         pybind11::arg("K_high"));
+  m.def("hadamard28_pack_mixed", &hadamard28_pack_mixed,
+        "FUSED Hadamard(28x512)/sqrt(14336) (fp32, SMEM) -> fp16 -> NVFP4+MXFP8 pack of an "
+        "already-activated row x (vLLM down_proj input); same returns as the SwiGLU entry",
+        pybind11::arg("x"), pybind11::arg("had28"), pybind11::arg("M"),
+        pybind11::arg("N_gemm"), pybind11::arg("K_low"), pybind11::arg("K_high"));
 }
