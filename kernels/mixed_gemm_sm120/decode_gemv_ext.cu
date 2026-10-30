@@ -1108,7 +1108,7 @@ torch::Tensor decode_gemv_w4a16_mb_sf8(torch::Tensor x, torch::Tensor Wlo, torch
 // high columns (row stride K, offset Klow), so no x_hi slice copy is needed.
 // ============================================================================
 template <int WARPS, int MB, typename AT>
-__global__ void gemv_w8a16_hi_add(
+__global__ void __launch_bounds__(WARPS * 32) gemv_w8a16_hi_add(
     const AT* __restrict__ x,                // (M, K) raw activation, row-major
     const uint8_t* __restrict__ Whi, const float* __restrict__ Shi,
     __half* __restrict__ Y,                  // (M, N) fp16 Marlin output, updated in place
@@ -1203,7 +1203,8 @@ static void dispatch_hi_add(const AT* xptr, torch::Tensor Whi, torch::Tensor Shi
   if      (M <= 4)  dispatch_hi_add_w<4>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
   else if (M <= 8)  dispatch_hi_add_w<8>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
   else if (M <= 16) dispatch_hi_add_w<16>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
-  else              dispatch_hi_add_w<32>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
+  else              dispatch_hi_add_w<32>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s,
+                                          warps > 16 ? 16 : warps);
 }
 
 torch::Tensor decode_gemv_w8a16_hi_add(torch::Tensor Y, torch::Tensor x,
