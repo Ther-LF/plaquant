@@ -127,14 +127,22 @@ _SPLITK_TABLE = {
 # in M (it is the batched-GEMV weakness in miniature), so every window closes
 # by M=16-24 even though the Marlin low GEMM stays near-flat to M=32 — the
 # high-segment TC companion is the named r5 lever.
+# SERVE-LEVEL CORRECTION (honest probe/serve discrepancy): the kernel-level
+# probe showed 8B M=16 wins (qkv 1.07x / o-chain 1.12x / gate_up 1.19x) but
+# the same-session serve A/B measured 8B decode-b16 TPOT +3..+4% with M=16
+# routing ON, reproduced across two sessions, and PROMIX_MARLIN_MMAX=8
+# restores the control digits exactly (pm8b_mmax8 vs pm8b_r4ctl) — so the 8B
+# windows are capped at the SERVE-measured m_hi=8. 3B keeps m_hi=16 (serve
+# b16 -2%). Root cause not isolated (probe = idle-GPU back-to-back replay;
+# engine = full-graph with interleaved attention/norm kernels).
 _MARLIN_TABLE = {
     (5120, 3072): (2, 16),      # 3B qkv   (1.56-1.84x, M16 1.36x)
     (3072, 3072): (2, 8),       # 3B o     (chain 1.23-1.47x; M16 0.96 stop)
     (16384, 3072): (2, 16),     # 3B gate_up (1.71-2.33x, M16 1.11x)
     (3072, 8192): (2, 16),      # 3B down  (1.77-2.56x, M16 1.22x)
-    (6144, 4096): (2, 16),      # 8B qkv   (1.49-1.88x, M16 1.07x)
-    (4096, 4096): (2, 16),      # 8B o     (chain 1.12-1.64x)
-    (28672, 4096): (2, 16),     # 8B gate_up (1.85-2.83x, M16 1.19x)
+    (6144, 4096): (2, 8),       # 8B qkv   (1.49-2.08x at M<=8)
+    (4096, 4096): (2, 8),       # 8B o     (chain 1.45-1.64x at M<=8)
+    (28672, 4096): (2, 8),      # 8B gate_up (1.85-2.83x at M<=8)
     (4096, 14336): (2, 8),      # 8B down  (1.71-3.05x; M16 1.02 stop)
 }
 
