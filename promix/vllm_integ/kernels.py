@@ -58,6 +58,56 @@ def load_kernels():
     return cd, qpf
 
 
+def _load_ext(key, fname, extra_flags=(), with_inc=True):
+    """Generic cached JIT load sharing load_kernels' build env."""
+    if key in _cache:
+        return _cache[key]
+    load_kernels()  # ensures TORCH_CUDA_ARCH_LIST / TORCH_EXTENSIONS_DIR are set
+    from torch.utils.cpp_extension import load
+    inc = [KERN, os.path.join(CUTLASS, "include"),
+           os.path.join(CUTLASS, "tools/util/include"),
+           os.path.join(CUTLASS, "examples/common")] if with_inc else []
+    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    mod = load(name=fname.replace(".cu", ""),
+               sources=[os.path.join(KERN, fname)],
+               extra_include_paths=inc,
+               extra_cuda_cflags=flags + list(extra_flags), verbose=False)
+    _cache[key] = mod
+    return mod
+
+
+def load_smallm():
+    """vllm-perf r2 lever 1: small-M fused-GEMM config variants (128x64 tiles).
+    Returns None when disabled via PROMIX_SMALLM=0 (restores the fixed 128x128
+    all-M behavior)."""
+    if os.environ.get("PROMIX_SMALLM", "1") == "0":
+        return None
+    return _load_ext("sm", "cd_smallm_ext.cu")
+
+
+def load_qpfm():
+    """vllm-perf r2 lever 2c: single-launch fused NVFP4+MXFP8 activation pack
+    (quant_pack_float_mixed) — halves the per-Linear pack launch count.
+    Bit-exact to the two-launch qpf path (verbatim device quant code).
+    Disabled via PROMIX_QPFM=0. Must carry the same act-MSE flags as qpf."""
+    if os.environ.get("PROMIX_QPFM", "1") == "0":
+        return None
+    return _load_ext("qpfm", "quant_pack_fused_ext.cu", extra_flags=act_mse_cflags())
+
+
+def load_had_pack():
+    """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
+    the down_proj input (replaces fast_hadamard_transform launch + fp16 HBM
+    round-trip + pack launches with ONE kernel). Returns (hpk, hpk28) where
+    hpk handles power-of-two K (3B I=8192) and hpk28 the 28*512 K=14336 (8B).
+    Disabled via PROMIX_HAD_PACK=0. Same act-MSE flags as qpf."""
+    if os.environ.get("PROMIX_HAD_PACK", "1") == "0":
+        return None, None
+    hpk = _load_ext("hpk", "hadamard_pack_ext.cu", extra_flags=act_mse_cflags())
+    hpk28 = _load_ext("hpk28", "hadamard28_pack_ext.cu", extra_flags=act_mse_cflags())
+    return hpk, hpk28
+
+
 def load_decode_gemv():
     """Decode GEMV ext (vllm-perf r1): weight-only W4A16 / legacy W4A4 GEMVs for
     small-M (captured decode batch) steps. Returns None when disabled via
