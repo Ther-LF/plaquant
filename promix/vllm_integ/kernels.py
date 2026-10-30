@@ -97,11 +97,15 @@ def load_qpfm():
 
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
-    the down_proj input (replaces fast_hadamard_transform launch + fp16 HBM
-    round-trip + pack launches with ONE kernel). Returns (hpk, hpk28) where
-    hpk handles power-of-two K (3B I=8192) and hpk28 the 28*512 K=14336 (8B).
-    Disabled via PROMIX_HAD_PACK=0. Same act-MSE flags as qpf."""
-    if os.environ.get("PROMIX_HAD_PACK", "1") == "0":
+    the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).
+    MEASURED NEGATIVE (r2_pack_probe.json, graph-replay): the fused one-CTA-per-
+    row kernel LOSES to the fast_hadamard_transform fp16 kernel + qpfm chain —
+    3B K=8192 0.82-0.97x, 8B K=14336 0.26-0.34x — so it is DEFAULT-OFF
+    (PROMIX_HAD_PACK=1 opts in for experiments). Numerics were green (bit-exact
+    vs the fp32-trait reference, GEMM cos >= 0.99998 vs the current chain); the
+    loss is pure kernel efficiency: FHT's dedicated fp16 kernel is ~4x faster
+    than the hpk transform stage at these shapes. Returns (hpk, hpk28)."""
+    if os.environ.get("PROMIX_HAD_PACK", "0") != "1":
         return None, None
     hpk = _load_ext("hpk", "hadamard_pack_ext.cu", extra_flags=act_mse_cflags())
     hpk28 = _load_ext("hpk28", "hadamard28_pack_ext.cu", extra_flags=act_mse_cflags())
