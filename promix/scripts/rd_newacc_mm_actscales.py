@@ -38,7 +38,8 @@ def get_act_scales(model, tokenizer, nsamples=128, seqlen=2048):
     def stat_input_hook(m, x, y, name):
         if isinstance(x, tuple):
             x = x[0]
-        stat_tensor(name, x)
+        # MicroMix smooth_lm looks up "<module>.input" keys
+        stat_tensor(name + ".input", x)
 
     hooks = []
     for name, m in model.named_modules():
