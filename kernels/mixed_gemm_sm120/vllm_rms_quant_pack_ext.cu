@@ -229,8 +229,8 @@ __device__ __forceinline__ void pack_fp8_block_warp_v(const float q,
 //            AND held in SMEM as float for the pack.
 //   phase C  verbatim qpf pack of the low NVFP4 + high MXFP8 segments.
 // ===================================================================================
-template <class TIn, class LayoutSF4, class LayoutSF8>
-__global__ __launch_bounds__(1024)
+template <int BLOCK, class TIn, class LayoutSF4, class LayoutSF8>
+__global__ __launch_bounds__(BLOCK)
 void vllm_arn_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ sf_lo,
                           LayoutSF4 layout4,
                           uint8_t* __restrict__ code_hi, uint8_t* __restrict__ sf_hi,
@@ -370,22 +370,42 @@ std::vector<torch::Tensor> vllm_add_rms_norm_quant_pack(
 
 #define LAUNCH_VRQ(TY)                                                                   \
   do {                                                                                   \
-    auto kernel = &vllm_arn_pack_kernel<TY, decltype(layout4), decltype(layout8)>;       \
-    static bool attr_set = false;                                                        \
-    if (!attr_set) {                                                                     \
-      vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
-                                          64 * 1024), "vrq smem attr");                  \
-      attr_set = true;                                                                   \
+    if (block == 1024) {                                                                 \
+      auto kernel = &vllm_arn_pack_kernel<1024, TY, decltype(layout4), decltype(layout8)>; \
+      static bool attr_set = false;                                                      \
+      if (!attr_set) {                                                                   \
+        vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
+                                            64 * 1024), "vrq smem attr");                \
+        attr_set = true;                                                                 \
+      }                                                                                  \
+      kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                   \
+          code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,           \
+          code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,           \
+          reinterpret_cast<const TY*>(x.data_ptr()),                                     \
+          reinterpret_cast<const TY*>(residual.data_ptr()),                              \
+          reinterpret_cast<const TY*>(weight.data_ptr()),                                \
+          reinterpret_cast<TY*>(resid_t.data_ptr()),                                     \
+          reinterpret_cast<TY*>(xn_t.data_ptr()),                                        \
+          (int)N, Klo, Khi, (float)eps);                                                 \
+    } else {                                                                             \
+      TORCH_CHECK(block == 256, "unexpected block size ", block);                        \
+      auto kernel = &vllm_arn_pack_kernel<256, TY, decltype(layout4), decltype(layout8)>; \
+      static bool attr_set = false;                                                      \
+      if (!attr_set) {                                                                   \
+        vrq_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, \
+                                            64 * 1024), "vrq smem attr");                \
+        attr_set = true;                                                                 \
+      }                                                                                  \
+      kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                   \
+          code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,           \
+          code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,           \
+          reinterpret_cast<const TY*>(x.data_ptr()),                                     \
+          reinterpret_cast<const TY*>(residual.data_ptr()),                              \
+          reinterpret_cast<const TY*>(weight.data_ptr()),                                \
+          reinterpret_cast<TY*>(resid_t.data_ptr()),                                     \
+          reinterpret_cast<TY*>(xn_t.data_ptr()),                                       \
+          (int)N, Klo, Khi, (float)eps);                                                 \
     }                                                                                    \
-    kernel<<<dim3((unsigned)Mi, 1, 1), block, smem_bytes, stream>>>(                     \
-        code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4,             \
-        code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8,             \
-        reinterpret_cast<const TY*>(x.data_ptr()),                                       \
-        reinterpret_cast<const TY*>(residual.data_ptr()),                                \
-        reinterpret_cast<const TY*>(weight.data_ptr()),                                  \
-        reinterpret_cast<TY*>(resid_t.data_ptr()),                                       \
-        reinterpret_cast<TY*>(xn_t.data_ptr()),                                          \
-        (int)N, Klo, Khi, (float)eps);                                                   \
   } while (0)
   if (x.scalar_type() == torch::kFloat16) LAUNCH_VRQ(half);
   else                                    LAUNCH_VRQ(__nv_bfloat16);
