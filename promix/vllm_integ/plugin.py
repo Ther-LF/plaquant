@@ -1,0 +1,230 @@
+"""Out-of-tree vLLM quantization plugin for ProMix (Phase 1, eager bring-up).
+
+Registers the "promix" quantization method via vLLM's
+@register_quantization_config — NO vLLM fork. The exported checkpoint's
+config.json carries `quantization_config = {"quant_method": "promix", ...}`;
+importing this module before engine construction makes vLLM resolve it.
+
+Phase-1 loading mode (gates): run the engine IN-PROCESS so a plain import
+suffices and the gate harnesses can hook the model:
+
+    VLLM_ENABLE_V1_MULTIPROCESSING=0  +  import promix.vllm_integ.plugin
+
+(The `vllm.general_plugins` entry-point packaging for spawned-worker loading is
+Phase-2 work, needed before serve/bench runs.)
+
+Per quantized Linear (vLLM merged prefixes qkv_proj / o_proj / gate_up_proj /
+down_proj):
+  create_weights                 registers the packed-checkpoint params
+                                 (N-major, K-packed; linear-layout SF)
+  process_weights_after_loading  prepacks the weight SF into the kernel's
+                                 interleaved atom layout (== vLLM's
+                                 swizzle_blockscale, probe-proven byte-identical)
+                                 and builds a promix MixedQuantLinear around the
+                                 loaded buffers (same class the promix reference
+                                 runs — maximizes bit-exactness by construction)
+  apply                          [down_proj: online Hadamard (fp16, folded
+                                 1/sqrt(n))] -> [o_proj: column reorder] ->
+                                 quant_pack_float -> fused dual-format GEMM
+                                 (epilogue alpha = shared per-tensor g)
+"""
+
+import os
+import re
+
+import torch
+
+from vllm.logger import init_logger
+from vllm.model_executor.layers.linear import (
+    LinearBase,
+    LinearMethodBase,
+    UnquantizedLinearMethod,
+    register_weight_loader_v2_supported_method,
+)
+from vllm.model_executor.layers.quantization import register_quantization_config
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
+from vllm.model_executor.parameter import (
+    BasevLLMParameter,
+    GroupQuantScaleParameter,
+    ModelWeightParameter,
+    PerTensorScaleParameter,
+)
+
+logger = init_logger(__name__)
+
+KINDS = ("qkv_proj", "o_proj", "gate_up_proj", "down_proj")
+
+
+@register_quantization_config("promix")
+class PromixConfig(QuantizationConfig):
+    """ProMix dual-format (NVFP4 low + MXFP8 high) fused-GEMM quantization."""
+
+    def __init__(self, k_high: dict, hadamard_down_proj: bool = True,
+                 fold_had_scale: bool = True, o_proj_reorder: bool = True,
+                 had_mode: str = "fp16", full_cfg: dict | None = None):
+        super().__init__()
+        # {"layers.{i}.self_attn.qkv_proj": K_high, ...} (vLLM merged prefixes)
+        self.k_high = {str(k): int(v) for k, v in k_high.items()}
+        self.hadamard_down_proj = bool(hadamard_down_proj)
+        self.fold_had_scale = bool(fold_had_scale)
+        self.o_proj_reorder = bool(o_proj_reorder)
+        self.had_mode = had_mode
+        self.full_cfg = full_cfg or {}
+        if self.had_mode != "fp16":
+            raise NotImplementedError(
+                f"promix plugin phase 1 implements had_mode=fp16 only, got {had_mode}")
+
+    @classmethod
+    def get_name(cls) -> str:
+        return "promix"
+
+    def get_supported_act_dtypes(self):
+        return [torch.float16]
+
+    @classmethod
+    def get_min_capability(cls) -> int:
+        return 120
+
+    @staticmethod
+    def get_config_filenames():
+        return []
+
+    @classmethod
+    def from_config(cls, config: dict) -> "PromixConfig":
+        return cls(
+            k_high=cls.get_from_keys(config, ["k_high"]),
+            hadamard_down_proj=cls.get_from_keys_or(
+                config, ["hadamard_down_proj"], True),
+            fold_had_scale=cls.get_from_keys_or(config, ["fold_had_scale"], True),
+            o_proj_reorder=cls.get_from_keys_or(config, ["o_proj_reorder"], True),
+            had_mode=cls.get_from_keys_or(config, ["had_mode"], "fp16"),
+            full_cfg=config,
+        )
+
+    def _match_key(self, prefix: str):
+        for key in self.k_high:
+            if prefix == key or prefix.endswith("." + key):
+                return key
+        return None
+
+    def get_quant_method(self, layer: torch.nn.Module, prefix: str):
+        if isinstance(layer, LinearBase):
+            key = self._match_key(prefix)
+            if key is not None:
+                return PromixLinearMethod(self, key)
+            return UnquantizedLinearMethod()   # lm_head etc.
+        return None                            # embeddings / attention / rest
+
+
+@register_weight_loader_v2_supported_method
+class PromixLinearMethod(LinearMethodBase):
+    def __init__(self, cfg: PromixConfig, key: str):
+        self.cfg = cfg
+        self.key = key
+        self.kind = key.split(".")[-1]
+        assert self.kind in KINDS, self.kind
+        self.k_high = cfg.k_high[key]
+
+    def create_weights(self, layer, input_size_per_partition,
+                       output_partition_sizes, input_size, output_size,
+                       params_dtype, **extra_weight_attrs):
+        assert input_size == input_size_per_partition and \
+            output_size == sum(output_partition_sizes), \
+            "promix plugin phase 1 supports TP=1 only"
+        weight_loader = extra_weight_attrs.get("weight_loader")
+        K = input_size_per_partition
+        N = sum(output_partition_sizes)
+        K_high = self.k_high
+        K_low = K - K_high
+        assert K_low > 0 and K_low % 16 == 0 and K_high % 32 == 0, (self.key, K, K_high)
+        layer.logical_widths = output_partition_sizes
+        layer.promix_N, layer.promix_K = N, K
+        layer.promix_K_low, layer.promix_K_high = K_low, K_high
+
+        layer.register_parameter("weight_lo_packed", ModelWeightParameter(
+            data=torch.empty(N, K_low // 2, dtype=torch.uint8),
+            input_dim=1, output_dim=0, weight_loader=weight_loader))
+        layer.register_parameter("weight_lo_scale", GroupQuantScaleParameter(
+            data=torch.empty(N, K_low // 16, dtype=torch.uint8),
+            input_dim=1, output_dim=0, weight_loader=weight_loader))
+        if K_high > 0:
+            layer.register_parameter("weight_hi_bytes", ModelWeightParameter(
+                data=torch.empty(N, K_high, dtype=torch.uint8),
+                input_dim=1, output_dim=0, weight_loader=weight_loader))
+            layer.register_parameter("weight_hi_scale", GroupQuantScaleParameter(
+                data=torch.empty(N, K_high // 32, dtype=torch.uint8),
+                input_dim=1, output_dim=0, weight_loader=weight_loader))
+        layer.register_parameter("weight_global_scale", PerTensorScaleParameter(
+            data=torch.empty(len(output_partition_sizes), dtype=torch.float32),
+            weight_loader=weight_loader))
+        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            layer.register_parameter("column_order", BasevLLMParameter(
+                data=torch.empty(K, dtype=torch.int32),
+                weight_loader=weight_loader))
+
+    def process_weights_after_loading(self, layer):
+        from promix.quantize.mixed_linear import MixedQuantLinear
+        from promix.quantize.weight_pack import PackedWeight
+        from promix.vllm_integ.kernels import load_kernels
+        cd, qpf = load_kernels()
+
+        N, K = layer.promix_N, layer.promix_K
+        K_low, K_high = layer.promix_K_low, layer.promix_K_high
+        dev = layer.weight_lo_packed.device
+
+        gs = layer.weight_global_scale.data
+        if torch.unique(gs).numel() != 1:
+            raise ValueError(
+                f"promix {self.key}: merged shards carry different per-tensor g "
+                f"({gs.tolist()}) — checkpoint must be shared-g re-quantized")
+        g = float(gs[0])
+
+        physSFB_lo = cd.prepack_sf_fp4_b(
+            layer.weight_lo_scale.data.contiguous(), N, K_low)
+        if K_high > 0:
+            W_hi = layer.weight_hi_bytes.data.contiguous()
+            physSFB_hi = cd.prepack_sf_fp8_b(
+                layer.weight_hi_scale.data.contiguous(), N, K_high)
+        else:
+            W_hi = torch.empty((N, 0), dtype=torch.uint8, device=dev)
+            physSFB_hi = torch.empty((0,), dtype=torch.uint8, device=dev)
+
+        packed = PackedWeight(
+            N=N, K=K, K_low=K_low, K_high=K_high,
+            W_lo_packed=layer.weight_lo_packed.data.contiguous(),
+            physSFB_lo=physSFB_lo,
+            W_hi_bytes=W_hi, physSFB_hi=physSFB_hi,
+            W_deq=None, bias=None, g_w=g)
+        mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
+                               out_dtype=torch.float16, qpf=qpf)
+        layer.promix_mql = mql.to(dev)
+
+        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
+            del layer.column_order
+        if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
+            from promix.quantize.hadamard import get_hadK
+            had_K, Kfac = get_hadK(K)
+            layer.promix_had_K = None if had_K is None else had_K.to(dev)
+            layer.promix_had_Kfac = Kfac
+        # free the linear-layout params (data lives on inside mql / was prepacked)
+        for pname in ("weight_lo_packed", "weight_lo_scale", "weight_hi_bytes",
+                      "weight_hi_scale", "weight_global_scale"):
+            if hasattr(layer, pname):
+                delattr(layer, pname)
+
+    def apply(self, layer, x, bias=None):
+        assert bias is None, "promix phase 1: bias-free linears only (llama)"
+        if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
+            from promix.quantize.hadamard import matmul_hadU_cuda
+            x_dtype = x.dtype
+            x = matmul_hadU_cuda(x, layer.promix_had_K, layer.promix_had_Kfac,
+                                 fold_scale=self.cfg.fold_had_scale).to(x_dtype)
+        elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            x = x[..., layer.promix_col_order]
+        return layer.promix_mql(x)
+
+
+def register():
+    """vllm.general_plugins entry-point hook (import side effect registers)."""
+    logger.info("promix quantization plugin registered")
