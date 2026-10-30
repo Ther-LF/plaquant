@@ -139,23 +139,31 @@ class MarlinHigh:
         from vllm.scalar_type import scalar_types
         self.type_id = scalar_types.float8_e4m3fn.id
 
-    def gemm_add(self, Y, x_hi_bf16):
+    def gemm(self, x_hi_bf16):
         """x_hi_bf16: contiguous (M, K_high) bf16 — marlin's e8m0-scale (MXFP8)
         kernels are compiled for bf16 activations ONLY (feasibility probe:
         fp16-activation group-32 fp8 kernels do not exist in vLLM 0.32), so the
         caller casts the fp16 high slice to bf16 (the W4A4 reference quantizes
         the same slice to E4M3, so bf16 is still ~5 extra mantissa bits).
-        Computes H = x_hi @ (E4M3(w) * 2^(e-127)).T via marlin's native MXFP8
-        path (pow2 scale x fp8 exact) and folds the per-tensor g in the
-        accumulate: Y += g * H (fp32 opmath, the dequant convention of the
-        hi_add GEMV / fused-GEMM high phase)."""
-        H = torch.ops.vllm.marlin_gemm(
+        Returns H = x_hi @ (E4M3(w) * 2^(e-127)).T (bf16, g NOT applied)."""
+        return torch.ops.vllm.marlin_gemm(
             a=x_hi_bf16, b_q_weight=self.qweight, b_bias=None, b_scales=self.scales,
             a_scales=None, global_scale=None, b_zeros=None,
             workspace=self.workspace, b_q_type_id=self.type_id,
             size_m=x_hi_bf16.shape[0], size_n=self.N, size_k=self.K_high,
             use_atomic_add=False, use_fp32_reduce=True)
-        Y.add_(H.to(torch.float16), alpha=self.g)
+
+    def gemm_add(self, Y, x_hi_bf16, axpy=None):
+        """Y (fp16, M,N) += g * gemm(x_hi_bf16) — the dequant convention of the
+        hi_add GEMV / fused-GEMM high phase (g folded in the fp32-opmath
+        accumulate; e8m0 scales cannot hold it). `axpy` = the decode ext's
+        fused axpy_bf16_into_half (ONE kernel); None falls back to the torch
+        cast + alpha-add pair."""
+        H = self.gemm(x_hi_bf16)
+        if axpy is not None:
+            axpy(Y, H, self.g)
+        else:
+            Y.add_(H.to(torch.float16), alpha=self.g)
         return Y
 
 

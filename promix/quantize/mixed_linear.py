@@ -626,10 +626,12 @@ class MixedQuantLinear(nn.Module):
         Y = self._marlin.gemm(x_lo)
         if self._hi_marlin_route(xh.shape[0]):
             # bf16 slice-cast: marlin's e8m0 kernels are bf16-activation-only
-            # (see MarlinHigh.gemm_add); the W4A4 reference quantizes this
-            # slice to E4M3, so bf16 stays the more-accurate numerics class.
+            # (see MarlinHigh.gemm); the W4A4 reference quantizes this slice
+            # to E4M3, so bf16 stays the more-accurate numerics class. The g
+            # scale + cast + add ride the ext's fused axpy (one kernel).
             self._marlin_hi.gemm_add(
-                Y, xh[:, self.K_low:].to(torch.bfloat16))
+                Y, xh[:, self.K_low:].to(torch.bfloat16),
+                axpy=getattr(self._dg, "axpy_bf16_into_half", None))
         else:
             self._dg.decode_gemv_w8a16_hi_add(
                 Y, xh, self.W_hi_dec, self.S_hi_dec,

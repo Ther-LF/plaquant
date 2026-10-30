@@ -1233,6 +1233,53 @@ torch::Tensor decode_gemv_w8a16_hi_add(torch::Tensor Y, torch::Tensor x,
   return Y;
 }
 
+// ============================================================================
+// vllm-perf r5 lever 1: fused scaled-add for the MXFP8-marlin high companion.
+// Y (fp16, M*N) += alpha * H (bf16, M*N) in one pass (fp32 opmath), replacing
+// the torch H.to(fp16) + Y.add_(alpha=) pair (2 kernels + an fp16 round-trip
+// of H). alpha = the per-tensor g the e8m0 marlin scales cannot hold.
+// ============================================================================
+__global__ void __launch_bounds__(256) axpy_bf16_into_half_kernel(
+    __half* __restrict__ Y, const __nv_bfloat16* __restrict__ H,
+    float alpha, int64_t total) {
+  int64_t i = ((int64_t)blockIdx.x * blockDim.x + threadIdx.x) * 8;
+  int64_t stride = (int64_t)gridDim.x * blockDim.x * 8;
+  for (; i + 8 <= total; i += stride) {
+    uint4 yv = *reinterpret_cast<const uint4*>(Y + i);
+    uint4 hv = *reinterpret_cast<const uint4*>(H + i);
+    const __half* yp = reinterpret_cast<const __half*>(&yv);
+    const __nv_bfloat16* hp = reinterpret_cast<const __nv_bfloat16*>(&hv);
+    __half out[8];
+    #pragma unroll
+    for (int c = 0; c < 8; ++c)
+      out[c] = __float2half(fmaf(alpha, __bfloat162float(hp[c]), __half2float(yp[c])));
+    *reinterpret_cast<uint4*>(Y + i) = *reinterpret_cast<const uint4*>(out);
+  }
+  // tail (total % 8) — N is a multiple of 8 for every promix shape, but stay safe
+  if (i < total) {
+    for (int64_t j = i; j < total; ++j)
+      Y[j] = __float2half(fmaf(alpha, __bfloat162float(H[j]), __half2float(Y[j])));
+  }
+}
+
+torch::Tensor axpy_bf16_into_half(torch::Tensor Y, torch::Tensor H, double alpha) {
+  TORCH_CHECK(Y.is_cuda() && Y.is_contiguous() && Y.scalar_type() == torch::kFloat16,
+              "Y must be cuda contiguous fp16");
+  TORCH_CHECK(H.is_cuda() && H.is_contiguous() && H.scalar_type() == torch::kBFloat16,
+              "H must be cuda contiguous bf16");
+  TORCH_CHECK(Y.numel() == H.numel(), "Y/H numel mismatch");
+  int64_t total = Y.numel();
+  int64_t want = (total + 8 * 256 - 1) / (8 * 256);
+  int blocks = (int)std::min<int64_t>(want, 1024);
+  auto stream = at::cuda::getCurrentCUDAStream();
+  axpy_bf16_into_half_kernel<<<blocks, 256, 0, stream>>>(
+      reinterpret_cast<__half*>(Y.data_ptr<at::Half>()),
+      reinterpret_cast<const __nv_bfloat16*>(H.data_ptr<at::BFloat16>()),
+      (float)alpha, total);
+  CUDA_CHECK(cudaGetLastError());
+  return Y;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("decode_gemv", &decode_gemv,
         "memory-bound W4A4 decode GEMV (v1: block-per-row): D(N)=sum_k xq[k]*deq[n,k]",
@@ -1307,6 +1354,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
         pybind11::arg("warps") = 16);
+  m.def("axpy_bf16_into_half", &axpy_bf16_into_half,
+        "vllm-perf r5: fused Y(fp16) += alpha * H(bf16) elementwise (fp32 "
+        "opmath, one pass) — folds the marlin-hi companion's g scale + dtype "
+        "cast + add into ONE kernel.",
+        pybind11::arg("Y"), pybind11::arg("H"), pybind11::arg("alpha"));
   m.def("quant_act", &quant_act,
         "fast in-kernel activation quantize -> dequantized fp32 (K,), bit-exact to "
         "fake_quantize_nvfp4/mxfp8 (M=1)",

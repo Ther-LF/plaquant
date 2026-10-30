@@ -97,7 +97,8 @@ def main():
             # ---- bench: hi companion only ----
             Y = y_r5.clone()
             x_hi = xm[:, K_low:].to(torch.bfloat16)
-            t_mar_hi = bench_graph(lambda: mh.gemm_add(Y, x_hi))
+            axpy = getattr(dg, "axpy_bf16_into_half", None)
+            t_mar_hi = bench_graph(lambda: mh.gemm_add(Y, x_hi, axpy=axpy))
             row["t_marlin_hi_us"] = t_mar_hi
             if M <= 32:
                 t_hi = {w: bench_graph(lambda w=w: dg.decode_gemv_w8a16_hi_add(
