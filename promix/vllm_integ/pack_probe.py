@@ -45,7 +45,22 @@ def main():
         x = (torch.randn(max(MS), K, device="cuda") * 0.5).half()
         had_K, Kfac = get_hadK(K) if is_down else (None, 1)
         had_cpu = None if had_K is None else had_K.cpu()
-        pk = make_packed(N, K, K_high, cd) if is_down else None
+        had_dev = None if had_K is None else had_K.cuda()   # graph-capture-safe
+        pk = make_packed(N, K, K_high, cd)
+
+        def gemm(a, M):
+            return cd.fused_gemm_prepacked(a[0], a[1], pk.W_lo_packed, pk.physSFB_lo,
+                                           a[2], a[3], pk.W_hi_bytes, pk.physSFB_hi,
+                                           M, N, K_low, K_high, pk.g_w)
+
+        def bits_eq(a, b, M):
+            """Bit gate robust to the UNINITIALIZED SFA atom padding (the phys SFA
+            buffer is padded to 128-row atoms; rows >= M are never written — at
+            M%128!=0 raw torch.equal compares garbage). Gate = packed DATA bytes
+            exactly equal AND the consuming GEMM outputs exactly equal (the GEMM
+            reads the SF only where it multiplies real data)."""
+            return (torch.equal(a[0], b[0]) and torch.equal(a[2], b[2])
+                    and torch.equal(gemm(a, M), gemm(b, M)))
 
         for M in MS:
             xm = x[:M].contiguous()
@@ -59,7 +74,7 @@ def main():
             # ---- gate A: qpfm bit-exact vs two-launch ----
             ref = pack2(xm)
             got = qpfm.quant_pack_float_mixed(xm, M, N, K_low, K_high)
-            row["qpfm_bit"] = all(torch.equal(a, b) for a, b in zip(ref, got))
+            row["qpfm_bit"] = bits_eq(ref, got, M)
 
             # ---- bench: qpf(2) vs qpfm(1) ----
             row["pack_qpf2"] = bench_graph(lambda: pack2(xm))
@@ -68,7 +83,8 @@ def main():
 
             if is_down:
                 def had_cur(inp):
-                    return matmul_hadU_cuda(inp, had_K, Kfac, fold_scale=True).to(torch.half)
+                    return matmul_hadU_cuda(inp, had_dev, Kfac,
+                                            fold_scale=True).to(torch.half)
 
                 def fused(inp):
                     if K == 14336:
@@ -76,19 +92,14 @@ def main():
                     return hpk.hadamard_pack_mixed(inp, M, N, K_low, K_high)
 
                 # gate B1: fused == pack(fp32-trait hadamard) bit-exact
-                y32 = matmul_hadU_cuda(xm.float(), had_K, Kfac, fold_scale=True).half()
+                y32 = matmul_hadU_cuda(xm.float(), had_dev, Kfac, fold_scale=True).half()
                 bitref = pack2(y32.contiguous())
                 got = fused(xm)
-                row["hpk_bit_vs_fp32ref"] = all(
-                    torch.equal(a, b) for a, b in zip(bitref, got))
+                row["hpk_bit_vs_fp32ref"] = bits_eq(bitref, got, M)
                 # gate B2: GEMM-output cosine fused vs the CURRENT chain
                 cur = pack2(had_cur(xm).contiguous())
-                D_cur = cd.fused_gemm_prepacked(cur[0], cur[1], pk.W_lo_packed, pk.physSFB_lo,
-                                                cur[2], cur[3], pk.W_hi_bytes, pk.physSFB_hi,
-                                                M, N, K_low, K_high, pk.g_w)
-                D_new = cd.fused_gemm_prepacked(got[0], got[1], pk.W_lo_packed, pk.physSFB_lo,
-                                                got[2], got[3], pk.W_hi_bytes, pk.physSFB_hi,
-                                                M, N, K_low, K_high, pk.g_w)
+                D_cur = gemm(cur, M)
+                D_new = gemm(got, M)
                 row["hpk_gemm_cos_vs_cur"] = float(torch.nn.functional.cosine_similarity(
                     D_cur.float().flatten(), D_new.float().flatten(), dim=0))
                 # bench: current chain vs had+qpfm vs fused

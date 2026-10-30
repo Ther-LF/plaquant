@@ -58,6 +58,32 @@ def decode_m_max():
         return 16
 
 
+# vllm-perf r2 lever 1: measured small-M GEMM config table. Keyed by (N, K);
+# value = inclusive [m_lo, m_hi] window where cfg1 (128x64 NV4/MX2) beats the
+# shipping 128x128 config, from promix/vllm_integ/gemm_probe.py under CUDA-graph
+# replay on RTX Pro 6000 (r2_gemm_probe{,_rerun}.json; two independent runs
+# agree). bit gate: all configs torch.equal to the shipping kernel. Outside the
+# window (and for unknown shapes) the shipping config stays. The windows follow
+# CTA-wave arithmetic (128x64 wins while ceil(M/128)*ceil(N/64) stays within one
+# 188-SM wave AND M is large enough that doubled A/SFB re-reads amortize), but
+# the encoded values are the MEASURED ones, not the formula.
+#   (5120,3072)  3B qkv      M 64..256   (1.05-1.47x)
+#   (3072,3072)  3B o        M 8..384    (1.15-1.49x)
+#   (3072,8192)  3B down     M 8..384    (1.15-1.60x)
+#   (6144,4096)  8B qkv      M 96..128   (1.44-1.47x; 2-wave above)
+#   (4096,4096)  8B o        M 32..256   (1.05-1.49x)
+#   (4096,14336) 8B down     M 32..256   (1.47-1.63x)
+#   gate_up (N>=2K) never wins — N/128 CTAs already fill the machine.
+_SMALLM_TABLE = {
+    (5120, 3072): (64, 256),
+    (3072, 3072): (8, 384),
+    (3072, 8192): (8, 384),
+    (6144, 4096): (96, 128),
+    (4096, 4096): (32, 256),
+    (4096, 14336): (32, 256),
+}
+
+
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
@@ -253,13 +279,16 @@ class MixedQuantLinear(nn.Module):
         return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
 
     def _smallm_cfg(self, M):
-        """vllm-perf r2: pick a cd_smallm_ext config for GEMM-routed small M, or
-        None for the shipping 128x128 kernel. Measured per shape x M under
-        CUDA-graph replay (gemm_probe): placeholder until the probe lands —
-        finalized table is encoded below."""
-        if self._cd_sm is None or M > 512:
+        """vllm-perf r2: pick a cd_smallm_ext config for GEMM-routed M, or None
+        for the shipping 128x128 kernel. Measured per shape x M under CUDA-graph
+        replay (gemm_probe) — see _SMALLM_TABLE. M is static per captured vLLM
+        CUDA graph, so the branch is capture-safe (r1 pattern)."""
+        if self._cd_sm is None:
             return None
-        return 1    # 128x64 NV4/MX2 (r24 small-M winner); refined post-probe
+        win = _SMALLM_TABLE.get((self.N, self.K))
+        if win is not None and win[0] <= M <= win[1]:
+            return 1    # 128x64 NV4/MX2
+        return None
 
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
