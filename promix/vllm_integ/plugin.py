@@ -276,7 +276,11 @@ class PromixLinearMethod(LinearMethodBase):
                 ml = prepack_marlin_low(packed.W_lo_packed,
                                         layer.weight_lo_scale.data.contiguous(),
                                         g, N, K_low)
-                if not layer.promix_mql.attach_marlin(ml):
+                # hi_add companion rows/block: large N saturates with 32
+                # warps, small N stays launch-bound at 16 (r4_marlin_probe
+                # t_hi_add sweep; same heuristic family as _dec_warps).
+                if not layer.promix_mql.attach_marlin(
+                        ml, hi_warps=32 if N >= 4096 else 16):
                     logger.info("promix %s: marlin route unavailable (sf8/dg)", self.key)
             except Exception as e:
                 logger.warning("promix %s: marlin prepack failed (%r) — "
