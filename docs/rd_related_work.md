@@ -64,9 +64,9 @@ W4A4 / FP4 / mixed-precision relevant, first-class in vLLM:
 | `nvfp4_per_token`, `online` | online/dynamic quant config | yes | present (online quantization path), untested |
 
 Not in vLLM (no integration exists in 0.32.0): **QuaRot, SpinQuant, Atom, QServe/QoQ, ResQ,
-ARCQuant** (ARCQuant ships its own vLLM fork/plugin per its paper — not upstream),
-**MicroMix, FGMP, OffQuant/OffQ, KurTail, WUSH** (WUSH/FP-Quant share QuTLASS lineage; only
-`fp_quant` is upstream).
+ARCQuant** (ARCQuant is upstreamed into **TensorRT-LLM** (PR #11333) and ships its own
+vLLM integration in-repo — not in upstream vLLM 0.32), **MicroMix, FGMP, OffQ, KurTail,
+WUSH** (WUSH/FP-Quant share QuTLASS lineage; only `fp_quant` is upstream).
 
 ### A.3 Peer smoke-test status (original repos, as shipped)
 
@@ -115,9 +115,9 @@ available form we would use (no porting by us).
 | Method | Class (A-quant?) | Best available impl | Builds on this box? | Smoke test | Honest perf ceiling on SM120 | Blocker |
 |---|---|---|---|---|---|---|
 | **vLLM NVFP4 (modelopt / ct-W4A4Fp4)** | **W4A4** (A4 NVFP4) | vLLM-native (FlashInfer CUTLASS sm120) | yes (wheel) | **PASS — full runs measured** (PPL+TTFT+decode, 1B/3B/8B) | Best prefill of all round-1 baselines (8B TTFT@8192 177ms vs BF16 392ms) | none — THE same-stack head-to-head |
-| **FP-Quant (Quartet/QuTLASS)** | **W4A4** (MXFP4/NVFP4 + rotation) | vLLM-native (`fp_quant`) | venv lacks `qutlass` | NOT RUN | expected real FP4 TC speed (QuTLASS targets Blackwell) | install `qutlass` (+ checkpoint) — one-step, low risk |
-| **ARCQuant** | **W4A4** (NVFP4 + residual channels) | original repo (own kernels + vLLM fork), targets RTX PRO 6000 | see addendum | see addendum | paper: 2.0–2.5× vs FP16 prefill on PRO 6000; +3–9% over plain NVFP4 | newest code; CUDA13 compat unverified |
-| **MicroMix** | **W4A4~A6/A8 mixed** (MXFP4/6/8 channels) | original repo (co-designed Blackwell kernel) | see addendum | see addendum | paper: 2.29–3.38× vs TRT-FP16 on RTX 5090 | sm_120 vs sm_120a target + CUDA13 compat unverified |
+| **FP-Quant (Quartet/QuTLASS)** | **W4A4** (MXFP4/NVFP4 + rotation) | vLLM-native (`fp_quant`) | venv lacks `qutlass` (PyPI `qutlass` is a 0.0.0 placeholder → SOURCE build from IST-DASLab/qutlass required; `fp-quant` 0.3.2 pip-installable) | NOT RUN | expected real FP4 TC speed (QuTLASS targets Blackwell) | one source build of qutlass (CUDA13 compat untested) + checkpoint |
+| **ARCQuant** | **W4A4** (NVFP4 + residual channels) | original repo (own CUTLASS kernels; also upstreamed into TensorRT-LLM PR#11333) | **YES** — CUDA13, `CMAKE_CUDA_ARCHITECTURES 120a`, only fix: pass `-Dpybind11_DIR` | **PASS** — `bench_nvfp4` GEMM runs (0.146ms @ default shape, GPU6); `agemm.so` imports with full API (matmul, reorder_quantize_w/x, rmsnorm_quantize_x, i4 KV-cache ops) | paper: 2.0–2.5× vs FP16 prefill on PRO 6000; +3–9% over plain NVFP4 | none found — READY (accuracy eval additionally needs its requirements.txt env + model) |
+| **MicroMix** | **W4A4~A6/A8 mixed** (MXFP4/6/8 channels) | original repo (Blackwell mgemm kernels) | **YES** — CUDA13, 120a, same pybind11 fix; `mixedgemm.so` + bench built | **PARTIAL FAIL** — kernels launch (97–112 TFLOPS reported) but built-in `--validate` reports GEMM VAL FAILED for 4x4, 6x6, 8x4 on CUDA 13 (repo pins CUDA 12.8) | paper: 2.29–3.38× vs TRT-FP16 on RTX 5090 | numerics wrong under CUDA 13 as shipped — honest ceiling until upstream supports CUDA 13 (or a CUDA 12.8 env is used) |
 | **QuaRot** | **W4A4** (INT4, KV4) | original repo fake-quant (accuracy); kernels build but s4→INT8 | yes (patched, pinned) | **PASS** (PPL 1B/3B/8B done) | **no speed path** — INT4 kernels ~5–6× slower than FP16 (no s4 MMA on Blackwell) | hardware (s4 silently lowered to INT8) |
 | **SpinQuant** | **W4A4** (INT4, KV4) | original repo fake-quant | yes (patched) | **PASS** (PPL 1B/3B done + 8B Hadamard) | no GPU kernels exist — accuracy-only | none for accuracy; no speed artifact |
 | **Atom** | **W4A4** (~4.2b, INT8 keepers, KV4) | original repo fake-quant | accuracy yes; kernel forced-build launches but is INT8-SASS | **PASS** (PPL 1B/3B/8B=18.40/9.70/7.57) | accuracy-only (s4→INT8 lowering) | hardware + CMake bit-rot |
@@ -128,11 +128,11 @@ available form we would use (no porting by us).
 | SVDQuant | W4A4 (NVFP4, diffusion) | nunchaku engine | not attempted | — | diffusion-focused, not LLM-serving | out of scope as LLM baseline |
 
 **Bottom line (Part A):** when inputs/sizes are fixed we can immediately run: vLLM-NVFP4
-(primary head-to-head), GPTQ/AWQ/FP8/BF16 (context), and the four classic W4A4 peers in their
-honest best-available forms (QuaRot/SpinQuant/Atom = accuracy-only fake-quant; QServe =
-blocked, cite paper numbers). Highest-value additions requiring one setup step each:
-`qutlass` install (FP-Quant same-stack W4A4) and ARCQuant/MicroMix original repos (the two
-modern Blackwell W4A4 competitors).
+(primary head-to-head), GPTQ/AWQ/FP8/BF16 (context), **ARCQuant original kernels (smoke
+PASSED on this box)**, and the four classic W4A4 peers in their honest best-available forms
+(QuaRot/SpinQuant/Atom = accuracy-only fake-quant; QServe = blocked, cite paper numbers).
+MicroMix builds but mis-validates under CUDA 13 as shipped. Remaining one-step setup:
+`qutlass` source build (FP-Quant same-stack W4A4).
 
 ---
 
@@ -173,6 +173,8 @@ Verdicts: **must-cite** (appears in related work), **must-compare** (baseline in
 | **OSTQuant** (ICLR'25) | 2025 | INT W4A4, orthogonal+scaling transforms | none | none | MED | must-cite |
 | **PrefixQuant** (2410.05265) | 2024 | INT W4A4 static | prefix-token outlier isolation | none | MED | must-cite |
 | **MosaicQuant** (2606.15652) | arXiv 2026-06 | INT, W4A4/W4A8: dense 4-bit base + sparse 4-bit residual BLOCKS (weight side); per-token A quant | output-distortion-driven residual block selection | **ZipperEngine: sparse residual fused INTO dense 4-bit GEMM** (RTX 4090, 1.24× vs FP16) | HIGH on "fused compensation kernel", weight-side focus | must-cite + differentiate (their mixed part is weights-only; our high/low split covers activations too) |
+| **SharQ** (2606.26587, same group as ARCQuant) | arXiv 2026-06, code | **FP4 W4A4** (NVFP4/HiF4/MXFP4) + input-adaptive N:M activation sparsity | online sparse(outlier)–dense decomposition; sparse-FP4 + dense-FP4 GEMM share one FP4 weight payload | fused prep kernel (mask+residual+LN); RTX 5090, 2.2–2.4× vs FP16 | HIGH (another compensation-style NVFP4 W4A4 with kernels) | must-cite; candidate compare |
+| **DualQuant** (2610.13767; Sharify — ResQ co-author) | arXiv 2026-10 | **NVFP4/MX-family W4A4**, calibration-free | dual-scale weight-reconstruction MSE → per-channel act rescaling (closed-form BCD) | real packed W4A4 path on RTX 4090, 2.46× vs BF16 | HIGH (ResQ-adjacent authors, NVFP4 W4A4, calibration-free counterpoint) | must-cite; candidate compare |
 | **GyRot** (2607.27694, KAIST) | arXiv 2026-07 | INT4 W4A4, rotation+group co-design | coarse-rotation/fine-grouping + harmonic permutation | **ASIC accelerator** (not GPU) | MED | must-cite (HW co-design group) |
 | **JustQuant** (2609.33601) | arXiv 2026-09 | plain INT4 A4 via QAT/distillation (no rotation/SVD/smoothing/mixed precision) | none — pushes complexity into training | plain operators | MED (counter-claim to our whole operator family) | must-cite (address the PTQ-vs-QAD framing) |
 
@@ -251,7 +253,8 @@ WUSH explicitly.
 ### B.6 ProMix differentiation vs the closest works (honest)
 
 **1. ARCQuant — the sharpest competitor.** Same format family (NVFP4 A4W4), same GPU (RTX
-PRO 6000), code + vLLM integration, and its motivation section argues *against* both of our
+PRO 6000), **ACL 2026 Main**, code public, **upstreamed into TensorRT-LLM**, kernels smoke-
+tested working on our box, and its motivation section argues *against* both of our
 pillars: (a) rotations break NVFP4 block isolation; (b) dual-format mixed precision
 "precludes hardware-accelerated pipelines" because tensor cores lack heterogeneous-group-size
 MMA. Differentiation: (i) **our fused dual-phase kernel is precisely the artifact ARCQuant
@@ -273,9 +276,11 @@ the accuracy-critical format at 4-bit) vs our NVFP4+MXFP8 heterogeneous-group pa
 allocation driver — local quantization-error thresholds vs our global PCA-rotated
 variance/error subspace with learned rotation (ResQ lineage, provably concentrates energy);
 (iii) their channels cost ~5 avg bits for near-FP16; our production point is 4.5b with 1/8
-high fraction + KV4; (iv) kernel — theirs segments K by same-group-size formats; ours fuses
-two different scale-granularity formats in one mainloop. Scoop risk: **HIGH** on the
-co-design framing; must-compare if runnable.
+high fraction + KV4; (iv) kernel — theirs executes channel segments via per-format-pair
+kernels (src: w4a4/w4a6/w4a8/w6a6/w8a8.cu — segmented, g32 throughout); ours fuses two
+different scale-granularity formats (g16+g32) in ONE mainloop with a shared accumulator.
+As shipped it also mis-validates on CUDA 13 (addendum). Scoop risk: **HIGH** on the
+co-design framing; must-compare once numerically valid on this box.
 
 **3. FGMP — the format twin on the wrong substrate.** NVFP4+FP8 W/A mixed precision,
 Fisher-weighted selection — but per-BLOCK with runtime reassignment, realizable only in their
@@ -333,6 +338,41 @@ appeared on the second hop, so the landscape above is complete as of 2026-10.
 
 ---
 
-## Addendum — new-peer smoke attempts (ARCQuant, MicroMix)
+## Addendum — new-peer smoke attempts (ARCQuant, MicroMix), 2026-10-30
 
-(filled in by the runnability pass on the GPU box; see Part A policy — as-shipped only)
+Both repos cloned (shallow) to `/home/luofan/baselines/peers/{arcquant,micromix}/`, cutlass
+submodules shallow-initialized, built **inside container `luofan-plaquant`** (nvcc 13.0,
+cmake 4.2.3, pybind11 3.1.0). Only deviation from as-shipped: `-Dpybind11_DIR=$(python3 -m
+pybind11 --cmakedir)` (their CMake `find_package(pybind11)` doesn't see pip-installed
+pybind11). Build logs: `peers/{arcquant,micromix}/kbuild_sm120.log`.
+
+**ARCQuant** (actypedef/ARCQuant, shallow @HEAD 2026-10; cutlass pinned ec8daf64):
+- Status upgrade since paper: **ACL 2026 Main**; merged into **TensorRT-LLM (PR #11333)**;
+  vLLM integration listed, "vLLM-based efficiency evaluation scripts to be released".
+- Kernels CMake targets `CMAKE_CUDA_ARCHITECTURES 120a` natively. Build: **SUCCESS** on
+  CUDA 13 (README asks for 12.8 — not needed).
+- Smoke: `./build/bench_nvfp4` → "GEMM completed in 0.145673 ms / nvfp4 gemm finished"
+  (GPU 6). `import agemm` → OK; API: `matmul, reorder_quantize_w, reorder_quantize_x,
+  rmsnorm_quantize_x, init/append/batch_decode kv f16+i4`. **RUNNABLE as shipped.**
+- Kernel-structure note (repo inspection): src = nvfp4.cu (standard block-scaled GEMM) +
+  reorder/rmsnorm-quantize fusion + down.cu + flashinfer glue — consistent with the paper's
+  "standard CUTLASS GEMM on K+S, complexity moved into a fused quantize kernel".
+
+**MicroMix** (lwy2020/MicroMix, shallow @HEAD; vendored cutlass a1aaf230):
+- mgemm CMake also targets 120a. Build: **SUCCESS** on CUDA 13.
+- Smoke: `./build/bench_mxf4f6f8 128 4096 4096 10 <cfg> --validate` launches and reports
+  97–112 TFLOPS, **but `GEMM VAL FAILED` for all tried configs (4x4, 6x6, 8x4)** —
+  result mismatch vs its own reference. Repo pins CUDA 12.8; numerics under CUDA 13 are
+  wrong as shipped. Per policy (no porting), recorded as the method's honest ceiling on this
+  box until upstream supports CUDA 13 (or we provision a CUDA 12.8 env, which is a setup
+  choice, not a code fix).
+- Kernel-structure note (repo inspection): mgemm/src has per-format-pair kernels
+  (w4a4.cu, w4a6.cu, w4a8.cu, w6a6.cu, w8a8.cu) — channel groups are executed by
+  per-precision GEMM kernels (segmented execution), NOT a single dual-format mainloop with a
+  shared accumulator. Keeps our single-launch heterogeneous-group-size (g16+g32) fused kernel
+  claim intact.
+
+**Procedure note:** the DeepSeek websearch helper referenced in the task
+(`kernels/mixed_gemm_sm120/tools/websearch.py` + `.ds_key`) does not exist on the box (not in
+git history of any branch/worktree); the survey used arXiv API + Semantic Scholar + OpenReview
+directly instead.
