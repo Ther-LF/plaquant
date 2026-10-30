@@ -29,7 +29,13 @@ clean wildcard for it); the structure match is trivial (one op feeding one op).
 Installed out-of-tree by install_promix_fusion_pass(): wraps
 PostGradPassManager.configure to append this pass after vLLM's own passes
 (still before vllm_ir lowering / cleanup / fix_functionalization, which the
-manager runs after the pass list). PROMIX_NORM_FUSE=0 disables installation.
+manager runs after the pass list). DEFAULT-OFF — PROMIX_NORM_FUSE=1 opts in:
+the r3 serve isolation measured the fused producer net-negative at decode b1/b4
+(TPOT +3.8..+4.0% 3B / +1.0..+1.6% 8B) vs the inductor-native norm it replaces,
+with ~0 contribution at b8/16 and only -1..-2% prefill TTFT (see
+kernels.load_norm_pack). Opt-in runs must also set VLLM_DISABLE_COMPILE_CACHE=1
+(the AOT compile cache key does not include this out-of-tree pass, so a cached
+unfused graph silently wins otherwise).
 """
 
 import operator
@@ -135,10 +141,11 @@ _installed = False
 
 def install_promix_fusion_pass():
     """Out-of-tree pass registration: wrap PostGradPassManager.configure to
-    append the promix fusion pass after vLLM's own passes. Idempotent;
-    PROMIX_NORM_FUSE=0 disables (levers-off control path)."""
+    append the promix fusion pass after vLLM's own passes. Idempotent.
+    DEFAULT-OFF — PROMIX_NORM_FUSE=1 opts in (see module docstring for the
+    measured decode negative + the compile-cache caveat)."""
     global _installed
-    if _installed or os.environ.get("PROMIX_NORM_FUSE", "1") == "0":
+    if _installed or os.environ.get("PROMIX_NORM_FUSE", "0") != "1":
         return
     from vllm.compilation.passes.pass_manager import PostGradPassManager
     if getattr(PostGradPassManager, "_promix_fusion_patched", False):

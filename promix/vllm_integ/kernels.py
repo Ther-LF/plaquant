@@ -111,10 +111,18 @@ def load_norm_pack():
     """vllm-perf r3 lever 2: fused vLLM-RMSNorm + NVFP4/MXFP8 quant/pack
     producer (vllm_rms_quant_pack_ext). The norm stage is a bit-exact replica
     of vLLM's fused_add_rms_norm CUDA kernel (same vec8 loops, cub BlockReduce,
-    block-size rule), the pack stage is the verbatim qpf device code — so the
-    norm->pack fusion pass is bit-invisible end-to-end. Must carry the same
-    act-MSE flags as qpf. Disabled via PROMIX_NORM_FUSE=0."""
-    if os.environ.get("PROMIX_NORM_FUSE", "1") == "0":
+    block-size rule), the pack stage is the verbatim qpf device code.
+    MEASURED NET-NEGATIVE AT DECODE, DEFAULT-OFF (PROMIX_NORM_FUSE=1 opts in):
+    the fused kernel beats the [CUDA-norm + qpfm] chain standalone (1.04-1.11x
+    at M<=64, norm_pack_probe) but the REAL unfused baseline lowers the norm to
+    inductor-NATIVE triton fused with neighboring elementwise ops — same-session
+    serve isolation (iso*_nf vs iso*_nonf, r3) measured decode TPOT +3.8..+4.0%
+    (3B) / +1.0..+1.6% (8B) at b1/b4 with ~0 contribution at b8/16, vs only
+    -1..-2% prefill TTFT. Opt-in may pay on prefill-heavy workloads; it also
+    requires VLLM_DISABLE_COMPILE_CACHE=1 (the vLLM AOT compile cache key does
+    not see the out-of-tree pass, so a cached unfused graph silently bypasses
+    the fusion). Must carry the same act-MSE flags as qpf."""
+    if os.environ.get("PROMIX_NORM_FUSE", "0") != "1":
         return None
     return _load_ext("vrq", "vllm_rms_quant_pack_ext.cu", extra_flags=act_mse_cflags())
 
