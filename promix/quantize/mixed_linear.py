@@ -135,32 +135,49 @@ _SPLITK_TABLE = {
 # windows are capped at the SERVE-measured m_hi=8. 3B keeps m_hi=16 (serve
 # b16 -2%). Root cause not isolated (probe = idle-GPU back-to-back replay;
 # engine = full-graph with interleaved attention/norm kernels).
+# SERVE-LEVEL CORRECTION (honest probe/serve discrepancy): the kernel-level
+# probe showed 8B M=16 wins (qkv 1.07x / o-chain 1.12x / gate_up 1.19x) but
+# the same-session serve A/B measured 8B decode-b16 TPOT +3..+4% with M=16
+# routing ON, reproduced across two sessions, and PROMIX_MARLIN_MMAX=8
+# restores the control digits exactly (pm8b_mmax8 vs pm8b_r4ctl) — so the 8B
+# windows were capped at the SERVE-measured m_hi=8 in r4.
+# r5 UPDATE (r5_marlin_hi_probe2.json, graph-replay, >=5% rule): with the
+# MXFP8-marlin high companion (which is near-flat in M like the low GEMM,
+# replacing the linearly-scaling hi_add inside _MARLIN_HI_TABLE windows) the
+# route beats the W4A4 GEMM out to M=32-48 on most shapes (e.g. 8B qkv M16
+# 1.50x, M32 1.30x; 8B gate_up M32 1.73x, M48 1.35x). The windows ship at the
+# probe values; the r4 8B serve cap is re-checked by the r5 serve A/B
+# (PROMIX_MARLIN_MMAX remains the kill switch if the discrepancy persists).
+# 3B o keeps (2,8): the r5 gather chain reads 1.00x at M16 (no win).
 _MARLIN_TABLE = {
-    (5120, 3072): (2, 16),      # 3B qkv   (1.56-1.84x, M16 1.36x)
-    (3072, 3072): (2, 8),       # 3B o     (chain 1.23-1.47x; M16 0.96 stop)
-    (16384, 3072): (2, 16),     # 3B gate_up (1.71-2.33x, M16 1.11x)
-    (3072, 8192): (2, 16),      # 3B down  (1.77-2.56x, M16 1.22x)
-    (6144, 4096): (2, 8),       # 8B qkv   (1.49-2.08x at M<=8)
-    (4096, 4096): (2, 8),       # 8B o     (chain 1.45-1.64x at M<=8)
-    (28672, 4096): (2, 8),      # 8B gate_up (1.85-2.83x at M<=8)
-    (4096, 14336): (2, 8),      # 8B down  (1.71-3.05x; M16 1.02 stop)
+    (5120, 3072): (2, 48),      # 3B qkv   (M8 1.64x, M16 1.43x, M48 1.09x)
+    (3072, 3072): (2, 8),       # 3B o     (chain 1.11-1.21x; M16 1.00 stop)
+    (16384, 3072): (2, 32),     # 3B gate_up (M8 2.28x, M32 1.35x; M48 1.02 stop)
+    (3072, 8192): (2, 48),      # 3B down  (M8 1.92x, M32 1.49x, M48 1.09x)
+    (6144, 4096): (2, 48),      # 8B qkv   (M8 1.63x, M16 1.50x, M48 1.08x)
+    (4096, 4096): (2, 32),      # 8B o     (chain 1.14-1.40x; M48 0.95 stop)
+    (28672, 4096): (2, 48),     # 8B gate_up (M8 2.84x, M32 1.73x, M48 1.35x)
+    (4096, 14336): (2, 32),     # 8B down  (M8 2.18x, M32 1.23x; M48 0.99 stop)
 }
 
 # vllm-perf r5 lever 1: per-shape smallest M where the MXFP8-marlin high
-# companion (MarlinHigh.gemm_add: marlin fp8 TC GEMM + alpha-add) beats the
-# hi_add GEMV (which scales ~linearly in M — the r4 bottleneck). Measured by
-# promix/vllm_integ/marlin_hi_probe.py under CUDA-graph replay. Below the
-# crossover (and when PROMIX_MARLIN_HI=0 / prepack unavailable) the route
-# keeps the hi_add GEMV. Values filled from r5_marlin_hi_probe.json.
+# companion (MarlinHigh.gemm + fused axpy) beats the hi_add GEMV at the ROUTE
+# level (slice-cast included; the GEMV scales ~linearly in M — the r4
+# bottleneck — while the companion is near-flat). Measured by
+# promix/vllm_integ/marlin_hi_probe.py under CUDA-graph replay
+# (r5_marlin_hi_probe2.json route_speedup_vs_r4). Below the crossover (and
+# when PROMIX_MARLIN_HI=0 / prepack unavailable) the route keeps the hi_add
+# GEMV; above M=32 (the hi_add kernel bound) the route REQUIRES the companion
+# (marlin_route refuses otherwise).
 _MARLIN_HI_TABLE = {
-    (5120, 3072): 8,
-    (3072, 3072): 8,
-    (16384, 3072): 8,
-    (3072, 8192): 8,
-    (6144, 4096): 8,
-    (4096, 4096): 8,
-    (28672, 4096): 8,
-    (4096, 14336): 8,
+    (5120, 3072): 16,     # 3B qkv   (M16 1.01x tie, M24 1.30x)
+    (3072, 3072): 16,     # 3B o     (M16 1.06x)
+    (16384, 3072): 4,     # 3B gate_up (M4 1.08x, M8 1.37x)
+    (3072, 8192): 8,      # 3B down  (M8 1.07x, M16 1.34x)
+    (6144, 4096): 8,      # 8B qkv   (M8 1.14x, M16 1.43x)
+    (4096, 4096): 16,     # 8B o     (M8 0.95, M16 1.10x)
+    (28672, 4096): 2,     # 8B gate_up (M2 1.11x, M8 1.60x)
+    (4096, 14336): 8,     # 8B down  (M8 1.23x, M16 1.48x)
 }
 
 
