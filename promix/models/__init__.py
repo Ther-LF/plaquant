@@ -2,9 +2,11 @@
 
 from .base import ModelPlugin
 from .llama import LlamaPlugin
+from .qwen import Qwen3Plugin
 
 _REGISTRY = {
     "llama": LlamaPlugin,
+    "qwen3": Qwen3Plugin,
 }
 
 
