@@ -331,6 +331,16 @@ class MixedQuantLinear(nn.Module):
         # A bias-less Linear never needed the extra pass anyway.
         if self.bias is None:
             self.bias_in_epilogue = True
+        # vllm-perf r5: cached zero bias for the cast-fold epilogue (the ext
+        # would otherwise torch.zeros per call for bias-less layers).
+        self._zb = None
+
+    def _bias_or_zero(self, dev):
+        if self.bias is not None:
+            return self.bias
+        if self._zb is None or self._zb.device != dev:
+            self._zb = torch.zeros(self.N, dtype=torch.float16, device=dev)
+        return self._zb
 
     @classmethod
     def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
@@ -464,7 +474,9 @@ class MixedQuantLinear(nn.Module):
             if self.bias is not None:
                 D = D + self.bias.to(D.dtype)
             return D
-        if self.bias_in_epilogue and self._cd_bias is not None:
+        if self.bias_in_epilogue and self._cd_bias is not None and self.bias is not None:
+            # A REAL bias: the epilogue fold wins everywhere (removes the cast
+            # AND the bias add; r26 lever A, bit-identical by construction).
             return self._cd_bias.fused_gemm_prepacked_bias(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
@@ -490,6 +502,19 @@ class MixedQuantLinear(nn.Module):
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 M, self.N, self.K_low, self.K_high, self.g_w, cfg)
         else:
+            if self._cd_bias is not None:
+                # vllm-perf r5 lever 2 (cast fold): outside the r2/r3 windows
+                # (= every prefill chunk M>=1024 and the no-window mid-M
+                # points) the bias ext's half(float(bf16(acc))+0.0) epilogue
+                # stores fp16 directly — BIT-IDENTICAL to the bf16 store +
+                # .to(fp16) cast it replaces (r26 lever-A gate), one fewer
+                # [M,N] round-trip per Linear (the r5 prefill profile's #1
+                # actionable item: 3.3/6.8 ms per 3B/8B L2048 step).
+                return self._cd_bias.fused_gemm_prepacked_bias(
+                    A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                    A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                    self._bias_or_zero(A_lo.device),
+                    M, self.N, self.K_low, self.K_high, self.g_w)
             D = self._cd.fused_gemm_prepacked(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,

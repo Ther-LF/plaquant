@@ -179,7 +179,8 @@ class PromixLinearMethod(LinearMethodBase):
         from promix.quantize.weight_pack import PackedWeight
         from promix.vllm_integ.kernels import (load_kernels, load_decode_gemv,
                                                load_smallm, load_qpfm, load_had_pack,
-                                               load_splitk, load_norm_pack)
+                                               load_splitk, load_norm_pack,
+                                               load_cd_bias)
         cd, qpf = load_kernels()
         dg = load_decode_gemv()   # None when PROMIX_DECODE_GEMV=0
         # vllm-perf r2: small-M GEMM configs (lever 1), single-launch mixed pack
@@ -189,6 +190,12 @@ class PromixLinearMethod(LinearMethodBase):
         # vllm-perf r3: split-K/stream-K small-M GEMM (lever 1), fused
         # vLLM-RMSNorm + quant/pack producer for qkv/gate_up (lever 2).
         cd_sk = load_splitk()     # None when PROMIX_SPLITK=0
+        # vllm-perf r5 lever 2: GEMM epilogue output-cast fold (r26 lever-A
+        # ext) — removes the per-Linear [M,N] bf16->fp16 direct_copy (the r5
+        # prefill profile's #1 actionable: 3.3/6.8 ms per 3B/8B L2048 step).
+        # Bit-identical epilogue (half(float(bf16(acc))+0)); PROMIX_CAST_FOLD=0
+        # disables.
+        cd_bias = load_cd_bias()  # None when PROMIX_CAST_FOLD=0
         vrq = None
         if self.kind in ("qkv_proj", "gate_up_proj"):
             vrq = load_norm_pack()   # None when PROMIX_NORM_FUSE=0
@@ -260,7 +267,7 @@ class PromixLinearMethod(LinearMethodBase):
         mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
                                out_dtype=torch.float16, qpf=qpf, dg=dg,
                                qpfm=qpfm, cd_sm=cd_sm, cd_sk=cd_sk,
-                               hpk=hpk, hpk28=hpk28,
+                               cd_bias=cd_bias, hpk=hpk, hpk28=hpk28,
                                had28=None if had_K is None else had_K.cpu())
         layer.promix_mql = mql.to(dev)
 
