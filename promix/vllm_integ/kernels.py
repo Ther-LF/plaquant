@@ -36,6 +36,12 @@ def load_kernels():
     if "cd" in _cache:
         return _cache["cd"], _cache["qpf"]
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
+    # Keep the venv's ext cache separate from the container base env's: both are
+    # py3.12+cu130 so the default cache dir name collides across torch versions.
+    import torch
+    os.environ.setdefault(
+        "TORCH_EXTENSIONS_DIR",
+        os.path.expanduser(f"~/.cache/torch_ext_promix_{torch.__version__.split('+')[0]}"))
     from torch.utils.cpp_extension import load
     inc = [KERN, os.path.join(CUTLASS, "include"),
            os.path.join(CUTLASS, "tools/util/include"),
