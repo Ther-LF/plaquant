@@ -66,13 +66,12 @@ RESULTS.md) for the complete picture.
 | **SharQ** (fused kernels) | all-NVFP4 sparse+residual W4A4 | ~4.5 (†) | 16 | 6.68 | +0.54 | **9.58** | **+0.69** | **measured (new)** |
 | **ARCQuant** (real kernels) | NVFP4+residual-ch W4A4 | **5.14** | 16 | 6.81 | +0.67 | 9.79 | +0.91 | **measured (new)** |
 | vLLM-NVFP4 (modelopt) | plain NVFP4 W4A4 | 4.56 | 16 | 6.87 | +0.73 | n/a | — | committed (baselines) |
+| **CoQuant a_cov control** (=ResQ criterion) | INT4 + 1/8 ch INT8 | ~4.6 | **4** | 7.35 | +1.21 | 10.79 | +1.90 | **measured (new)** |
 | **MicroMix** (‡ caveat) | MXFP4/6/8 channel mix | **5.18** | 16 | 7.39 | +1.26 | 10.56 | +1.68 | **measured (new)** |
 | Atom W4A4(≈4.2b)KV4 | INT4 + 128 INT8 ch | ~4.3 | 4 | 7.57 | +1.43 | n/a | — | committed (peer RESULTS) |
 | **CoQuant wa_cov** | INT4 + 1/8 ch INT8 | ~4.6 | **4** | 7.69 | +1.55 | 11.18 | +2.30 | **measured (new)** |
 | SpinQuant (Hadamard) | INT4 W4A4KV4 | 4.0 | 4 | 7.88 | +1.75 | n/a | — | committed (peer RESULTS) |
 | QuaRot | INT4 W4A4KV4 | 4.0 | 4 | 8.86 | +2.72 | n/a | — | committed (peer RESULTS) |
-
-(8B CoQuant a_cov control: see §CoQuant below.)
 
 ### Llama-3.2-1B-Instruct (bonus round)
 
@@ -153,10 +152,11 @@ so the only difference is the basis):
 | model | wa_cov (CoQuant) wiki / C4 | a_cov (ResQ control) wiki / C4 | paper claim |
 |---|---|---|---|
 | 3B | 9.5552 / 13.2484 | **9.1803 / 12.8181** | wa_cov 8.93 < a_cov 9.18 |
-| 8B | 7.6908 / 11.1848 | (control running at writing; see data dir) | n/a (paper has no 8B) |
+| 8B | 7.6908 / 11.1848 | **7.3510 / 10.7912** | n/a (paper has no 8B) |
 
 Our a_cov control lands **exactly on the paper's ResQ number (9.18)** — the pipeline and
-protocol match — but wa_cov comes out 0.38 WORSE instead of 0.25 better. On our 3B the
+protocol match — but wa_cov comes out 0.38 WORSE instead of 0.25 better, and the same
+reversal repeats on 8B (a_cov better by 0.34 wiki / 0.39 C4). On BOTH our models the
 paper's ordering REVERSES: the "better-than-variance" subspace criterion did not reproduce.
 (Both variants are in any case far above ProMix 8.27 and even above MicroMix.) As an ablation
 target for our Phase-2 "error-driven partition" plans, wa_cov as published is not evidence
@@ -181,9 +181,9 @@ that joint-W+A PCA beats the activation-variance subspace at 1/8.
    with the honest caveat that MicroMix's kernels mis-validate under CUDA 13; its paper
    numbers (Δ+0.48 on Llama-3.1-8B at ~5.2 bits) would still sit at or behind ProMix's
    Δ+0.45 at 4.97 bits.
-4. **vs CoQuant: not competitive as shipped** (9.18–9.56 on 3B, 7.69 on 8B, INT KV4), and
-   its core claimed improvement over the ResQ criterion reverses in its own pipeline on our
-   models.
+4. **vs CoQuant: not competitive as shipped** (9.18–9.56 on 3B, 7.35–7.69 on 8B, INT KV4),
+   and its core claimed improvement over the ResQ a_cov criterion reverses in its own
+   pipeline on BOTH our models (same seed, basis-only difference).
 5. **Overall:** on these models the accuracy-per-bit frontier of the entire W4A4 field
    measured on this box is ProMix (4.97b) → SharQ (4.5b weights, C4-competitive, compute
    overhead) → ARCQuant (5.1b) → vLLM-NVFP4 (4.56b) → MicroMix (5.2b, caveat) → INT methods.
