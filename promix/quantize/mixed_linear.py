@@ -148,13 +148,21 @@ class MixedQuantLinear(nn.Module):
         # every shape at M>=2 (amortizes the shared activation staging hardest).
         self._dec_warps_mb = 32
         # Per-shape batched-decode crossover vs the fused tensor-core GEMM,
-        # measured by promix/vllm_integ/decode_probe.py on RTX Pro 6000 (r1):
-        # GEMV wins at M<=4 on EVERY shape (1.2-3.2x); at M<=8 on mid-size
-        # weights; at M<=16 only on the smallest (<16M packed elems). The GEMV
-        # cost grows ~linearly in M (LDS/FMA-bound per row) while the fused GEMM
-        # is ~flat below its 128-row tile, hence the N*K-dependent crossover.
+        # measured by promix/vllm_integ/decode_probe.py on RTX Pro 6000 under
+        # CUDA-GRAPH REPLAY timing (the serving regime; eager timing overstates
+        # the fused path's launch overhead and picks wrong thresholds — r1
+        # lesson). Graph-timed: GEMV wins at M=1 (1.7-2.9x) and M=2 (1.2-2.1x)
+        # on EVERY shape; at M=4 only where the margin survives the extra fp32
+        # ->fp16 cast (small weights N*K<=17M at 1.35-1.50x, or K-heavy
+        # down_proj-like at N*K<=26M where the fused pack scales with K); at
+        # M>=8 the fused GEMM always wins. The GEMV cost grows ~linearly in
+        # M (LDS/FMA-bound per row) while the fused GEMM is ~flat below its
+        # 128-row tile.
         nk = self.N * self.K
-        self._dec_m_max_shape = 16 if nk <= 16e6 else (8 if nk <= 32e6 else 4)
+        if nk <= 17e6 or (nk <= 26e6 and self.K >= 2 * self.N):
+            self._dec_m_max_shape = 4
+        else:
+            self._dec_m_max_shape = 2
         # Set by wire_real_kernel when cd_bias is wired AND the epilogue-eligible
         # prefill path may use it (i.e. a real fp16 bias exists to fold).
         self.bias_in_epilogue = (cd_bias is not None)

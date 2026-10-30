@@ -89,6 +89,35 @@ def bench(fn, reps=50, warmup=10):
     return ts[len(ts) // 2]
 
 
+def bench_graph(fn, reps=30, inner=10):
+    """Per-iteration cost under CUDA-graph REPLAY (the serving regime): capture
+    `inner` iterations into one graph (amortizes the per-replay launch floor the
+    way the engine's big whole-model graph does), replay, report us/iter.
+    Eager timing overstates multi-launch paths by 50-80us of host/launch cost
+    that graph replay erases — it picks the WRONG route threshold (r1 lesson)."""
+    s = torch.cuda.Stream()
+    s.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(s):
+        for _ in range(3):
+            fn()
+    torch.cuda.current_stream().wait_stream(s)
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        for _ in range(inner):
+            fn()
+    for _ in range(3):
+        g.replay()
+    torch.cuda.synchronize()
+    ts = []
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        g.replay()
+        torch.cuda.synchronize()
+        ts.append((time.perf_counter() - t0) / inner * 1e6)
+    ts.sort()
+    return ts[len(ts) // 2]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None)
@@ -128,28 +157,26 @@ def main():
         res["min_cos_vs_ref"] = min_cos
         print(f"{tag:12s} bit={bit_ok} min_cos={min_cos:.8f}", flush=True)
 
-        # ---- bench: GEMV (per warps) vs fused GEMM path ----
+        # ---- bench (graph-replay timing): GEMV (per warps) vs fused GEMM ----
         timing = {}
         for M in (1, 2, 4, 8, 16):
             xm = x[:M].contiguous()
             row = {}
             if M == 1:
-                row["gemv_w8"] = bench(lambda: dg.decode_gemv_w4a16(
-                    xm[0], pk.W_lo_dec, pk.S_lo_dec, pk.W_hi_dec, pk.S_hi_dec,
-                    N, pk.K_low, pk.K_high, 8), args.reps)
-                row["gemv_w24"] = bench(lambda: dg.decode_gemv_w4a16(
-                    xm[0], pk.W_lo_dec, pk.S_lo_dec, pk.W_hi_dec, pk.S_hi_dec,
-                    N, pk.K_low, pk.K_high, 24), args.reps)
+                for w in (8, 24):
+                    row[f"gemv_w{w}"] = bench_graph(lambda w=w: dg.decode_gemv_w4a16(
+                        xm[0], pk.W_lo_dec, pk.S_lo_dec, pk.W_hi_dec, pk.S_hi_dec,
+                        N, pk.K_low, pk.K_high, w))
             else:
                 for w in (8, 16, 32):
-                    row[f"gemv_w{w}"] = bench(lambda w=w: dg.decode_gemv_w4a16_mb(
+                    row[f"gemv_w{w}"] = bench_graph(lambda w=w: dg.decode_gemv_w4a16_mb(
                         xm, pk.W_lo_dec, pk.S_lo_dec, pk.W_hi_dec, pk.S_hi_dec,
-                        N, pk.K_low, pk.K_high, w), args.reps)
+                        N, pk.K_low, pk.K_high, w))
 
             def fused():
                 a = mql._pack_activation(xm)
                 return mql._gemm(*a, M)
-            row["fused"] = bench(fused, args.reps)
+            row["fused"] = bench_graph(fused)
             timing[M] = row
             best = min((v, k) for k, v in row.items() if k != "fused")
             print(f"  M={M:2d} fused={row['fused']:7.1f}us best_gemv={best[0]:7.1f}us "
