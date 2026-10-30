@@ -27,6 +27,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--max-chunks", type=int, default=None)
+    ap.add_argument("--graphs", action="store_true",
+                    help="run with enforce_eager=False (torch.compile + CUDA "
+                         "graphs) — the Phase-2 graph-equivalence re-gate")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -38,7 +41,8 @@ def main():
     if args.max_chunks:
         nchunks = min(nchunks, args.max_chunks)
 
-    llm = build_llm(args.ckpt, max_model_len=S + 128)
+    llm = build_llm(args.ckpt, max_model_len=S + 128,
+                    enforce_eager=not args.graphs)
     from vllm import SamplingParams, TokensPrompt
     sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=1)
     prompts = [TokensPrompt(prompt_token_ids=ids[i].tolist()) for i in range(nchunks)]
@@ -75,9 +79,11 @@ def main():
           f"p99={lp_diff.flatten().kthvalue(int(0.99 * lp_diff.numel())).values:.5f} "
           f"max={lp_diff.max():.5f}", flush=True)
     print(f"GATE_T2_{verdict}", flush=True)
-    out = args.out or os.path.join(args.ckpt, "gate_t2.json")
+    out = args.out or os.path.join(
+        args.ckpt, "gate_t2_graphs.json" if args.graphs else "gate_t2.json")
     with open(out, "w") as f:
-        json.dump({"verdict": verdict, "ppl_vllm": ppl_vllm, "ppl_ref": ppl_ref,
+        json.dump({"verdict": verdict, "graphs": args.graphs,
+                   "ppl_vllm": ppl_vllm, "ppl_ref": ppl_ref,
                    "dppl": dppl, "top1_agreement_pct": agree_pct,
                    "positions": total, "chunks": nchunks,
                    "logprob_absdiff_mean": lp_diff.mean().item(),
