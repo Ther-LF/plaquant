@@ -26,10 +26,12 @@ decisive per-ring PPL-sensitivity test.
 (1) 1B→3B: the upstream structure and the gain-to-headroom ratio are both
 ~constant (~5.5–6 % of the gap on wikitext, ~7 % on C4) while the headroom itself
 collapses 1.39→0.48 — a pure **headroom effect**. (2) 3B→8B/13B: headroom barely
-moves (0.48→0.45) yet the gain vanishes — an additional **per-ring sensitivity
-flattening**: the top-ΔD ring flip costs FLIP1_SENS_TABLE. Upstream concentration
-is scale-invariant (Gini 0.61–0.69, top-1/32 share 21–27 %, non-monotone) and is
-NOT the cause.
+moves (0.48→0.45) yet the gain vanishes — an additional **per-ring PPL-sensitivity
+flattening**: demoting the top-16 ΔD rings from the uniform-1/8 config costs
++0.057 (1B) / +0.033 (3B) / +0.005 (8B) / −0.001 (13B) PPL — a 6× collapse between 3B
+and 8B at IDENTICAL headroom and identical ΔD concentration: big-model redundancy
+decouples ring-level MSE from loss. Upstream concentration is scale-invariant
+(Gini 0.61–0.69, top-1/32 share 21–27 %, non-monotone) and is NOT the cause.
 
 ## 1. Upstream structure vs scale — flat (not the cause)
 
@@ -46,7 +48,7 @@ Per-ring ΔD = D_fp4 − D_fp8 and per-ring variance over the 6 reallocated Line
 
 The concentration is **scale-invariant and non-monotone** (8B is MORE concentrated
 than 3B on every metric; 13B is mildly less, Gini −0.03, top-1/8 −4 pp — far too
-small to explain a 50× gain collapse). ΔD stays rank-tied to ring variance
+small to explain a gain that collapses to zero). ΔD stays rank-tied to ring variance
 (ρ ≥ 0.985) and per-layer ΔD is near-flat (CV ≤ 0.04) on every model. The
 hypothesis "per-ring variance/ΔD/energy becomes uniform at scale" is **rejected**:
 the allocator sees essentially the same exploitable structure at 1B and 13B.
@@ -76,7 +78,9 @@ Confirmed: the total quantization penalty the allocation can redistribute shrink
 | 1B | −0.0766 | 1.3914 | **5.5 %** | −0.1286 | **7.1 %** |
 | 3B | −0.0296 | 0.4826 | **6.1 %** | −0.0721 | **7.5 %** |
 | 8B | +0.0190 | 0.4514 | **−4.2 %** | +0.0038 | −0.5 % |
-| 13B | −0.0006 | 0.1416 | **0.4 %** | −0.0020* | −1.1 % |
+| 13B | −0.0006 | 0.1416 | **0.4 %** | +0.0020 | −1.1 % |
+
+(convention: gain = measured − uniform, so negative = allocation wins; gain/gap = (uniform−measured)/gap, positive = fraction of the headroom recovered.)
 
 1B→3B the allocation claws back a **constant ~6 % (wiki) / ~7.5 % (C4) fraction**
 of a 3× smaller gap — the decay there is **purely the shrinking headroom**. At
@@ -90,9 +94,78 @@ and the top-16 ΔD rings (flip16) back to NVFP4; wikitext PPL
 (`rd_whydecay.py`, same build path for all three points so the deltas are
 build-consistent).
 
-FLIP_TABLE
+| model | uniform (explicit ring-set) | flip1 ΔPPL | flip16 ΔPPL | top-16 ΔD share | headroom (uniform−bf16) | flip16 ΔPPL / headroom | sens = ΔlogPPL / ΔD-share |
+|---|---|---|---|---|---|---|---|
+| 1B | 14.4285 | −0.0045 | **+0.0565** | 3.33 % | 1.2716 | 4.4 % | 0.118 |
+| 3B | 8.2736 | −0.0050 | **+0.0330** | 1.32 % | 0.4588 | 7.2 % | 0.301 |
+| 8B | 6.5923 | −0.0031 | **+0.0053** | 0.88 % | 0.4555 | 1.2 % | 0.091 |
+| 13B | 5.0255 | +0.0030 | **−0.0012** | 0.68 % | 0.1402 | −0.9 % | −0.035 |
 
-VERDICT_SECTION
+(uniform here = the same explicit per-Linear top-variance ring-set built through
+the identical reorder path as the flips, so the deltas are build-consistent;
+it reproduces the shipped uniform anchor on 3B/8B/13B to ≤0.03 and runs 0.12
+BELOW it on 1B — see footnote. bf16 floors from §2.)
+
+- **flip1** (demote the single globally-top-ΔD ring, 0.05–0.22 % of all ΔD) is
+  **below the build-noise floor on every model** (−0.005..+0.003; three of four
+  slightly negative). One 64-channel ring is never load-bearing from the 1/8
+  operating point — on any size. The per-ring resolution floor of this harness is
+  ~±0.005 PPL.
+- **flip16** (demote the top-16 ΔD rings) is where scale separates:
+  **+0.057 (1B) → +0.033 (3B) → +0.005 (8B) → −0.001 (13B)**. The decisive
+  comparison is **3B vs 8B: their headroom is IDENTICAL (0.459 vs 0.455) and
+  their ΔD concentration is near-identical (§1), yet the same-rank top-16 rings
+  cost 6.2× less PPL on 8B** — and per unit ΔD-share the log-PPL sensitivity
+  drops 3.3× (0.301 → 0.091). At 8B/13B the value of protecting even the TOP
+  handful of ΔD rings sinks to the noise floor; a fortiori the marginal
+  ~900-ring reshuffle that distinguishes measured from uniform allocation is
+  worth nothing. This is a direct measurement of per-ring PPL-sensitivity
+  flattening — the model absorbs a top-outlier-ring's NVFP4 error.
+
+Footnote (1B): the explicit ring-set uniform (14.4285) lands 0.12 BELOW the
+shipped eigenvalue-tail uniform (14.5483) — on the 1B, even WHICH top-1/8 rings
+you pick inside a Linear is worth ±0.1 PPL, corroborating that per-ring
+sensitivity is largest on the smallest model (on 3B/8B/13B the same swap moves
+≤0.03).
+
+### Verdict — the mechanistic reason the allocation gain decays
+
+The gain decays for **downstream** reasons, in two distinguishable stages; the
+upstream ΔD/variance/energy structure is scale-invariant and plays no role.
+
+1. **1B → 3B: shrinking total headroom.** The allocation claws back a constant
+   ~6 % (wiki) / ~7.5 % (C4) of the uniform-W4A4 gap on both models; the gap
+   itself collapses 1.39 → 0.48. The gain shrinks because the pie shrinks —
+   the per-ring structure is unchanged and the allocation still recovers the
+   same fraction of whatever gap exists. (Raw per-ring 1B↔3B comparisons are
+   confounded by ring-count dilution — 16 rings are 0.35 % of 1B's rings but
+   0.16 % of 3B's — so the fraction-of-headroom constancy in §3 is the clean
+   stage-1 evidence.)
+2. **3B → 8B/13B: per-ring PPL-sensitivity flattening (redundancy).** Headroom
+   is IDENTICAL at 3B and 8B (0.459 vs 0.455) and the ΔD concentration is
+   near-identical, yet the directly measured PPL value of the top-16 ΔD rings
+   drops 6.2× (+0.033 → +0.005, the noise floor) and the per-ΔD-share log-PPL
+   sensitivity drops 3.3×. The bigger model simply absorbs a top-outlier-ring's
+   NVFP4 error — enough parallel heads/paths exist that no single 64-channel
+   direction is load-bearing. Once per-ring sensitivity is below the noise
+   floor, WHICH rings get the FP8 budget cannot matter, and measured ≈ uniform
+   ≈ any sensible allocation. 13B adds the headroom collapse on top (gap 0.14),
+   burying the effect completely.
+
+**One-line statement:** *mixed-precision allocation matters exactly as much as
+the model is fragile to quantization: the outlier/ΔD structure the allocator
+exploits is scale-invariant, but the PPL payoff per protected ring scales with
+the model's quantization fragility — which falls ~10× from 1B to 13B (headroom)
+and, independently of headroom, collapses between 3B and 8B as model redundancy
+decouples local ring-MSE from loss. Allocation is therefore a small-model
+technology; at ≥8B uniform is already optimal to within noise.*
+
+Supporting detail: the measured allocator's one big systematic move — stripping
+ALL FP8 from the post-Hadamard down_proj (35–44 % of rings, <1 % of ΔD) and
+reinvesting it in the attn/mlp streams (§5b) — is a *correct* MSE decision on
+every model (ΔD says so, and rd-accpuzzle's X/Y anatomy confirmed Y>X on 8B),
+but its PPL value rides the same two-stage fragility ladder: −0.08 (1B),
+−0.03 (3B), ~0 (8B/13B).
 
 ## 5. Structural breakdown — where is the exploitable non-uniformity?
 
