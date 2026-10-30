@@ -256,64 +256,70 @@ void vllm_arn_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ s
   auto* __restrict__ rout_v = reinterpret_cast<V*>(residual_out);
   auto* __restrict__ xn_v   = reinterpret_cast<V*>(xn_out);
 
-  extern __shared__ __align__(16) float smem[];   // N floats (norm output)
+  extern __shared__ __align__(16) char smem_raw[];
+  TIn* smem = reinterpret_cast<TIn*>(smem_raw);   // N halves (norm output row)
   __shared__ float s_variance;
   using BlockReduce = cub::BlockReduce<float, 1024>;
   __shared__ typename BlockReduce::TempStorage reduceStore;
 
-  // ---- phase A: vLLM fused_add_rms_norm loop 1 (EXACT order) ---------------
+  // ---- phase A: vLLM fused_add_rms_norm loop 1 (EXACT order). The summed
+  // vectors are additionally kept in registers (<=2 per thread for
+  // hidden<=4096 at block>=256) so phase B avoids vLLM's residual re-read —
+  // same VALUES (this thread wrote them), bit-exact.
+  constexpr int kKeep = 2;
+  V keep[kKeep];
   float variance = 0.0f;
+  int nvec = 0;
   for (int idx = tid; idx < vec_hidden; idx += blockDim.x) {
     V temp = x_v[vrow + idx];
     temp += res_v[vrow + idx];
     variance += temp.sum_squares();
     rout_v[vrow + idx] = temp;
+    if (nvec < kKeep) keep[nvec] = temp;
+    ++nvec;
   }
   variance = BlockReduce(reduceStore).Reduce(variance, CubAddOp{}, blockDim.x);
   if (tid == 0) { s_variance = rsqrtf(variance / N + eps); }
   __syncthreads();
 
-  // ---- phase B: vLLM loop 2 (EXACT arithmetic) + SMEM float copy ------------
-  for (int idx = tid; idx < vec_hidden; idx += blockDim.x) {
-    V res = rout_v[vrow + idx];
-    V w = w_v[idx];
-    V out;
+  // ---- phase B: vLLM loop 2 (EXACT arithmetic) + SMEM fp16 copy ------------
+  {
+    int i = 0;
+    for (int idx = tid; idx < vec_hidden; idx += blockDim.x, ++i) {
+      V res = (i < kKeep) ? keep[i] : rout_v[vrow + idx];
+      V w = w_v[idx];
+      V out;
 #pragma unroll
-    for (int j = 0; j < width; ++j) {
-      float xv = Converter::convert(res.data[j]);
-      float wf = Converter::convert(w.data[j]);
-      out.data[j] = Converter::convert(xv * s_variance * wf);
+      for (int j = 0; j < width; ++j) {
+        float xv = Converter::convert(res.data[j]);
+        float wf = Converter::convert(w.data[j]);
+        out.data[j] = Converter::convert(xv * s_variance * wf);
+      }
+      xn_v[vrow + idx] = out;
+      *reinterpret_cast<V*>(smem + idx * width) = out;
     }
-    xn_v[vrow + idx] = out;
-    float* dst = smem + idx * width;
-#pragma unroll
-    for (int j = 0; j < width; ++j) dst[j] = Converter::convert(out.data[j]);
   }
   __syncthreads();
 
-  // ---- phase C: pack (verbatim qpf decomposition, dynamic warp split) -------
+  // ---- phase C: pack — qpfm's parallel decomposition inside the row CTA:
+  // one THREAD per NVFP4 16-block (all threads), then one WARP per MXFP8
+  // 32-block. Reads the rounded fp16 norm values from SMEM (same values qpfm
+  // reads from gmem -> bit-identical codes).
   const int kWarps = blockDim.x >> 5;
   const int warp = tid >> 5, lane = tid & 31;
   const int n_lo = K_low / 16;
   const int n_hi = (K_high > 0) ? K_high / 32 : 0;
-  int n_lo_warps = (n_lo / 2 + 31) / 32;
-  if (n_lo_warps > kWarps - (n_hi > 0 ? 1 : 0)) n_lo_warps = kWarps - (n_hi > 0 ? 1 : 0);
-  if (n_lo_warps < 1) n_lo_warps = 1;
-  if (warp < n_lo_warps) {
-    for (int b = warp * 32 + lane; b < n_lo; b += n_lo_warps * 32) {
-      const int c0 = b * 16;
-      float xf[16];
+  for (int b = tid; b < n_lo; b += blockDim.x) {
+    const int c0 = b * 16;
+    float xf[16];
 #pragma unroll
-      for (int j = 0; j < 16; ++j) xf[j] = smem[c0 + j];
-      pack_fp4_block_v<LayoutSF4>(xf, code_lo, sf_lo, layout4, r, b, K_low);
-    }
+    for (int j = 0; j < 16; ++j) xf[j] = vrq::_typeConvert<TIn>::convert(smem[c0 + j]);
+    pack_fp4_block_v<LayoutSF4>(xf, code_lo, sf_lo, layout4, r, b, K_low);
   }
-  const int hi_warps = kWarps - n_lo_warps;
-  if (n_hi > 0 && warp >= n_lo_warps) {
-    for (int b = warp - n_lo_warps; b < n_hi; b += hi_warps) {
-      const int col = K_low + b * 32 + lane;     // high segment starts at K_low
-      pack_fp8_block_warp_v<LayoutSF8>(smem[col], code_hi, sf_hi, layout8, r, b, K_high, 0xffffffffu);
-    }
+  for (int b = warp; b < n_hi; b += kWarps) {
+    const int col = K_low + b * 32 + lane;     // high segment starts at K_low
+    float q = vrq::_typeConvert<TIn>::convert(smem[col]);
+    pack_fp8_block_warp_v<LayoutSF8>(q, code_hi, sf_hi, layout8, r, b, K_high, 0xffffffffu);
   }
 }
 
@@ -360,7 +366,7 @@ std::vector<torch::Tensor> vllm_add_rms_norm_quant_pack(
   const int max_block_size = (Mi < 256) ? 1024 : 256;
   const int block = std::min((int)N, max_block_size);
   TORCH_CHECK(block % 32 == 0, "block must be warp-multiple");
-  const int smem_bytes = (int)N * (int)sizeof(float);
+  const int smem_bytes = (int)N * (int)x.element_size();
 
 #define LAUNCH_VRQ(TY)                                                                   \
   do {                                                                                   \
