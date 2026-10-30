@@ -75,3 +75,64 @@ class CustomJsonDataset(torch.utils.data.IterableDataset):
         }
         result["labels"] = result["input_ids"].copy()
         return result
+
+
+def get_c4(nsamples=256, seed=0, seqlen=2048, tokenizer=None, eval_mode=False):
+    """Load C4 (allenai/c4, en) for calibration or evaluation.
+
+    Follows the GPTQ/QuaRot/SpinQuant/ResQ-standard C4 PPL protocol: sample
+    `nsamples` random windows of `seqlen` tokens from the first validation
+    (eval) / train (calib) shard and concatenate them. eval_mode=True returns a
+    lightweight wrapper exposing `.input_ids` (shape [1, nsamples*seqlen]) so it
+    plugs straight into `evaluate_ppl`, which slices it into `nsamples` windows.
+
+    The 256x2048 validation stream is the de-facto C4 perplexity set reported by
+    the W4A4 quantization literature (QuaRot Table, SpinQuant, ResQ). seed is
+    fixed so the window selection is reproducible across configs/models.
+    """
+    if tokenizer is None:
+        raise ValueError("tokenizer must be provided")
+
+    if eval_mode:
+        valdata = datasets.load_dataset(
+            "allenai/c4",
+            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
+            split="validation",
+        )
+        random.seed(seed)
+        valenc = []
+        for _ in range(nsamples):
+            while True:
+                i = random.randint(0, len(valdata) - 1)
+                enc = tokenizer(valdata[i]["text"], return_tensors="pt")
+                if enc.input_ids.shape[1] > seqlen:
+                    break
+            s = random.randint(0, enc.input_ids.shape[1] - seqlen - 1)
+            valenc.append(enc.input_ids[:, s:s + seqlen])
+        valenc = torch.hstack(valenc)
+
+        class _C4TestEnc:
+            def __init__(self, input_ids):
+                self.input_ids = input_ids
+
+        return _C4TestEnc(valenc)
+    else:
+        traindata = datasets.load_dataset(
+            "allenai/c4",
+            data_files={"train": "en/c4-train.00000-of-01024.json.gz"},
+            split="train",
+        )
+        random.seed(seed)
+        trainloader = []
+        for _ in range(nsamples):
+            while True:
+                i = random.randint(0, len(traindata) - 1)
+                enc = tokenizer(traindata[i]["text"], return_tensors="pt")
+                if enc.input_ids.shape[1] > seqlen:
+                    break
+            s = random.randint(0, enc.input_ids.shape[1] - seqlen - 1)
+            inp = enc.input_ids[:, s:s + seqlen]
+            tar = inp.clone()
+            tar[:, :-1] = -100
+            trainloader.append((inp, tar))
+        return trainloader
