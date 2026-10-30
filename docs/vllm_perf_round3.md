@@ -67,8 +67,11 @@ rides the producing norm. Three parts, all landed:
    can see the pack; the gemm op keeps the r1 capture-safe per-M GEMV/GEMM
    routing (consumes `xn` on GEMV routes).
 2. **Out-of-tree pass registration**: wrapping `PostGradPassManager.configure`
-   works (55 decoder sites rewritten); patterns are matched on
-   `torch.ops.vllm_ir.fused_add_rms_norm` (0.32's pre-lowering IR ops).
+   works; patterns are matched on `torch.ops.vllm_ir.fused_add_rms_norm`
+   (0.32's pre-lowering IR ops; the engine lowers them to NATIVE inductor
+   triton by default — `custom_ops: [none]`). Application is evidenced by the
+   T2 digits moving only when the pass is enabled AND the compile cache is off
+   (the engine's logger filters the pass's own match-count line).
    CAVEAT discovered: vLLM's **AOT compile cache key does not include
    out-of-tree passes** — a cached unfused graph silently bypasses the fusion;
    opt-in runs need `VLLM_DISABLE_COMPILE_CACHE=1`.
