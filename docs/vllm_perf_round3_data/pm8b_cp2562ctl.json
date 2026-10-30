@@ -1,0 +1,91 @@
+{
+  "meta": {
+    "tag": "pm8b_cp2562ctl",
+    "model": "/home/luofan/vllm_integ/promix-llama-3-8b",
+    "argv": [
+      "/home/luofan/plaquant-vllm-integ/promix/vllm_integ/bench_serve.py",
+      "--model",
+      "/home/luofan/vllm_integ/promix-llama-3-8b",
+      "--tag",
+      "pm8b_cp2562ctl",
+      "--dtype",
+      "float16",
+      "--cases",
+      "1024:32",
+      "--batches",
+      "1,4",
+      "--prefill-len",
+      "0",
+      "--reps",
+      "5",
+      "--extra-llm-kwargs",
+      "{\"max_num_batched_tokens\":256,\"enable_chunked_prefill\":true}",
+      "--out",
+      "/home/luofan/vllm_integ/bench_r3/pm8b_cp2562ctl.json"
+    ],
+    "gpu": "7",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "time": "2026-10-30 18:49:34",
+    "vllm": "0.32.0",
+    "load_s": 29.55406239395961,
+    "quantization_resolved": "promix",
+    "dtype_resolved": "torch.float16",
+    "enforce_eager": false
+  },
+  "cases": {
+    "isl1024_osl32_b1": {
+      "isl": 1024,
+      "osl": 32,
+      "batch": 1,
+      "ttft_s": 0.04651973000727594,
+      "full_s": 0.2647465218324214,
+      "tpot_ms": 7.039573929843402,
+      "gen_tok_per_s": 120.87033203879173,
+      "total_tok_per_s": 3988.720957280127,
+      "ttft_runs_s": [
+        0.04692008392885327,
+        0.04651973000727594,
+        0.046254877001047134,
+        0.047128968173637986,
+        0.046133521012961864
+      ],
+      "full_runs_s": [
+        0.2658069741446525,
+        0.2647465218324214,
+        0.2645508029963821,
+        0.26449935883283615,
+        0.2650196368340403
+      ]
+    },
+    "isl1024_osl32_b4": {
+      "isl": 1024,
+      "osl": 32,
+      "batch": 4,
+      "ttft_s": 0.17441798211075366,
+      "full_s": 0.4827313490677625,
+      "tpot_ms": 9.945592482484157,
+      "gen_tok_per_s": 265.157836231664,
+      "total_tok_per_s": 8750.208595644912,
+      "ttft_runs_s": [
+        0.17458857502788305,
+        0.17414370807819068,
+        0.17441798211075366,
+        0.1741762470919639,
+        0.17451562406495214
+      ],
+      "full_runs_s": [
+        0.4867276269942522,
+        0.48296512197703123,
+        0.4825712819583714,
+        0.48240125202573836,
+        0.4827313490677625
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 75.626953125,
+    "max_memory_allocated_gib": 75.52444791793823
+  }
+}

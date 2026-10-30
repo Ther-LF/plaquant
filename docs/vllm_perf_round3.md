@@ -10,11 +10,11 @@ out-of-tree inductor pass (lever 2, bit-exact, measured NET-NEGATIVE at decode
 (lever 3, bit-exact, 1.2-2.0x on its chain).
 
 Same-session default-config serve A/B (split-K + gather ON, vs both OFF):
-**8B decode b8/b16 TPOT −9..−11%** (pm/NVFP4 0.60-0.61 → **0.63-0.68**),
-3B b8/16 −1..−4%; prefill TTFT −2..−9% at b8/16; b1/b4 unchanged (norm-fuse,
-the one lever that regressed them, is off by default). Raw JSONs:
-`docs/vllm_perf_round3_data/`; full set on the remote under
-`/home/luofan/vllm_integ/bench_r3/`.
+**8B decode b8/b16 TPOT −8.9..−10.3%** (pm/NVFP4 0.56-0.61 → **0.63-0.68**),
+3B b8/16 −2.5..+0.9%; prefill TTFT L2048 −0.8..−2.2%; b1/b4 decode paths
+bit-provenly untouched (norm-fuse, the one lever that regressed them, is off
+by default). Raw JSONs: `docs/vllm_perf_round3_data/`; full set on the remote
+under `/home/luofan/vllm_integ/bench_r3/`.
 
 ---
 
@@ -119,6 +119,7 @@ disables).
 | T2 decode-route m16 (split-K active on 3B down M≤16) | **PASS: signed ΔPPL = −0.0003** (8.3671 vs ref 8.3674). The shift vs r2's 8.3603 is exactly the split-K FP32 reduction order (see control). |
 | T2 decode-route m16 CONTROL (`PROMIX_SPLITK=0`) | **Byte-identical to r2's m16 run** (PPL 8.360270763492986, every digit) — levers-off control green; the m16 delta is definitively split-K's reduction order. |
 | T2 decode m1 `--graphs` | **Byte-identical to r1/r2** (PPL 8.462834401645244, every digit) — the M=1 GEMV path untouched. |
+| T2 decode-route m16 FINAL config (split-K + gather) | **PASS, PPL 8.367113659407261 — every digit equal to the split-K-only run**: the gather fold is bit-invisible end-to-end, as constructed. |
 | norm-fuse opt-in gates | T2 graphs \|d\|=0.0013 PASS; decode m1 graphs signed −0.3382 PASS (§3). |
 
 ## 6. Scoreboard — serve bench
@@ -134,20 +135,54 @@ split-K + gather + norm-fuse ON vs all r3 levers OFF)
 | prefill TTFT L2048 b8/b16 | −4.2% / −8.8% | −4.0% / −4.3% |
 
 The b1/b4 regressions are the norm-fuse lever (isolation in §3) → it is
-default-off; the FINAL default-config A/B (split-K + gather only,
-`pm{3b,8b}_final{,ctl}.json`) is the shipping scoreboard: [FINAL_AB]
+default-off. The FINAL default-config A/B (split-K + gather only,
+`pm{3b,8b}_final{,ctl}.json`, back-to-back same box) is the shipping
+scoreboard:
 
-### 6b. Three-way vs the round-1 nvfp4/bf16 baselines (TPOT, pm/nv = nv/pm ms)
+| case | 3B TPOT off → on | 8B TPOT off → on |
+|---|---|---|
+| isl1024_osl128 b8 | 6.352 → 6.412 (+0.9%) | 10.458 → **9.432 (−9.8%)** |
+| isl1024_osl128 b16 | 6.957 → 6.964 (+0.1%) | 11.227 → **10.223 (−8.9%)** |
+| isl128_osl1024 b8 | 6.088 → **5.918 (−2.8%)** | 10.146 → **9.098 (−10.3%)** |
+| isl128_osl1024 b16 | 6.374 → **6.215 (−2.5%)** | 10.575 → **9.533 (−9.9%)** |
+| b1 / b4 (both cases) | −0.1..+1.8% / +0.1..+3.6% | −0.1..+2.0% / +0.0..+3.7% |
+| prefill TTFT L2048 b1..b16 | −0.8/−1.6/−2.0/−2.2% | −1.2/−1.4/−1.4/−1.5% |
+
+The 8B b8/16 −9..−10% replicated across three sessions (v1/v2/final). HONEST
+ANOMALY: the isl1024 b1/b4 rows read +2..+4% although NO r3 lever routes at
+M≤4 (split-K windows start at M=8; gather and the GEMV routes are
+byte-identical paths there; norm-fuse off) while the isl128 rows read ±0.1% —
+a levers-on/off side effect on graph-pool/KV-block placement at long context,
+inside r2's documented b1 ±3% bimodal band; the M≤4 kernels are bit-provenly
+untouched (m1/m16 gates).
+
+### 6b. Three-way vs the round-1 nvfp4/bf16 baselines (TPOT pm/nv = nv_ms/pm_ms;
+final levers-on, ctl in parens)
 
 | | decode b8 | decode b16 | decode b1 | decode b4 |
 |---|---|---|---|---|
-| 3B r2 → r3 | 0.54-0.58 → [3B_B8] | 0.58-0.62 → [3B_B16] | 0.74-0.76 → [3B_B1] | → [3B_B4] |
-| 8B r2 → r3 | 0.56-0.58 → [8B_B8] | 0.60-0.61 → [8B_B16] | 0.73 → [8B_B1] | → [8B_B4] |
+| 3B r2 → r3 | 0.54-0.58 → **0.549-0.551** (ctl 0.536-0.554) | 0.58-0.62 → **0.593-0.606** (0.578-0.607) | 0.74-0.76 → 0.724-0.741 | 0.515-0.525 |
+| 8B r2 → r3 | 0.56-0.58 → **0.625-0.634** (ctl 0.560-0.572) | 0.60-0.61 → **0.660-0.675** (0.595-0.614) | 0.73 → 0.711-0.727 | 0.545-0.557 |
+
+The same-session ctl→on deltas (6a) are the honest per-lever numbers; the r2→r3
+trajectory mixes ~±2% session drift (today's 3B ctl reads slower than r2's
+rows, masking 3B's small split-K win in the ratio view). 8B's jump
+(0.56-0.61 → 0.63-0.68) is real and same-session-confirmed. TTFT pm/nv at
+decode-case prefills: 0.61-0.86 (8B b8/16 at 0.61-0.64 — prefill remains the
+bigger relative gap).
 
 ### 6c. Mid-M / chunked-prefill serve points (the regime the main protocol
-barely samples)
+barely samples; `pm*_midm2{,ctl}` isl 256/384 b1-2, `pm*_cp2562{,ctl}`
+isl1024 chunked at 256-token budget)
 
-[MIDM]
+All within ±3.6% (TPOT −1.0..+0.4%, TTFT −3.2..+3.6%). The kernel-level
+split-K/gather wins at M=256-512 (probe: 8B down 1.07-1.35x, gate_up
+1.09-1.21x, o gather 1.36-1.54x) are real but Amdahl-limited at the serve
+level on these model sizes: a one-step isl-256 prefill is dominated by
+attention + the FP16 rest, and the control already carries the r2 small-M
+configs. The r2 protocol note stands — these wins accrue to workloads whose
+steady state LIVES at mid-M (continuous-batching mixes), not to one-shot
+TTFT points.
 
 ## 7. Next biggest overhead (feeds round 4)
 
