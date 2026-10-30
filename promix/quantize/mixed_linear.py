@@ -84,17 +84,30 @@ _SMALLM_TABLE = {
 }
 
 # vllm-perf r3 lever 1: measured split-K/stream-K windows. Keyed by (N, K);
-# value = (m_lo, m_hi, cfg, splits, decomp) for cd_splitk_ext's
-# fused_gemm_prepacked_sk, from promix/vllm_integ/splitk_probe.py under
-# CUDA-graph replay on RTX Pro 6000 (r3_splitk_probe.json). decomp: 1=split-K
-# with `splits`, 2=stream-K. Inside the window split-K takes priority over the
-# r2 small-M table (it beat cfg1 there by the measured margins); outside both
-# windows the shipping 128x128 config runs. NUMERICS: the FP32 partial sums
-# are reduced in a different (deterministic) order than the serial mainloop ->
-# NOT torch.equal, cosine ~1.0 (gated by splitk_probe + the T2 decode-route
-# gate). The prefill path (large M) never routes here, so the T2 prefill gate
-# stays byte-identical.
-_SPLITK_TABLE = {}
+# value = list of (m_lo, m_hi, cfg, splits, decomp) windows (first match wins)
+# for cd_splitk_ext's fused_gemm_prepacked_sk, measured by
+# promix/vllm_integ/splitk_probe.py under CUDA-graph replay on RTX Pro 6000
+# (r3_splitk_probe.json). cfg: 0=128x128, 1=128x64; decomp: 0=heuristic,
+# 1=split-K with `splits`, 2=stream-K. Windows kept only where the probed
+# endpoints beat the r2-best (min of shipping 128x128 and the _SMALLM_TABLE
+# cfg1) by >=5%:
+#   (3072,8192)   3B down   M 8..32 c0 splits=4 (1.06-1.16x vs r2-best),
+#                           M 64..128 c1 heuristic (1.22-1.30x)
+#   (4096,14336)  8B down   M 8..16 c0 splits=4 (1.48-1.66x!),
+#                           M 32..512 c0 stream-K (1.07-1.35x)
+#   (28672,4096)  8B gate_up M 8..256 c0 heuristic (1.09-1.21x)
+#   qkv (both), o (both), 3B gate_up: split-K never beats the r2 config -> no
+#   window (the serial-K latency there is already near the small-N CTA floor).
+# Split-K takes priority over _SMALLM_TABLE inside its windows. NUMERICS: the
+# FP32 partial sums are reduced in a different (deterministic) order than the
+# serial mainloop -> NOT torch.equal, cosine ~1.0 (gated by splitk_probe + the
+# T2 decode-route gate). The prefill path (M >= 1024 chunks) never routes
+# here, so the T2 prefill gate stays byte-identical.
+_SPLITK_TABLE = {
+    (3072, 8192): [(8, 32, 0, 4, 1), (64, 128, 1, 1, 0)],
+    (4096, 14336): [(8, 16, 0, 4, 1), (32, 512, 0, 1, 2)],
+    (28672, 4096): [(8, 256, 0, 1, 0)],
+}
 
 
 def _splitk_env_scale():
@@ -341,9 +354,10 @@ class MixedQuantLinear(nn.Module):
         graph, so the branch is capture-safe (r1 pattern)."""
         if self._cd_sk is None or self.is_pure_nvfp4:
             return None
-        win = _SPLITK_TABLE.get((self.N, self.K))
-        if win is not None and win[0] <= M <= min(win[1], _splitk_env_scale()):
-            return win[2], win[3], win[4]
+        mcap = _splitk_env_scale()
+        for m_lo, m_hi, cfg, splits, decomp in _SPLITK_TABLE.get((self.N, self.K), ()):
+            if m_lo <= M <= min(m_hi, mcap):
+                return cfg, splits, decomp
         return None
 
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
