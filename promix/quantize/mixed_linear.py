@@ -114,20 +114,28 @@ _SPLITK_TABLE = {
 # + decode_gemv_w8a16_hi_add high-companion route beats the best W4A4 GEMM
 # route (r2 small-M cfg + r3 split-K tables INCLUDED in the baseline, plus its
 # qpfm pack + fp16 cast), measured by promix/vllm_integ/marlin_probe.py under
-# CUDA-graph replay on RTX Pro 6000. Routing additionally requires
-# !gemv_route(M) (M<=4 stays on the bit-proven GEMV paths) and M <= 32 (the
-# hi_add kernel bound; prefill M never routes here). W4A16 numerics: the
+# CUDA-graph replay on RTX Pro 6000. Takes PRIORITY over the batched GEMV
+# inside its window (probe: Marlin wins 1.2-3.1x at M=2..4 too — same W4A16
+# numerics class); M=1 keeps the round-12 single-row GEMV (byte-proven), and
+# M <= 32 is the hi_add kernel bound (prefill M never routes here). W4A16
+# numerics: the
 # activation is NOT quantized on this route (same class as the GEMV routes —
 # decode-route PPL moves in the improvement direction; T2-decode gated).
+# Measured windows (r4_marlin_probe.json + _m2 rerun, graph-replay, >=5%-win
+# rule like r3; o_proj windows use the gather-inclusive serve chains
+# t_cur_gatherpack vs t_gather_marlin). The hi_add companion scales ~linearly
+# in M (it is the batched-GEMV weakness in miniature), so every window closes
+# by M=16-24 even though the Marlin low GEMM stays near-flat to M=32 — the
+# high-segment TC companion is the named r5 lever.
 _MARLIN_TABLE = {
-    (5120, 3072): (8, 32),      # 3B qkv
-    (3072, 3072): (8, 32),      # 3B o
-    (16384, 3072): (8, 32),     # 3B gate_up
-    (3072, 8192): (8, 32),      # 3B down
-    (6144, 4096): (8, 32),      # 8B qkv
-    (4096, 4096): (8, 32),      # 8B o
-    (28672, 4096): (8, 32),     # 8B gate_up
-    (4096, 14336): (8, 32),     # 8B down
+    (5120, 3072): (2, 16),      # 3B qkv   (1.56-1.84x, M16 1.36x)
+    (3072, 3072): (2, 8),       # 3B o     (chain 1.23-1.47x; M16 0.96 stop)
+    (16384, 3072): (2, 16),     # 3B gate_up (1.71-2.33x, M16 1.11x)
+    (3072, 8192): (2, 16),      # 3B down  (1.77-2.56x, M16 1.22x)
+    (6144, 4096): (2, 16),      # 8B qkv   (1.49-1.88x, M16 1.07x)
+    (4096, 4096): (2, 16),      # 8B o     (chain 1.12-1.64x)
+    (28672, 4096): (2, 16),     # 8B gate_up (1.85-2.83x, M16 1.19x)
+    (4096, 14336): (2, 8),      # 8B down  (1.71-3.05x; M16 1.02 stop)
 }
 
 
@@ -454,7 +462,13 @@ class MixedQuantLinear(nn.Module):
         # Pure-NVFP4 (K_high==0) has no decode-GEMV (its weight-high buffers are
         # empty); route M==1 through the single-phase prefill GEMM (correct, just
         # not the bandwidth-optimized decode kernel).
-        if self.gemv_route(M):
+        if self.marlin_route(M):
+            # vllm-perf r4 lever 1: Marlin W4A16 tensor-core route (window per
+            # measured _MARLIN_TABLE, priority over the GEMV + W4A4 GEMM
+            # routes). Weight-only like the GEMV routes (activation consumed
+            # exactly); fp16 output already — only bias remains.
+            D = self._marlin_forward(x2d.contiguous())
+        elif self.gemv_route(M):
             if M == 1:
                 D = self._decode_gemv(x2d)         # memory-bound M=1 GEMV (decode)
             else:
@@ -473,11 +487,6 @@ class MixedQuantLinear(nn.Module):
                         x2d.contiguous(), self.W_lo_dec, self.S_lo_dec,
                         self.W_hi_dec, self.S_hi_dec,
                         self.N, self.K_low, self.K_high, self._dec_warps_mb)
-        elif self.marlin_route(M):
-            # vllm-perf r4 lever 1: Marlin W4A16 tensor-core route (M=8..32).
-            # Weight-only like the GEMV routes (activation consumed exactly);
-            # fp16 output already — only bias remains.
-            D = self._marlin_forward(x2d.contiguous())
         else:
             A_lo, pSFA_lo, A_hi, pSFA_hi = self._pack_activation(x2d)
             return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M).reshape(*in_shape[:-1], self.N)
@@ -550,12 +559,14 @@ class MixedQuantLinear(nn.Module):
 
     def marlin_route(self, M):
         """True iff forward(x) at this flattened M takes the Marlin W4A16
-        tensor-core route (r4 lever 1). Window = measured _MARLIN_TABLE, minus
-        the GEMV routes (which keep priority at M<=4). M is static per captured
-        vLLM CUDA graph, so the branch is capture-safe (r1 pattern)."""
-        if self._marlin is None or self._marlin_win is None:
-            return False
-        if self.gemv_route(M):
+        tensor-core route (r4 lever 1). Window = measured _MARLIN_TABLE; takes
+        PRIORITY over the batched GEMV inside the window (the probe shows
+        Marlin beats the M=2..4 GEMV routes 1.2-3.1x — same W4A16 numerics
+        class, different accumulation order). M=1 keeps the round-12 single-row
+        GEMV (byte-proven path, and Marlin's M-tile padding buys nothing
+        there). M is static per captured vLLM CUDA graph, so the branch is
+        capture-safe (r1 pattern)."""
+        if self._marlin is None or self._marlin_win is None or M == 1:
             return False
         m_lo, m_hi = self._marlin_win
         return m_lo <= M <= min(m_hi, _marlin_env_mmax())
