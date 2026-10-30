@@ -376,3 +376,10 @@ pybind11). Build logs: `peers/{arcquant,micromix}/kbuild_sm120.log`.
 (`kernels/mixed_gemm_sm120/tools/websearch.py` + `.ds_key`) does not exist on the box (not in
 git history of any branch/worktree); the survey used arXiv API + Semantic Scholar + OpenReview
 directly instead.
+
+---
+## CORRECTION (controller, after reading Oltron + SHMQ directly — the agent over-abstracted)
+- **Oltron (DAC'24)** = ASIC / reconfigurable-accelerator co-design (flexible PEs, fp8/fp12 exponent-integer pairs in PE activation buffers, MAC units, simulated). NOT a GPU method, NOT NVFP4/FP4, NO rotation/PCA, NOT Blackwell. Its "HW co-design" = custom silicon. → Does NOT scoop ProMix's GPU-fused-kernel-on-Blackwell contribution; cite as accelerator-space prior work.
+- **SHMQ (EMNLP-Ind'25)** = INT, **W8A8**-based static hierarchical mix (8-bit activations!), coarse per-layer/proportion granularity, no rotation. NOT W4A4, NOT FP4, NOT fine-grained. Different regime; cite as adjacent INT mixed-precision.
+- **Verdict**: the ABSTRACT idea "sensitivity-driven inter/intra-layer MP + HW co-design" is old (Oltron/HAWQ), so ProMix does not claim that abstraction. But at the level that matters — W4A4 (4-bit ACTIVATIONS) + NVFP4+MXFP8 microscaling + 64-ch PCA-rotated fine-grained partition + single-launch fused GPU kernel on real Blackwell — NEITHER Oltron nor SHMQ matches. Defensible novelty intact.
+- **Real GPU-FP4-W4A4 scoop cluster to nail**: ARCQuant (NVFP4 W4A4, same GPU, must-compare), MicroMix (MX mixed), CoQuant (W+A weighted-PCA subspace). Verify each one's ACTIVATION bit-width + whether it has a FUSED dual-format kernel.
