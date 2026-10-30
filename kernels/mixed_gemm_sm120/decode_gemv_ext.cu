@@ -1097,6 +1097,142 @@ torch::Tensor decode_gemv_w4a16_mb_sf8(torch::Tensor x, torch::Tensor Wlo, torch
   return D;
 }
 
+// ============================================================================
+// vllm-perf r4 lever 1: HIGH-segment (MXFP8) companion GEMV for the Marlin
+// W4A16 small-M tensor-core route.  At M=8..32 the NVFP4 low segment runs
+// through vLLM's Marlin fp4 kernel (near the weight-byte floor); this kernel
+// covers the MXFP8 high segment the same way the batched GEMV does (identical
+// dequant + fp32 accumulation order per row) and ADDS the result into Marlin's
+// fp16 (M, N) output IN PLACE: Y[m,n] = half(float(Y[m,n]) + hi_dot).
+// x is the FULL (M, K=Klow+Khigh) raw activation; the kernel reads only the
+// high columns (row stride K, offset Klow), so no x_hi slice copy is needed.
+// ============================================================================
+template <int WARPS, int MB, typename AT>
+__global__ void __launch_bounds__(WARPS * 32) gemv_w8a16_hi_add(
+    const AT* __restrict__ x,                // (M, K) raw activation, row-major
+    const uint8_t* __restrict__ Whi, const float* __restrict__ Shi,
+    __half* __restrict__ Y,                  // (M, N) fp16 Marlin output, updated in place
+    int M, int N, int Klow, int Khigh, int KT) {
+  extern __shared__ float sx[];              // M * KT staged high-segment activation tile
+  const int K = Klow + Khigh;
+  const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  const int n = blockIdx.x * WARPS + warp;
+  const bool rowok = (n < N);                // NO early return (tile-loop __syncthreads)
+  const uint32_t* wh = rowok ? reinterpret_cast<const uint32_t*>(Whi + (size_t)n * Khigh) : nullptr;
+  const float*    sh = rowok ? Shi + (size_t)n * (Khigh / 32) : nullptr;
+  float acc[MB];
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) acc[m] = 0.f;
+
+  // MXFP8 high segment, K-tiled (each uint32 = 4 FP8 bytes; scale sh[w>>3]) —
+  // same walk as gemv_w4a16_mb's high loop (per-row result bit-identical).
+  for (int k0 = 0; k0 < Khigh; k0 += KT) {
+    int kt = min(KT, Khigh - k0);
+    __syncthreads();
+    for (int idx = threadIdx.x; idx < M * kt; idx += blockDim.x) {
+      int m = idx / kt, i = idx - m * kt;
+      sx[m * KT + i] = a_to_f(x[(size_t)m * K + Klow + k0 + i]);
+    }
+    __syncthreads();
+    if (rowok) {
+      int w0 = k0 >> 2, w1 = (k0 + kt) >> 2;
+      for (int w = w0 + lane; w < w1; w += 32) {
+        uint32_t v = wh[w];
+        float sc = sh[w >> 3];
+        int i0 = 4 * w - k0;
+        float wv[4];
+        #pragma unroll
+        for (int c = 0; c < 4; c++) {
+          __nv_fp8_e4m3 f; f.__x = (uint8_t)((v >> (8 * c)) & 0xFF);
+          wv[c] = float(f) * sc;
+        }
+        #pragma unroll
+        for (int m = 0; m < MB; ++m) {
+          if (m < M) {
+            const float4 a0 = *reinterpret_cast<const float4*>(sx + m * KT + i0);
+            acc[m] += a0.x * wv[0]; acc[m] += a0.y * wv[1];
+            acc[m] += a0.z * wv[2]; acc[m] += a0.w * wv[3];
+          }
+        }
+      }
+    }
+  }
+  // per-m warp reduction + fp32 add into the fp16 Marlin output
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) {
+    float a = acc[m];
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) a += __shfl_down_sync(0xffffffffu, a, o);
+    if (lane == 0 && rowok && m < M) {
+      size_t yi = (size_t)m * N + n;
+      Y[yi] = __float2half(__half2float(Y[yi]) + a);
+    }
+  }
+}
+
+template <int WARPS, int MB, typename AT>
+static void launch_w8a16_hi_add(const AT* xptr, torch::Tensor Whi, torch::Tensor Shi,
+                                torch::Tensor Y, int M, int N, int Klow, int Khigh,
+                                cudaStream_t stream) {
+  int KT = ((48 * 1024 / 4) / M) & ~255;
+  if (KT > 4096) KT = 4096;
+  TORCH_CHECK(KT >= 256, "decode_gemv_w8a16_hi_add: M too large for 48KB staging");
+  size_t smem = (size_t)M * KT * sizeof(float);
+  int blocks = (N + WARPS - 1) / WARPS;
+  gemv_w8a16_hi_add<WARPS, MB, AT><<<blocks, WARPS * 32, smem, stream>>>(
+      xptr, Whi.data_ptr<uint8_t>(), Shi.data_ptr<float>(),
+      reinterpret_cast<__half*>(Y.data_ptr<at::Half>()), M, N, Klow, Khigh, KT);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <int MB, typename AT>
+static void dispatch_hi_add_w(const AT* xptr, torch::Tensor Whi, torch::Tensor Shi,
+                              torch::Tensor Y, int M, int N, int Kl, int Kh,
+                              cudaStream_t s, int64_t warps) {
+  switch (warps) {
+    case 8:  launch_w8a16_hi_add<8,  MB>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s); break;
+    case 32: launch_w8a16_hi_add<32, MB>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s); break;
+    default: launch_w8a16_hi_add<16, MB>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s); break;
+  }
+}
+
+template <typename AT>
+static void dispatch_hi_add(const AT* xptr, torch::Tensor Whi, torch::Tensor Shi,
+                            torch::Tensor Y, int M, int N, int Kl, int Kh,
+                            cudaStream_t s, int64_t warps) {
+  if      (M <= 4)  dispatch_hi_add_w<4>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
+  else if (M <= 8)  dispatch_hi_add_w<8>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
+  else if (M <= 16) dispatch_hi_add_w<16>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s, warps);
+  else              dispatch_hi_add_w<32>(xptr, Whi, Shi, Y, M, N, Kl, Kh, s,
+                                          warps > 16 ? 16 : warps);
+}
+
+torch::Tensor decode_gemv_w8a16_hi_add(torch::Tensor Y, torch::Tensor x,
+                                       torch::Tensor Whi, torch::Tensor Shi,
+                                       int64_t N, int64_t Klow, int64_t Khigh,
+                                       int64_t warps) {
+  TORCH_CHECK(x.is_cuda() && x.dim() == 2 && x.is_contiguous(), "x must be cuda contiguous (M, K)");
+  TORCH_CHECK(Y.is_cuda() && Y.dim() == 2 && Y.is_contiguous() &&
+              Y.scalar_type() == torch::kFloat16, "Y must be cuda contiguous fp16 (M, N)");
+  int M = (int)x.size(0);
+  TORCH_CHECK(x.size(1) == Klow + Khigh, "x K dim must be Klow+Khigh");
+  TORCH_CHECK(Y.size(0) == M && Y.size(1) == N, "Y must be (M, N)");
+  TORCH_CHECK(M >= 1 && M <= 32, "decode_gemv_w8a16_hi_add supports M in [1, 32]");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh;
+  if (x.scalar_type() == torch::kFloat16)
+    dispatch_hi_add(reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    Whi, Shi, Y, M, Ni, Kl, Kh, stream, warps);
+  else if (x.scalar_type() == torch::kBFloat16)
+    dispatch_hi_add(reinterpret_cast<const __nv_bfloat16*>(x.data_ptr<at::BFloat16>()),
+                    Whi, Shi, Y, M, Ni, Kl, Kh, stream, warps);
+  else {
+    TORCH_CHECK(x.scalar_type() == torch::kFloat32, "x must be fp16/bf16/fp32");
+    dispatch_hi_add(x.data_ptr<float>(), Whi, Shi, Y, M, Ni, Kl, Kh, stream, warps);
+  }
+  return Y;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("decode_gemv", &decode_gemv,
         "memory-bound W4A4 decode GEMV (v1: block-per-row): D(N)=sum_k xq[k]*deq[n,k]",
@@ -1161,6 +1297,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
         pybind11::arg("warps") = 16, pybind11::arg("g") = 1.0);
+  m.def("decode_gemv_w8a16_hi_add", &decode_gemv_w8a16_hi_add,
+        "vllm-perf r4: MXFP8 HIGH-segment GEMV companion for the Marlin W4A16 "
+        "small-M route — computes the high-segment dot (same dequant + fp32 "
+        "accumulation order as decode_gemv_w4a16_mb's high loop) and adds it "
+        "into the fp16 Marlin low-segment output Y IN PLACE. x is the full "
+        "(M, K) activation; only columns [Klow, Klow+Khigh) are read. M in [1,32].",
+        pybind11::arg("Y"), pybind11::arg("x"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 16);
   m.def("quant_act", &quant_act,
         "fast in-kernel activation quantize -> dequantized fp32 (K,), bit-exact to "
         "fake_quantize_nvfp4/mxfp8 (M=1)",
