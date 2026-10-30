@@ -84,8 +84,8 @@ RESULTS.md) for the complete picture.
 | **SharQ** (fused kernels) | all-NVFP4 sparse+residual | ~4.5 (†) | 16 | 14.79 | +1.63 | 20.96 | +2.44 | **measured (new)** |
 | **ARCQuant** (real kernels) | NVFP4+residual-ch | **5.22** | 16 | 15.22 | +2.07 | 20.79 | +2.28 | **measured (new)** |
 | vLLM-NVFP4 (modelopt) | plain NVFP4 | 4.56 | 16 | 15.65 | +2.49 | n/a | — | committed (baselines) |
-| CoQuant wa_cov | INT4 + 1/8 ch INT8 | ~4.6 | 4 | PENDING | | PENDING | | measured (this round) |
 | SpinQuant (learned R) | INT4 W4A4KV4 | 4.0 | 4 | 16.14 | +2.99 | n/a | — | committed (peer RESULTS) |
+| **CoQuant wa_cov** | INT4 + 1/8 ch INT8 | ~4.6 | **4** | 16.64 | +3.48 | 23.32 | +4.81 | **measured (new)** |
 | Atom | INT4 + 128 INT8 ch | ~4.3 | 4 | 18.40 | +5.24 | n/a | — | committed (peer RESULTS) |
 | QuaRot | INT4 W4A4KV4 | 4.0 | 4 | 26.00 | +12.84 | n/a | — | committed (peer RESULTS) |
 
