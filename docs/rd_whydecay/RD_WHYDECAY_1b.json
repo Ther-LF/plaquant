@@ -1,0 +1,330 @@
+{
+  "model": "1b",
+  "hf": "unsloth/Llama-3.2-1B-Instruct",
+  "ring_size": 64,
+  "regime": "dense-R-on",
+  "structure": {
+    "total_rings": 4608,
+    "breakdown": {
+      "within_layer_var_frac": 0.9999608877612606,
+      "between_layer_var_frac": 3.911223873945389e-05,
+      "within_type_var_frac": 0.7935373697768624,
+      "between_type_var_frac": 0.2064626302231376,
+      "within_unit_var_frac": 0.7934650564654737,
+      "between_unit_var_frac": 0.20653494353452628,
+      "within_layer_top1_32_share": 0.25823529848785026,
+      "by_type": {
+        "down_proj": {
+          "rings": 2048,
+          "dd_sum": 0.09392046139873855,
+          "fp8_measured": 0,
+          "dd_share": 0.0053918660750427,
+          "ring_share": 0.4444444444444444,
+          "dd_density": 0.012131698668846076,
+          "fp8_frac_measured": 0.0,
+          "within_top1_32_share": 0.0336715030131661
+        },
+        "gate_proj": {
+          "rings": 512,
+          "dd_sum": 3.465411635581404,
+          "fp8_measured": 93,
+          "dd_share": 0.19894531133766943,
+          "ring_share": 0.1111111111111111,
+          "dd_density": 1.790507802039025,
+          "fp8_frac_measured": 0.181640625,
+          "within_top1_32_share": 0.1504381934500232
+        },
+        "up_proj": {
+          "rings": 512,
+          "dd_sum": 3.465411635581404,
+          "fp8_measured": 93,
+          "dd_share": 0.19894531133766943,
+          "ring_share": 0.1111111111111111,
+          "dd_density": 1.790507802039025,
+          "fp8_frac_measured": 0.181640625,
+          "within_top1_32_share": 0.1504381934500232
+        },
+        "k_proj": {
+          "rings": 512,
+          "dd_sum": 3.4647240368649364,
+          "fp8_measured": 130,
+          "dd_share": 0.19890583708320614,
+          "ring_share": 0.1111111111111111,
+          "dd_density": 1.7901525337488553,
+          "fp8_frac_measured": 0.25390625,
+          "within_top1_32_share": 0.14511974221743748
+        },
+        "q_proj": {
+          "rings": 512,
+          "dd_sum": 3.4647240368649364,
+          "fp8_measured": 130,
+          "dd_share": 0.19890583708320614,
+          "ring_share": 0.1111111111111111,
+          "dd_density": 1.7901525337488553,
+          "fp8_frac_measured": 0.25390625,
+          "within_top1_32_share": 0.14511974221743748
+        },
+        "v_proj": {
+          "rings": 512,
+          "dd_sum": 3.4647240368649364,
+          "fp8_measured": 130,
+          "dd_share": 0.19890583708320614,
+          "ring_share": 0.1111111111111111,
+          "dd_density": 1.7901525337488553,
+          "fp8_frac_measured": 0.25390625,
+          "within_top1_32_share": 0.14511974221743748
+        }
+      },
+      "by_layer": {
+        "0": {
+          "rings": 288,
+          "dd_sum": 1.0663330903626047,
+          "fp8_measured": 20,
+          "dd_share": 0.061216960915598646,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "1": {
+          "rings": 288,
+          "dd_sum": 1.0808061580173671,
+          "fp8_measured": 20,
+          "dd_share": 0.06204784314644935,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "2": {
+          "rings": 288,
+          "dd_sum": 1.083583028637804,
+          "fp8_measured": 80,
+          "dd_share": 0.062207260107036366,
+          "fp8_frac_measured": 0.2777777777777778
+        },
+        "3": {
+          "rings": 288,
+          "dd_sum": 1.0859563411213458,
+          "fp8_measured": 160,
+          "dd_share": 0.06234350925738025,
+          "fp8_frac_measured": 0.5555555555555556
+        },
+        "4": {
+          "rings": 288,
+          "dd_sum": 1.0863834996707737,
+          "fp8_measured": 76,
+          "dd_share": 0.06236803194026558,
+          "fp8_frac_measured": 0.2638888888888889
+        },
+        "5": {
+          "rings": 288,
+          "dd_sum": 1.0865172577323392,
+          "fp8_measured": 20,
+          "dd_share": 0.06237571083732036,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "6": {
+          "rings": 288,
+          "dd_sum": 1.0870053328108042,
+          "fp8_measured": 20,
+          "dd_share": 0.06240373066833968,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "7": {
+          "rings": 288,
+          "dd_sum": 1.0872105327434838,
+          "fp8_measured": 20,
+          "dd_share": 0.06241551096135718,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "8": {
+          "rings": 288,
+          "dd_sum": 1.0872850427404046,
+          "fp8_measured": 20,
+          "dd_share": 0.062419788494907015,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "9": {
+          "rings": 288,
+          "dd_sum": 1.0865345948841423,
+          "fp8_measured": 20,
+          "dd_share": 0.0623767061433405,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "10": {
+          "rings": 288,
+          "dd_sum": 1.087265657959506,
+          "fp8_measured": 20,
+          "dd_share": 0.06241867563684666,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "11": {
+          "rings": 288,
+          "dd_sum": 1.08789181150496,
+          "fp8_measured": 20,
+          "dd_share": 0.062454622394445825,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "12": {
+          "rings": 288,
+          "dd_sum": 1.087214790750295,
+          "fp8_measured": 20,
+          "dd_share": 0.062415755408649395,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "13": {
+          "rings": 288,
+          "dd_sum": 1.0899327006191015,
+          "fp8_measured": 20,
+          "dd_share": 0.06257178750004241,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "14": {
+          "rings": 288,
+          "dd_sum": 1.093895354308188,
+          "fp8_measured": 20,
+          "dd_share": 0.06279927890793295,
+          "fp8_frac_measured": 0.06944444444444445
+        },
+        "15": {
+          "rings": 288,
+          "dd_sum": 1.1351007856428623,
+          "fp8_measured": 20,
+          "dd_share": 0.06516483550776367,
+          "fp8_frac_measured": 0.06944444444444445
+        }
+      }
+    },
+    "dd_sum": 17.418915843156356,
+    "dd_gini": 0.6935747821287598,
+    "dd_top1_32_share": 0.27436286111862157,
+    "dd_top1_32_k": 144,
+    "dd_top1_8_share": 0.6067934352742549,
+    "dd_cv": 1.9445688313459606,
+    "dd_neg_frac": 0.0,
+    "var_gini": 0.6389123188307352,
+    "var_top1_32_share": 0.22214684240524193,
+    "var_top1_8_share": 0.5177386487878485,
+    "var_cv": 1.5876141596121884,
+    "spearman_dd_var": 0.9848565779577222,
+    "per_layer_dd_cv": 0.012161308383777329,
+    "top1": {
+      "name": "model.layers.12.mlp.up_proj",
+      "ring": 29,
+      "dd": 0.037658825516700745,
+      "dd_share": 0.0021619500235140273
+    },
+    "top16_dd_share": 0.03327568171635594,
+    "top16_rings": [
+      {
+        "name": "model.layers.12.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.0021619500235140273
+      },
+      {
+        "name": "model.layers.12.mlp.gate_proj",
+        "ring": 29,
+        "dd_share": 0.0021619500235140273
+      },
+      {
+        "name": "model.layers.14.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.002119747684872791
+      },
+      {
+        "name": "model.layers.14.mlp.gate_proj",
+        "ring": 29,
+        "dd_share": 0.002119747684872791
+      },
+      {
+        "name": "model.layers.13.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.0021124042144679694
+      },
+      {
+        "name": "model.layers.13.mlp.gate_proj",
+        "ring": 29,
+        "dd_share": 0.0021124042144679694
+      },
+      {
+        "name": "model.layers.15.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.0020660268101761834
+      },
+      {
+        "name": "model.layers.15.mlp.gate_proj",
+        "ring": 29,
+        "dd_share": 0.0020660268101761834
+      },
+      {
+        "name": "model.layers.10.self_attn.k_proj",
+        "ring": 29,
+        "dd_share": 0.002060443873550449
+      },
+      {
+        "name": "model.layers.10.self_attn.q_proj",
+        "ring": 29,
+        "dd_share": 0.002060443873550449
+      },
+      {
+        "name": "model.layers.10.self_attn.v_proj",
+        "ring": 29,
+        "dd_share": 0.002060443873550449
+      },
+      {
+        "name": "model.layers.11.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.002038088815800921
+      },
+      {
+        "name": "model.layers.11.mlp.gate_proj",
+        "ring": 29,
+        "dd_share": 0.002038088815800921
+      },
+      {
+        "name": "model.layers.12.mlp.up_proj",
+        "ring": 28,
+        "dd_share": 0.0020333378126543705
+      },
+      {
+        "name": "model.layers.12.mlp.gate_proj",
+        "ring": 28,
+        "dd_share": 0.0020333378126543705
+      },
+      {
+        "name": "model.layers.9.mlp.up_proj",
+        "ring": 29,
+        "dd_share": 0.002031239372732068
+      }
+    ]
+  },
+  "flip1_rings": [
+    [
+      "model.layers.12.mlp.up_proj",
+      29
+    ]
+  ],
+  "flip1_missed": [],
+  "flip16_n": 16,
+  "flip16_missed": [],
+  "flip1_dd_share": 0.0021619500235140273,
+  "flip16_dd_share": 0.03327568171635594,
+  "ppl": {
+    "uniform": {
+      "ppl": 14.428492546081543,
+      "avg_fp8": 0.125,
+      "n_fp8": 576
+    },
+    "flip1": {
+      "ppl": 14.423956871032715,
+      "avg_fp8": 0.1248046875,
+      "n_fp8": 575
+    },
+    "flip16": {
+      "ppl": 14.485033988952637,
+      "avg_fp8": 0.121875,
+      "n_fp8": 560
+    }
+  },
+  "flip1_dppl": -0.004535675048828125,
+  "flip1_dlogppl": -0.00031440485489619974,
+  "flip1_sens": -0.1454265137846096,
+  "flip16_dppl": 0.05654144287109375,
+  "flip16_dlogppl": 0.003911077043924127,
+  "flip16_sens": 0.11753559483055524
+}
