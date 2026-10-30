@@ -809,6 +809,294 @@ torch::Tensor decode_gemv_fused(torch::Tensor x, torch::Tensor Wlo, torch::Tenso
   }
 }
 
+// ========================================================================================
+// 1-BYTE-SCALE W4A16 DECODE GEMVs (vllm-perf round-2, secondary lever).  The fp32
+// S_*_dec buffers (round-12 design) add +4 B per 16 weights (low) / 32 weights (high)
+// = ~+18 % low-segment stream bytes at M<=4, where decode is weight-bandwidth-bound.
+// These variants stream the CHECKPOINT's raw 1-byte block scales (E4M3 byte for NVFP4,
+// UE8M0 exponent byte for MXFP8) and fold the per-tensor g in-kernel.  BIT-EXACT to the
+// fp32-scale kernels by construction:
+//   low : float(E4M3(byte)) * g      == the exact fp32 product the buffer precomputed
+//         (S_lo_dec = sf.view(float8_e4m3fn).float() * g, same two exact ops)
+//   high: ldexpf(g, byte - 127)      == RN(g * 2^(e-127)) == fp32(exp2(e-127)) * g
+//         (2^(e-127) is a power of two -> scaling is exact in either order)
+// Everything else (k-walk, staging, FMA order, reduction) is VERBATIM the validated
+// gemv_w4a16 / gemv_w4a16_mb — only the scale-load lines differ.  Gated torch.equal
+// against the fp32-scale kernels by promix/vllm_integ/sf8_probe.py.
+__device__ __forceinline__ float sf8_lo(const uint8_t b, const float g) {
+  __nv_fp8_e4m3 f; f.__x = b;
+  return float(f) * g;
+}
+__device__ __forceinline__ float sf8_hi(const uint8_t b, const float g) {
+  return ldexpf(g, (int)b - 127);
+}
+
+template <int WARPS, typename AT>
+__global__ void gemv_w4a16_sf8(
+    const AT* __restrict__ x,
+    const uint8_t* __restrict__ Wlo, const uint8_t* __restrict__ Slo,
+    const uint8_t* __restrict__ Whi, const uint8_t* __restrict__ Shi,
+    float* __restrict__ D, int N, int Klow, int Khigh, float g) {
+  extern __shared__ float sx[];
+  int K = Klow + Khigh;
+  for (int i = threadIdx.x; i < K; i += blockDim.x) sx[i] = a_to_f(x[i]);
+  __syncthreads();
+  int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  int n = blockIdx.x * WARPS + warp;
+  if (n >= N) return;
+
+  const uint32_t* wl = reinterpret_cast<const uint32_t*>(Wlo + (size_t)n * (Klow / 2));
+  const uint8_t*  sl = Slo + (size_t)n * (Klow / 16);
+  const uint32_t* wh = reinterpret_cast<const uint32_t*>(Whi + (size_t)n * Khigh);
+  const uint8_t*  sh = Shi + (size_t)n * (Khigh / 32);
+  float acc = 0.f;
+
+  int nwl = Klow / 8;
+  for (int w = lane; w < nwl; w += 32) {
+    uint32_t v = wl[w];
+    float sc = sf8_lo(sl[w >> 1], g);
+    int k0 = 8 * w;
+    #pragma unroll
+    for (int c = 0; c < 8; c++)
+      acc += sx[k0 + c] * (fp4_decode((v >> (4 * c)) & 0xF) * sc);
+  }
+  int nwh = Khigh / 4;
+  for (int w = lane; w < nwh; w += 32) {
+    uint32_t v = wh[w];
+    float sc = sf8_hi(sh[w >> 3], g);
+    int k0 = Klow + 4 * w;
+    #pragma unroll
+    for (int c = 0; c < 4; c++) {
+      __nv_fp8_e4m3 f; f.__x = (uint8_t)((v >> (8 * c)) & 0xFF);
+      acc += sx[k0 + c] * (float(f) * sc);
+    }
+  }
+  #pragma unroll
+  for (int o = 16; o > 0; o >>= 1) acc += __shfl_down_sync(0xffffffffu, acc, o);
+  if (lane == 0) D[n] = acc;
+}
+
+template <int WARPS, int MB, typename AT>
+__global__ void gemv_w4a16_mb_sf8(
+    const AT* __restrict__ x,
+    const uint8_t* __restrict__ Wlo, const uint8_t* __restrict__ Slo,
+    const uint8_t* __restrict__ Whi, const uint8_t* __restrict__ Shi,
+    float* __restrict__ D, int M, int N, int Klow, int Khigh, int KT, float g) {
+  extern __shared__ float sx[];
+  const int K = Klow + Khigh;
+  const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  const int n = blockIdx.x * WARPS + warp;
+  const bool rowok = (n < N);
+  const uint32_t* wl = rowok ? reinterpret_cast<const uint32_t*>(Wlo + (size_t)n * (Klow / 2)) : nullptr;
+  const uint8_t*  sl = rowok ? Slo + (size_t)n * (Klow / 16) : nullptr;
+  const uint32_t* wh = rowok ? reinterpret_cast<const uint32_t*>(Whi + (size_t)n * Khigh) : nullptr;
+  const uint8_t*  sh = rowok ? Shi + (size_t)n * (Khigh / 32) : nullptr;
+  float acc[MB];
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) acc[m] = 0.f;
+
+  for (int k0 = 0; k0 < Klow; k0 += KT) {
+    int kt = min(KT, Klow - k0);
+    __syncthreads();
+    for (int idx = threadIdx.x; idx < M * kt; idx += blockDim.x) {
+      int m = idx / kt, i = idx - m * kt;
+      sx[m * KT + i] = a_to_f(x[(size_t)m * K + k0 + i]);
+    }
+    __syncthreads();
+    if (rowok) {
+      int w0 = k0 >> 3, w1 = (k0 + kt) >> 3;
+      for (int w = w0 + lane; w < w1; w += 32) {
+        uint32_t v = wl[w];
+        float sc = sf8_lo(sl[w >> 1], g);
+        int i0 = 8 * w - k0;
+        float wv[8];
+        #pragma unroll
+        for (int c = 0; c < 8; c++) wv[c] = fp4_decode((v >> (4 * c)) & 0xF) * sc;
+        #pragma unroll
+        for (int m = 0; m < MB; ++m) {
+          if (m < M) {
+            const float4* s4 = reinterpret_cast<const float4*>(sx + m * KT + i0);
+            float4 a0 = s4[0], a1 = s4[1];
+            acc[m] += a0.x * wv[0]; acc[m] += a0.y * wv[1];
+            acc[m] += a0.z * wv[2]; acc[m] += a0.w * wv[3];
+            acc[m] += a1.x * wv[4]; acc[m] += a1.y * wv[5];
+            acc[m] += a1.z * wv[6]; acc[m] += a1.w * wv[7];
+          }
+        }
+      }
+    }
+  }
+  for (int k0 = 0; k0 < Khigh; k0 += KT) {
+    int kt = min(KT, Khigh - k0);
+    __syncthreads();
+    for (int idx = threadIdx.x; idx < M * kt; idx += blockDim.x) {
+      int m = idx / kt, i = idx - m * kt;
+      sx[m * KT + i] = a_to_f(x[(size_t)m * K + Klow + k0 + i]);
+    }
+    __syncthreads();
+    if (rowok) {
+      int w0 = k0 >> 2, w1 = (k0 + kt) >> 2;
+      for (int w = w0 + lane; w < w1; w += 32) {
+        uint32_t v = wh[w];
+        float sc = sf8_hi(sh[w >> 3], g);
+        int i0 = 4 * w - k0;
+        float wv[4];
+        #pragma unroll
+        for (int c = 0; c < 4; c++) {
+          __nv_fp8_e4m3 f; f.__x = (uint8_t)((v >> (8 * c)) & 0xFF);
+          wv[c] = float(f) * sc;
+        }
+        #pragma unroll
+        for (int m = 0; m < MB; ++m) {
+          if (m < M) {
+            const float4 a0 = *reinterpret_cast<const float4*>(sx + m * KT + i0);
+            acc[m] += a0.x * wv[0]; acc[m] += a0.y * wv[1];
+            acc[m] += a0.z * wv[2]; acc[m] += a0.w * wv[3];
+          }
+        }
+      }
+    }
+  }
+  #pragma unroll
+  for (int m = 0; m < MB; ++m) {
+    float a = acc[m];
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1) a += __shfl_down_sync(0xffffffffu, a, o);
+    if (lane == 0 && rowok && m < M) D[(size_t)m * N + n] = a;
+  }
+}
+
+template <int WARPS, typename AT>
+static void launch_w4a16_sf8(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                             torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                             int N, int Klow, int Khigh, float g, int devid,
+                             cudaStream_t stream) {
+  int blocks = (N + WARPS - 1) / WARPS;
+  size_t smem = (size_t)(Klow + Khigh) * sizeof(float);
+  static size_t attr_smem[33] = {0};
+  if (smem > 48 * 1024 && smem > attr_smem[WARPS]) {
+    CUDA_CHECK(cudaSetDevice(devid));
+    CUDA_CHECK(cudaFuncSetAttribute(gemv_w4a16_sf8<WARPS, AT>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));
+    int maxs = 0;
+    cudaDeviceGetAttribute(&maxs, cudaDevAttrMaxSharedMemoryPerBlockOptin, devid);
+    TORCH_CHECK((size_t)maxs >= smem,
+                "decode_gemv_w4a16_sf8: smem ", smem, " B exceeds device opt-in max ", maxs, " B");
+    attr_smem[WARPS] = smem;
+  }
+  gemv_w4a16_sf8<WARPS, AT><<<blocks, WARPS * 32, smem, stream>>>(
+      xptr, Wlo.data_ptr<uint8_t>(), Slo.data_ptr<uint8_t>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<uint8_t>(),
+      D.data_ptr<float>(), N, Klow, Khigh, g);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <typename AT>
+static torch::Tensor dispatch_w4a16_sf8(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                        torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                        int N, int Kl, int Kh, float g, int dev,
+                                        cudaStream_t stream, int64_t warps) {
+  switch (warps) {
+    case 4:  launch_w4a16_sf8<4>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+    case 8:  launch_w4a16_sf8<8>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+    case 16: launch_w4a16_sf8<16>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+    case 24: launch_w4a16_sf8<24>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+    case 32: launch_w4a16_sf8<32>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+    default: launch_w4a16_sf8<8>(xptr, Wlo, Slo, Whi, Shi, D, N, Kl, Kh, g, dev, stream); break;
+  }
+  return D;
+}
+
+torch::Tensor decode_gemv_w4a16_sf8(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
+                                    torch::Tensor Whi, torch::Tensor Shi,
+                                    int64_t N, int64_t Klow, int64_t Khigh,
+                                    int64_t warps, double g) {
+  TORCH_CHECK(x.is_cuda(), "x must be cuda");
+  TORCH_CHECK(Slo.scalar_type() == torch::kUInt8 && Shi.scalar_type() == torch::kUInt8,
+              "sf8 GEMV takes raw uint8 scale bytes");
+  auto xc = x.reshape({-1}).contiguous();
+  TORCH_CHECK(xc.numel() == Klow + Khigh, "x length must be Klow+Khigh");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({N}, torch::dtype(torch::kFloat32).device(x.device()));
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh, dev = x.get_device();
+  float gf = (float)g;
+  if (xc.scalar_type() == torch::kFloat16)
+    return dispatch_w4a16_sf8(reinterpret_cast<const __half*>(xc.data_ptr<at::Half>()),
+                              Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, gf, dev, stream, warps);
+  if (xc.scalar_type() == torch::kBFloat16)
+    return dispatch_w4a16_sf8(reinterpret_cast<const __nv_bfloat16*>(xc.data_ptr<at::BFloat16>()),
+                              Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, gf, dev, stream, warps);
+  TORCH_CHECK(xc.scalar_type() == torch::kFloat32, "x must be fp16/bf16/fp32");
+  return dispatch_w4a16_sf8(xc.data_ptr<float>(), Wlo, Slo, Whi, Shi, D, Ni, Kl, Kh, gf, dev, stream, warps);
+}
+
+template <int WARPS, int MB, typename AT>
+static void launch_w4a16_mb_sf8(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                int M, int N, int Klow, int Khigh, float g, cudaStream_t stream) {
+  int KT = ((48 * 1024 / 4) / M) & ~255;
+  if (KT > 4096) KT = 4096;
+  TORCH_CHECK(KT >= 256, "decode_gemv_w4a16_mb_sf8: M too large for 48KB staging");
+  size_t smem = (size_t)M * KT * sizeof(float);
+  int blocks = (N + WARPS - 1) / WARPS;
+  gemv_w4a16_mb_sf8<WARPS, MB, AT><<<blocks, WARPS * 32, smem, stream>>>(
+      xptr, Wlo.data_ptr<uint8_t>(), Slo.data_ptr<uint8_t>(),
+      Whi.data_ptr<uint8_t>(), Shi.data_ptr<uint8_t>(),
+      D.data_ptr<float>(), M, N, Klow, Khigh, KT, g);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <int MB, typename AT>
+static void dispatch_w4a16_mb_sf8_w(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                    torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                    int M, int N, int Kl, int Kh, float g,
+                                    cudaStream_t s, int64_t warps) {
+  switch (warps) {
+    case 8:  launch_w4a16_mb_sf8<8,  MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s); break;
+    case 32: launch_w4a16_mb_sf8<32, MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s); break;
+    default: launch_w4a16_mb_sf8<16, MB>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s); break;
+  }
+}
+
+template <typename AT>
+static void dispatch_w4a16_mb_sf8(const AT* xptr, torch::Tensor Wlo, torch::Tensor Slo,
+                                  torch::Tensor Whi, torch::Tensor Shi, torch::Tensor D,
+                                  int M, int N, int Kl, int Kh, float g,
+                                  cudaStream_t s, int64_t warps) {
+  if      (M <= 2)  dispatch_w4a16_mb_sf8_w<2>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s, warps);
+  else if (M <= 4)  dispatch_w4a16_mb_sf8_w<4>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s, warps);
+  else if (M <= 8)  dispatch_w4a16_mb_sf8_w<8>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s, warps);
+  else              dispatch_w4a16_mb_sf8_w<16>(xptr, Wlo, Slo, Whi, Shi, D, M, N, Kl, Kh, g, s, warps);
+}
+
+torch::Tensor decode_gemv_w4a16_mb_sf8(torch::Tensor x, torch::Tensor Wlo, torch::Tensor Slo,
+                                       torch::Tensor Whi, torch::Tensor Shi,
+                                       int64_t N, int64_t Klow, int64_t Khigh,
+                                       int64_t warps, double g) {
+  TORCH_CHECK(x.is_cuda() && x.dim() == 2, "x must be cuda (M, K)");
+  TORCH_CHECK(Slo.scalar_type() == torch::kUInt8 && Shi.scalar_type() == torch::kUInt8,
+              "sf8 GEMV takes raw uint8 scale bytes");
+  auto xc = x.contiguous();
+  int M = (int)xc.size(0);
+  TORCH_CHECK(xc.size(1) == Klow + Khigh, "x K dim must be Klow+Khigh");
+  TORCH_CHECK(M >= 1 && M <= 16, "decode_gemv_w4a16_mb_sf8 supports M in [1, 16]");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto D = torch::empty({M, N}, torch::dtype(torch::kFloat32).device(x.device()));
+  int Ni = (int)N, Kl = (int)Klow, Kh = (int)Khigh;
+  float gf = (float)g;
+  if (xc.scalar_type() == torch::kFloat16)
+    dispatch_w4a16_mb_sf8(reinterpret_cast<const __half*>(xc.data_ptr<at::Half>()),
+                          Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, gf, stream, warps);
+  else if (xc.scalar_type() == torch::kBFloat16)
+    dispatch_w4a16_mb_sf8(reinterpret_cast<const __nv_bfloat16*>(xc.data_ptr<at::BFloat16>()),
+                          Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, gf, stream, warps);
+  else {
+    TORCH_CHECK(xc.scalar_type() == torch::kFloat32, "x must be fp16/bf16/fp32");
+    dispatch_w4a16_mb_sf8(xc.data_ptr<float>(), Wlo, Slo, Whi, Shi, D, M, Ni, Kl, Kh, gf, stream, warps);
+  }
+  return D;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("decode_gemv", &decode_gemv,
         "memory-bound W4A4 decode GEMV (v1: block-per-row): D(N)=sum_k xq[k]*deq[n,k]",
@@ -858,6 +1146,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("Whi"), pybind11::arg("Shi"),
         pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
         pybind11::arg("warps") = 16);
+  m.def("decode_gemv_w4a16_sf8", &decode_gemv_w4a16_sf8,
+        "W4A16 decode GEMV, 1-BYTE scale stream (vllm-perf r2): raw E4M3/UE8M0 scale "
+        "bytes + per-tensor g folded in-kernel; bit-exact to decode_gemv_w4a16 with "
+        "S_*_dec = decode(bytes)*g. ~18% less low-segment weight-stream bytes.",
+        pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 8, pybind11::arg("g") = 1.0);
+  m.def("decode_gemv_w4a16_mb_sf8", &decode_gemv_w4a16_mb_sf8,
+        "BATCHED W4A16 decode GEMV, 1-BYTE scale stream (vllm-perf r2); bit-exact to "
+        "decode_gemv_w4a16_mb with S_*_dec = decode(bytes)*g.",
+        pybind11::arg("x"), pybind11::arg("Wlo"), pybind11::arg("Slo"),
+        pybind11::arg("Whi"), pybind11::arg("Shi"),
+        pybind11::arg("N"), pybind11::arg("Klow"), pybind11::arg("Khigh"),
+        pybind11::arg("warps") = 16, pybind11::arg("g") = 1.0);
   m.def("quant_act", &quant_act,
         "fast in-kernel activation quantize -> dequantized fp32 (K,), bit-exact to "
         "fake_quantize_nvfp4/mxfp8 (M=1)",

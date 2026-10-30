@@ -173,9 +173,17 @@ class PromixLinearMethod(LinearMethodBase):
     def process_weights_after_loading(self, layer):
         from promix.quantize.mixed_linear import MixedQuantLinear
         from promix.quantize.weight_pack import PackedWeight
-        from promix.vllm_integ.kernels import load_kernels, load_decode_gemv
+        from promix.vllm_integ.kernels import (load_kernels, load_decode_gemv,
+                                               load_smallm, load_qpfm, load_had_pack)
         cd, qpf = load_kernels()
         dg = load_decode_gemv()   # None when PROMIX_DECODE_GEMV=0
+        # vllm-perf r2: small-M GEMM configs (lever 1), single-launch mixed pack
+        # (lever 2c), fused Hadamard+pack down_proj producer (lever 2a).
+        cd_sm = load_smallm()     # None when PROMIX_SMALLM=0
+        qpfm = load_qpfm()        # None when PROMIX_QPFM=0
+        hpk, hpk28 = (None, None)
+        if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
+            hpk, hpk28 = load_had_pack()   # (None, None) when PROMIX_HAD_PACK=0
 
         N, K = layer.promix_N, layer.promix_K
         K_low, K_high = layer.promix_K_low, layer.promix_K_high
@@ -212,23 +220,41 @@ class PromixLinearMethod(LinearMethodBase):
         # pack_weight_mixed's W_*_dec/S_*_dec recipe.
         if dg is not None and K_high > 0:
             packed.W_lo_dec = packed.W_lo_packed                     # shared bytes
-            packed.S_lo_dec = (layer.weight_lo_scale.data
-                               .view(torch.float8_e4m3fn).float() * g).contiguous()
             packed.W_hi_dec = packed.W_hi_bytes                      # shared bytes
-            packed.S_hi_dec = (torch.exp2(
-                layer.weight_hi_scale.data.float() - 127.0) * g).contiguous()
-        mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
-                               out_dtype=torch.float16, qpf=qpf, dg=dg)
-        layer.promix_mql = mql.to(dev)
-
-        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
-            layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
-            del layer.column_order
+            if (os.environ.get("PROMIX_DECODE_SF8", "0") == "1"
+                    and os.environ.get("PROMIX_DECODE_MODE", "w4a16") != "w4a4"
+                    and hasattr(dg, "decode_gemv_w4a16_sf8")):
+                # vllm-perf r2 (secondary lever): stream the checkpoint's RAW
+                # 1-byte block scales (E4M3 low / UE8M0 high); the _sf8 GEMVs
+                # fold g in-kernel. BIT-EXACT (sf8_probe torch.equal, all shapes
+                # M=1..16) but MEASURED SLOWER under graph replay (0.92-0.98x,
+                # r2_sf8_probe.json): the in-kernel E4M3 cvt / ldexpf outweighs
+                # the ~18% low-segment byte saving — r1's +8-12% estimate is
+                # REFUTED. DEFAULT-OFF; kept for experiments.
+                packed.S_lo_dec = layer.weight_lo_scale.data.contiguous()
+                packed.S_hi_dec = layer.weight_hi_scale.data.contiguous()
+            else:
+                packed.S_lo_dec = (layer.weight_lo_scale.data
+                                   .view(torch.float8_e4m3fn).float() * g).contiguous()
+                packed.S_hi_dec = (torch.exp2(
+                    layer.weight_hi_scale.data.float() - 127.0) * g).contiguous()
+        # down_proj online-Hadamard setup (needed before mql construction: the
+        # fused Hadamard+pack producer takes the CPU 28x28 had_K for K=14336).
+        had_K, Kfac = None, 1
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
             from promix.quantize.hadamard import get_hadK
             had_K, Kfac = get_hadK(K)
             layer.promix_had_K = None if had_K is None else had_K.to(dev)
             layer.promix_had_Kfac = Kfac
+        mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
+                               out_dtype=torch.float16, qpf=qpf, dg=dg,
+                               qpfm=qpfm, cd_sm=cd_sm, hpk=hpk, hpk28=hpk28,
+                               had28=None if had_K is None else had_K.cpu())
+        layer.promix_mql = mql.to(dev)
+
+        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
+            layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
+            del layer.column_order
         # free the linear-layout params (data lives on inside mql / was prepacked)
         for pname in ("weight_lo_packed", "weight_lo_scale", "weight_hi_bytes",
                       "weight_hi_scale", "weight_global_scale"):
@@ -240,14 +266,23 @@ class PromixLinearMethod(LinearMethodBase):
 
     def _apply_eager(self, layer, x):
         """The Phase-1 eager apply body (runs inside the custom op)."""
+        mql = layer.promix_mql
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
+            # vllm-perf r2 lever 2: on the GEMM route, run the fused
+            # Hadamard+quant/pack producer (one kernel, no fp16 [M,K] HBM
+            # round-trip). GEMV routes (decode small M) consume an fp16
+            # activation, so they keep the torch Hadamard. M is static per
+            # captured CUDA graph (r1), so this branch is capture-safe.
+            M = x.numel() // x.shape[-1]
+            if mql.can_had_pack() and not mql.gemv_route(M):
+                return mql.forward_had_pack(x)
             from promix.quantize.hadamard import matmul_hadU_cuda
             x_dtype = x.dtype
             x = matmul_hadU_cuda(x, layer.promix_had_K, layer.promix_had_Kfac,
                                  fold_scale=self.cfg.fold_had_scale).to(x_dtype)
         elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
             x = x[..., layer.promix_col_order]
-        return layer.promix_mql(x)
+        return mql(x)
 
     def apply(self, layer, x, bias=None):
         assert bias is None, "promix phase 1: bias-free linears only (llama)"

@@ -300,7 +300,12 @@ __device__ __forceinline__ void pack_fp8_block_warp(const float q,
 // exchange SMEM in column-linear order, syncs, and packs both the NVFP4 low and
 // MXFP8 high segments from column-contiguous reads.
 // ===================================================================================
-template <class TIn, class LayoutSF4, class LayoutSF8, int N>
+// SWIGLU=false (vllm-perf r2): phase 0 is a plain load of an ALREADY-ACTIVATED
+// row x (the vLLM down_proj input is SiluAndMul output) — `up` is ignored. The
+// transform + scale + fp16-round + pack phases are byte-identical; numerics
+// equal matmul_hadU_cuda(x.float(), None, 1, fold_scale=True).half() -> pack
+// (fp32 transform of exact fp16 inputs — the library's fp32-trait stage order).
+template <class TIn, class LayoutSF4, class LayoutSF8, int N, bool SWIGLU = true>
 __global__ __launch_bounds__(kHpkThreads)
 void hadamard_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ sf_lo,
                           LayoutSF4 layout4,
@@ -325,23 +330,29 @@ void hadamard_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ s
   float x_vals[kNChunks][kNElts];
 
   // ---- phase 0: h = bf16(silu(gate) * up) into the reference register layout --
+  //      (SWIGLU=false: h = the already-activated input row, loaded exactly)
   {
     const TIn* gr = gate + rowoff;
-    const TIn* ur = up + rowoff;
+    const TIn* ur = SWIGLU ? up + rowoff : nullptr;
 #pragma unroll
     for (int c = 0; c < kNChunks; ++c) {
       const int base = c * (kNThreads * kNElts) + tid * kNElts;   // 16 B aligned
       const float4 g4 = *reinterpret_cast<const float4*>(gr + base);
-      const float4 u4 = *reinterpret_cast<const float4*>(ur + base);
       const TIn* gh = reinterpret_cast<const TIn*>(&g4);
-      const TIn* uh = reinterpret_cast<const TIn*>(&u4);
+      if constexpr (SWIGLU) {
+        const float4 u4 = *reinterpret_cast<const float4*>(ur + base);
+        const TIn* uh = reinterpret_cast<const TIn*>(&u4);
 #pragma unroll
-      for (int i = 0; i < kNElts; ++i) {
-        const float gf = to_float_h(gh[i]);
-        const float uf = to_float_h(uh[i]);
-        const float sv = __fdiv_rn(gf, 1.0f + expf(-gf));    // ATen SiLU (fp32)
-        const float sb = round_h(sv, TIn{});                   // rounded SiLU output
-        x_vals[c][i] = round_h(sb * uf, TIn{});                // rounded product
+        for (int i = 0; i < kNElts; ++i) {
+          const float gf = to_float_h(gh[i]);
+          const float uf = to_float_h(uh[i]);
+          const float sv = __fdiv_rn(gf, 1.0f + expf(-gf));    // ATen SiLU (fp32)
+          const float sb = round_h(sv, TIn{});                   // rounded SiLU output
+          x_vals[c][i] = round_h(sb * uf, TIn{});                // rounded product
+        }
+      } else {
+#pragma unroll
+        for (int i = 0; i < kNElts; ++i) x_vals[c][i] = to_float_h(gh[i]);
       }
     }
   }
@@ -442,13 +453,13 @@ void hadamard_pack_kernel(uint8_t* __restrict__ code_lo, uint8_t* __restrict__ s
 // Host entry points.  N must be 8192 (llama-3.2 intermediate; the kernel is
 // templated so other power-of-2 sizes are a one-line instantiation).
 // ===================================================================================
-template <int N, class TIn, class LayoutSF4, class LayoutSF8>
+template <int N, class TIn, bool SWIGLU, class LayoutSF4, class LayoutSF8>
 static void launch_hpk(const TIn* gate, const TIn* up,
                        uint8_t* code_lo, uint8_t* sf_lo, LayoutSF4 layout4,
                        uint8_t* code_hi, uint8_t* sf_hi, LayoutSF8 layout8,
                        int rows, int K_low, int K_high, float scale, cudaStream_t stream) {
   constexpr int kSmemBytes = (N + N / 32 + 32) * (int)sizeof(float);   // 8448 floats @ 8192
-  auto kernel = &hadamard_pack_kernel<TIn, LayoutSF4, LayoutSF8, N>;
+  auto kernel = &hadamard_pack_kernel<TIn, LayoutSF4, LayoutSF8, N, SWIGLU>;
   static bool attr_set = false;
   if (!attr_set) {
     hpk_check_cuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -485,7 +496,7 @@ std::vector<torch::Tensor> hadamard_swiglu_pack_mixed(torch::Tensor gate, torch:
   const float scale = 1.0f / std::sqrt(8192.0f);   // 1/sqrt(I), I = row width = 8192
   auto st = gate.scalar_type();
 #define LAUNCH_HPK(TY)                                                                   \
-  launch_hpk<8192, TY>(reinterpret_cast<const TY*>(gate.data_ptr()),                     \
+  launch_hpk<8192, TY, true>(reinterpret_cast<const TY*>(gate.data_ptr()),               \
                        reinterpret_cast<const TY*>(up.data_ptr()),                       \
                        code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4, \
                        code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8, \
@@ -500,6 +511,42 @@ std::vector<torch::Tensor> hadamard_swiglu_pack_mixed(torch::Tensor gate, torch:
   return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t};
 }
 
+// vllm-perf r2: fused Hadamard + quant/pack of an ALREADY-ACTIVATED row (the
+// vLLM down_proj input is SiluAndMul output). Same kernel, SWIGLU=false phase 0.
+std::vector<torch::Tensor> hadamard_pack_mixed(torch::Tensor x, int64_t M, int64_t N_gemm,
+                                               int64_t K_low, int64_t K_high) {
+  TORCH_CHECK(x.is_cuda(), "x must be CUDA");
+  TORCH_CHECK(K_low % 16 == 0, "K_low % 16");
+  TORCH_CHECK(K_high % 32 == 0 || K_high == 0, "K_high % 32");
+  TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
+  TORCH_CHECK(K_low + K_high == 8192, "row width must be 8192");
+  init_grids_once_h();
+  int Mi = (int)M, Ni = (int)N_gemm, Klo = (int)K_low, Khi = (int)K_high;
+  auto dev = x.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
+  auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi > 0 ? Khi : 32, 1));
+  auto code_lo_t = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
+  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto code_hi_t = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
+  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  const float scale = 1.0f / std::sqrt(8192.0f);
+  auto st = x.scalar_type();
+#define LAUNCH_HPX(TY)                                                                   \
+  launch_hpk<8192, TY, false>(reinterpret_cast<const TY*>(x.data_ptr()), nullptr,        \
+                       code_lo_t.data_ptr<uint8_t>(), sf_lo_t.data_ptr<uint8_t>(), layout4, \
+                       code_hi_t.data_ptr<uint8_t>(), sf_hi_t.data_ptr<uint8_t>(), layout8, \
+                       Mi, Klo, Khi, scale, stream)
+  if (st == torch::kFloat16)       LAUNCH_HPX(half);
+  else if (st == torch::kBFloat16) LAUNCH_HPX(__nv_bfloat16);
+  else TORCH_CHECK(false, "hadamard_pack_mixed: x must be float16/bfloat16");
+#undef LAUNCH_HPX
+  hpk_check_cuda(cudaGetLastError(), "hadamard_pack_x launch");
+  code_lo_t = code_lo_t.view({Mi, Klo / 2});
+  code_hi_t = code_hi_t.view({Mi, Khi});
+  return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t};
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("hadamard_swiglu_pack_mixed", &hadamard_swiglu_pack_mixed,
         "FUSED silu(gate)*up -> Hadamard/sqrt(I) (fp32, in SMEM) -> fp16 -> "
@@ -508,4 +555,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "N_gemm is the consumer GEMM's N (SFA layout), the row width is fixed 8192",
         pybind11::arg("gate"), pybind11::arg("up"), pybind11::arg("M"),
         pybind11::arg("N_gemm"), pybind11::arg("K_low"), pybind11::arg("K_high"));
+  m.def("hadamard_pack_mixed", &hadamard_pack_mixed,
+        "FUSED Hadamard/sqrt(8192) (fp32, in SMEM) -> fp16 -> NVFP4+MXFP8 pack of an "
+        "already-activated row x (vLLM down_proj input); same returns as the SwiGLU entry",
+        pybind11::arg("x"), pybind11::arg("M"), pybind11::arg("N_gemm"),
+        pybind11::arg("K_low"), pybind11::arg("K_high"));
 }

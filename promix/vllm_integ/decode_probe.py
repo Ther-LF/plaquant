@@ -72,6 +72,9 @@ def make_packed(N, K, K_high, cd, dev="cuda"):
                       W_deq=W_deq, bias=None, g_w=g,
                       W_lo_dec=W_lo_packed, S_lo_dec=S_lo_dec,
                       W_hi_dec=bytes_hi.contiguous(), S_hi_dec=S_hi_dec)
+    # raw 1-byte scale streams (r2 sf8 probe)
+    pk.sf_lo_raw = sf_lo.contiguous()
+    pk.sf_hi_raw = sf_hi.contiguous()
     return pk
 
 
