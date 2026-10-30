@@ -98,10 +98,13 @@ struct alignas(16) _f16Vec {
   T1 data[width];
 
   __device__ _f16Vec& operator+=(const _f16Vec<scalar_t, width>& other) {
+    // torch cpp_extension builds define __CUDA_NO_HALF2_OPERATORS__, so the
+    // packed adds are spelled __hadd2 explicitly — the SAME instruction vLLM's
+    // `temp += T2{...}` lowers to (half2/bfloat162 add, one rounding).
 #pragma unroll
     for (int i = 0; i < width; i += 2) {
-      T2 temp{data[i], data[i + 1]};
-      temp += T2{other.data[i], other.data[i + 1]};
+      T2 temp = __hadd2(T2{data[i], data[i + 1]},
+                        T2{other.data[i], other.data[i + 1]});
       data[i] = temp.x;
       data[i + 1] = temp.y;
     }
