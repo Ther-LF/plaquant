@@ -4,7 +4,8 @@
 measured-MSE allocation result, and the size-scaling trend are not
 Llama-specific, by extending ProMix to a second model family (Qwen).
 
-**Status**: feasibility PASSED (tractable); experiment phase in progress.
+**Status**: feasibility PASSED; experiment COMPLETE. **Cross-family verdict:
+the story holds on Qwen.**
 
 ---
 
@@ -88,14 +89,78 @@ are not comparable across tokenizers — only within-family gaps are).
 
 ---
 
-## 2. Results
+## 2. Results (Qwen3-8B, dense-R-on, same protocol as the Llama 1B–13B suite)
 
-**bf16 bridge (no rotation, no quant), Qwen3-8B** (recorded as THE baseline —
-no committed reference exists for Qwen in this repo): wikitext-2 **9.7247**,
-C4 **13.2993** (same protocol as the Llama suite: seqlen 2048, batch 16,
-evaluate_ppl token-pooled exp(mean NLL); `BRIDGE_qwen3_8b.json`). Note
-Qwen3-8B's absolute PPL is higher than Llama-3-8B's 6.14 — different tokenizer
-(vocab 151936 vs 128256) and training mix; only within-family deltas are
-meaningful.
+Pipeline ran END-TO-END on a fresh substrate with zero quantization-logic
+changes: 16 GB weight download → Step 0 PCA basis
+(`U/R/E-wikitext-512-Qwen3-8B.bin`, 512×2048, ~2.3 h) →
+`rd_metrics.py --configs bf16,uniform,measured --no_zeroshot`. Raw JSON:
+`docs/rd_metrics/RD_METRICS_qwen3_8b.json`. The rd_metrics bf16 leg reproduced
+the standalone bridge exactly (9.7247 / 13.2993) — evaluator consistency gate
+passed. Both quantized legs realized avg_fp8 = 0.1250 exactly
+(165888/1327104 channels; measured budget 2304/18432 rings).
 
-(uniform-1/8 and measured-MSE-1/8 pending — basis Step 0 in progress)
+| point | wikitext | C4 |
+|---|---|---|
+| bf16 bridge | **9.7247** | **13.2993** |
+| uniform-1/8 W4A4 | 9.9665 | 13.7319 |
+| measured-MSE-1/8 | 9.9777 | 13.6805 |
+
+(Absolute PPLs are not comparable to Llama-3-8B's 6.14/8.88 — different
+tokenizer, vocab 151936 vs 128256, and training mix; only within-family gaps
+carry meaning.)
+
+**(a) Does ProMix W4A4 quantize Qwen well?** YES — better (relative) than
+Llama-8B. Uniform-1/8 gap vs bf16: wikitext **+0.242 (+2.5%)**, C4 **+0.433
+(+3.3%)**, vs Llama-3-8B's +0.451 (+7.4%) / +0.753 (+8.5%). The PCA+rotation
++ NVFP4/MXFP8 split transfers to the Qwen family with no degradation — no
+arch-specific accuracy pathology from qk-norm, GQA, the 1e6-theta RoPE, or the
+had12 down_proj Hadamard.
+
+**(b) Does the measured-MSE allocation result reproduce the Llama pattern?**
+YES — measured − uniform: wikitext **+0.011**, C4 **−0.051**. Break-even with
+mixed signs across the two PPL families, numerically right where the Llama
+scaling trend predicts for an 8B (Llama-8B: wikitext +0.019, C4 +0.004; the
+gain only exists at 1–3B and decays to ~0 by 8B). The cross-family datapoint
+lands ON the trend, not off it.
+
+**(c) Arch-specific breakage?** NONE at runtime. The entire run used the
+unmodified quantization/rotation/GPTQ/eval code; the only Qwen-specific
+changes were artifacts/plumbing (plugin + config + had12 + resolve_paths
+guard). Caveats that stay on the record: fp16 build dtype showed no overflow
+on Qwen3-8B (watched); key_pos basis is pre-k_norm (irrelevant here, blocks
+only future KV4-on-Qwen3); Qwen3-4B (head_dim≠hidden/heads) and Qwen2.5 (QKV
+bias + intermediate 18944 has no Hadamard decomposition) remain out of scope.
+
+### Cross-family verdict
+
+All three claims survive the family swap on Qwen3-8B: (1) W4A4
+(NVFP4+MXFP8-1/8) quantization quality is NOT Llama-specific — the uniform gap
+is actually smaller on Qwen; (2) the measured-MSE allocation's size-scaling
+behavior is NOT Llama-specific — break-even at 8B exactly as the Llama 8B/13B
+points predict; (3) the ResQ-style PCA+rotation substrate (fuse_norm → U·R1 →
+per-head R2 → online Hadamard) closes mathematically and empirically on a
+second architecture with qk-norm and GQA. What this does NOT yet show: a Qwen
+point at 1–3B where the allocation gain is nonzero for Llama (no small Qwen
+model cached; worth one follow-up run if a small Qwen is fetched —
+Qwen3-1.7B is a tractable candidate: hidden 2048 / 16 heads = head_dim 128 ✓,
+intermediate 6144 = 12 × 512 → had12 ✓).
+
+### Reproduce
+
+```bash
+# remote (docker luofan-plaquant, Pro 6000), isolated dir + isolated transformers:
+git clone -b feat/rd-qwen https://github.com/Ther-LF/plaquant.git /home/luofan/plaquant-qwen
+docker exec luofan-plaquant pip install -q --target=/home/luofan/plaquant-qwen/_pydeps transformers==4.51.3
+# prune _pydeps to transformers* only (system hub/tokenizers/fsspec are compatible;
+# the extra wheels pulled by --target would shadow and break datasets 2.20)
+docker exec -d -e CUDA_VISIBLE_DEVICES=<idle> -e HF_HOME=/home/luofan/hf_cache \
+  -e PYTHONPATH=/home/luofan/plaquant-qwen/_pydeps:/home/luofan/plaquant-qwen \
+  -w /home/luofan/plaquant-qwen luofan-plaquant bash -c \
+  'python -m promix.quantize.basis --config promix/configs/qwen3-8b-fp-perhead.yaml \
+     --output_dir ./rotation --nsamples 512 > basis.log 2>&1'   # ~2.3 h
+docker exec -d ... bash -c \
+  'python promix/scripts/rd_metrics.py --config promix/configs/qwen3-8b-fp-perhead.yaml \
+     --configs bf16,uniform,measured --no_zeroshot \
+     --out /home/luofan/plaquant-qwen/RD_METRICS_qwen3_8b.json > metrics.log 2>&1'  # ~1.5 h
+```
