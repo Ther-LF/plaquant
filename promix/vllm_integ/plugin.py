@@ -221,13 +221,16 @@ class PromixLinearMethod(LinearMethodBase):
         if dg is not None and K_high > 0:
             packed.W_lo_dec = packed.W_lo_packed                     # shared bytes
             packed.W_hi_dec = packed.W_hi_bytes                      # shared bytes
-            if (os.environ.get("PROMIX_DECODE_SF8", "1") != "0"
+            if (os.environ.get("PROMIX_DECODE_SF8", "0") == "1"
                     and os.environ.get("PROMIX_DECODE_MODE", "w4a16") != "w4a4"
                     and hasattr(dg, "decode_gemv_w4a16_sf8")):
                 # vllm-perf r2 (secondary lever): stream the checkpoint's RAW
                 # 1-byte block scales (E4M3 low / UE8M0 high); the _sf8 GEMVs
-                # fold g in-kernel — bit-exact (sf8_probe torch.equal gate),
-                # ~18% less low-segment weight-stream bytes at decode.
+                # fold g in-kernel. BIT-EXACT (sf8_probe torch.equal, all shapes
+                # M=1..16) but MEASURED SLOWER under graph replay (0.92-0.98x,
+                # r2_sf8_probe.json): the in-kernel E4M3 cvt / ldexpf outweighs
+                # the ~18% low-segment byte saving — r1's +8-12% estimate is
+                # REFUTED. DEFAULT-OFF; kept for experiments.
                 packed.S_lo_dec = layer.weight_lo_scale.data.contiguous()
                 packed.S_hi_dec = layer.weight_hi_scale.data.contiguous()
             else:
