@@ -40,7 +40,12 @@
 
 ## 必答的 reviewer 攻击:旋转伤 FP4
 
-**ARCQuant + DualQuant + SharQ 三篇都攻击旋转**(DualQuant 示 QuaRot 在 NVFP4 上 PPL>1000)。我们的回应:**PCA 旋转是按方差排序把 outlier 集中到少数方向(再分区),和他们批的 Hadamard "把 outlier 摊开抬高局部块动态范围"相反**;且旋转对我们只是小内部件(实测值 0.02–0.17),主卖点是曲线+kernel 不是旋转。**建议补一个"无主-Hadamard 变体"实验正面回应。**
+**ARCQuant + DualQuant + SharQ 三篇都攻击旋转**(DualQuant 示 QuaRot 在 NVFP4 上 PPL>1000)。但他们攻击的是**全宽 Hadamard(把 outlier 摊到所有通道、抬高每个 block 的局部动态范围、破坏块隔离)**。**ProMix 用的不是这个:**
+- **主旋转是 PCA(U)= 按方差"集中"outlier,不是"摊开"** —— 和攻击的方向相反;
+- **环 Hadamard 是局部 64-宽块对角**(只在环内混,能量留在环内不跨 tensor 外溢),且 **outlier 重的环被分配到 MXFP8**(更大 range)再兜一层 —— 与全宽 Hadamard 根本不同;环本身是载重件(ring128/256 的 overturn 靠它,不能去掉);
+- 唯一的全宽 Hadamard 只在 down_proj 一处(ResQ 遗留,intermediate 太大做不了 PCA)。
+
+**回应 = 概念区分(局部环+PCA集中 vs 全宽摊开)+ 现成实证**:ProMix gap +0.46 比"反旋转"的 ARCQuant +0.63 还准,且不像 QuaRot 在 NVFP4 上发散 → 我们的旋转在 block-scaled FP4 下活得好。**无需额外消融实验**(环是必要件,不消融;全宽 Hadamard 我们本就几乎不用)。
 
 ## 已知 limitation(诚实列出)
 
