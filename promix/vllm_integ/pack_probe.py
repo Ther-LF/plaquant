@@ -18,8 +18,11 @@ Run: CUDA_VISIBLE_DEVICES=7 python -m promix.vllm_integ.pack_probe [--out o.json
 """
 import argparse
 import json
+import os
 
 import torch
+
+os.environ.setdefault("PROMIX_HAD_PACK", "1")   # the probe measures the (default-off) lever
 
 from promix.vllm_integ.kernels import load_kernels, load_qpfm, load_had_pack
 from promix.vllm_integ.decode_probe import SHAPES, make_packed, bench_graph
