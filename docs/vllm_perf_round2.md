@@ -1,17 +1,22 @@
 # vLLM perf-optimization loop — ROUND 2: small/mid-M GEMM configs + pack-launch fusion
 
-**Status: TBD (gates in progress).** Round-1's "next-biggest overhead" was the small/mid-M
-GEMM regime (decode b8-b16 + chunked-prefill small-M, 0.53-0.61x of vLLM-NVFP4). Round 2
-attacked it with the two planned levers:
+**Status: DONE.** Round-1's "next-biggest overhead" was the small/mid-M GEMM regime
+(decode b8-b16 + chunked-prefill small-M, 0.53-0.61x of vLLM-NVFP4). Round 2 attacked it
+with the two planned levers and shipped both green ones:
 
-1. **Per-shape small-M GEMM configs** — a new prepacked-SF, capture-safe ext
-   (`cd_smallm_ext.cu`) exposing the 128x64 co-design tile (+ stage variants), probed
-   under CUDA-graph replay and wired into `MixedQuantLinear._gemm` via a measured
-   per-(N,K) M-window table.
-2. **Activation-pack fusion** — the single-launch NVFP4+MXFP8 mixed pack
-   (`quant_pack_float_mixed`, round-26 prior art) wired into the vLLM path (halves the
-   per-Linear pack launches, bit-exact); the fused Hadamard+pack down_proj producer was
-   built, probed, and **measured as a negative** (kept default-off).
+1. **Per-shape small-M GEMM configs** (`cd_smallm_ext.cu`, 128x64 tile, prepacked-SF,
+   capture-safe): torch.equal to the shipping kernel, 1.15-1.65x GEMM-only in measured
+   per-(N,K) M-windows (biggest at M=64-384, the chunked-prefill regime).
+2. **Single-launch mixed activation pack** (`quant_pack_float_mixed` wired): bit-exact,
+   1.10-1.16x pack, one fewer launch per Linear.
+
+Same-session serve A/B (levers on/off, same box, same engine):
+**3B decode b8 TPOT −6.7/−9.5 %, b16 −7.0/−7.3 %** (pm/NVFP4 0.51-0.59 → **0.54-0.62**);
+8B b8/b16 −2.3/−2.6 %; prefill TTFT b1 −5 % both sizes; nothing regressed (b1 decode
+within its known ±3 % bimodal noise, gates bit-identical). Two more levers were built,
+measured, and honestly rejected: the fused Hadamard+pack down_proj producer (loses to
+the FHT+qpfm chain) and 1-byte decode scales (bit-exact but 0.92-0.98x — r1's +8-12 %
+estimate refuted).
 
 Raw JSONs: `docs/vllm_perf_round2_data/`; full set on the remote under
 `/home/luofan/vllm_integ/bench_r2/`.
@@ -108,10 +113,82 @@ kernels + probe kept as the documented negative.
 | T2 decode-route M=1 subset (`--decode-route-m 1 --graphs --max-chunks 30`) | **PASS — byte-identical to the R1 result** (PPL 8.462834401645244 vs subset ref 8.8014, signed ΔPPL −0.339, every digit equal to `vllm_perf_round1_data/gate_t2_decode_m1.json`): the M=1 GEMV path is untouched by this round, bit-provenly. |
 | T2 decode-route m16 CONTROL (same gate, `PROMIX_SMALLM=0 PROMIX_QPFM=0`) | **Byte-identical to the levers-on run** (PPL 8.360270763492986, every digit; top-1, mean/max diffs all equal) — levers 1+2 are bit-invisible END-TO-END on the decode route, and the delta vs R1's −0.108 is definitively the route-threshold config (R1's gate predated its own threshold re-fit), not this round's changes. |
 
-## 5. Scoreboard — three-way serve bench
+## 5. Scoreboard — serve bench
 
-TBD
+### 5a. Same-session A/B (the clean attribution): levers ON vs OFF (`PROMIX_SMALLM=0
+PROMIX_QPFM=0`), same box/GPU/engine stack, back-to-back (`promix_*_ctl.json`)
+
+3B decode TPOT (ms) off → on, with pm/NVFP4 ratio (NVFP4 = Phase-3 baseline):
+
+| case | TPOT off → on | Δ | pm/nv off → on |
+|---|---|---|---|
+| isl1024_osl128_b8 | 7.00 → **6.34** | **−9.5 %** | 0.533 → **0.582** |
+| isl128_osl1024_b8 | 6.51 → **6.07** | **−6.7 %** | 0.505 → **0.541** |
+| isl1024_osl128_b16 | 7.46 → **6.93** | **−7.0 %** | 0.587 → **0.622** |
+| isl128_osl1024_b16 | 6.85 → **6.35** | **−7.3 %** | 0.540 → **0.583** |
+| b4 (both) | 6.27/5.89 → 5.98/5.84 | −4.7/−0.8 % | 0.548/0.522 → 0.573/0.526 |
+| b1 (both) | 4.45/4.26 → 4.30/4.25 | −3.5/−0.2 % (bimodal ±3 % noise; M=1 path bit-identical) | ~0.73-0.76 |
+| prefill L2048 b1/b4/b8/b16 | — | −5.5/−1.6/+0.1/+0.1 % | |
+
+8B: decode b8/b16 −2.3 to −2.6 % (qpfm only — the 8B small-M windows start at M=32, so
+decode b8/16 GEMMs are unchanged, exactly as the probe predicted), b1/b4 ≈ 0,
+prefill b1 −4.9 %.
+
+The 3B b8/16 gain (−6.7..−9.5 %) comes from cfg1 on o/down at M=8..16 (probe: −3.4 and
+−7.4 µs/layer) + qpfm (−1.3 µs x4/layer) + 4 fewer launches/layer under graph replay.
+
+### 5b. Three-way vs the Round-1 baselines (`promix_{3b,8b}.json` vs
+`vllm_perf_round1_data/` promix + Phase-3 nvfp4/bf16)
+
+| | decode b8 pm/nv | decode b16 pm/nv | decode b1 pm/nv | prefill L2048 pm/nv (b1..b16) |
+|---|---|---|---|---|
+| 3B r1 → r2 | 0.53-0.54 → **0.54-0.58** | 0.56-0.59 → **0.58-0.62** | 0.76-0.77 → 0.74-0.76 | 0.59-0.81 → **0.60-0.89** |
+| 8B r1 → r2 | 0.57-0.58 → 0.56-0.58 | 0.60-0.61 → 0.60-0.61 | 0.73-0.75 → 0.73 | 0.53-0.55 → **0.56-0.57** |
+
+Caveat: the r1-promix rows were measured in an older session — the same-session
+levers-off control today reads ~2-4 % slower than r1's rows (session drift), so 5a is
+the honest per-lever delta; 5b is the loop-level trajectory. pm/bf16 decode:
+3B b8/16 0.93-1.00 → **0.96-1.05**; 8B unchanged ~1.14-1.23; b1 1.26-1.33 (3B) /
+1.58-1.65 (8B) unchanged.
+
+Protocol note: the serve cases (b1-16, isl 1024/128) sample M≤16 decode and M≥1024
+prefill — they barely touch M=64-384 where lever 1 wins 1.45-1.65x (graph-replay-timed,
+§2). Chunked-prefill tails / mid-batch decode workloads in that regime get those wins
+directly.
 
 ## 6. Next biggest overhead (feeds round 3)
 
-TBD
+1. **Decode b8/16 GEMM is structurally latency-bound, not config-bound.** At M≤16 the
+   dual-format GEMM runs its serial K mainloop on only N/128..N/64 CTAs (3B qkv 19.7 µs
+   vs 6.1 µs weight floor; down 33.7 vs 9.8): the config space is exhausted (128x64
+   probed; TK=256 smem-impossible with MX stages≥2; stage variants within noise), the
+   batched GEMV loses 2-3x at M=16 (LDS-bound per row), and sf8 scales lose 0.92-0.98x.
+   The named lever is **split-K / stream-K in the fused dual-phase glue** (k-iter count
+   24-112 split across CTAs) — a forked-kernel scheduler change with the SM90
+   cooperative stream-K machinery as the template; alternatively a Marlin-style W4A16
+   tensor-core small-M kernel.
+2. **Producer-side quant fusion** (vLLM-NVFP4's rms_norm+quant / silu_mul+quant
+   inductor fusions): requires splitting `promix_linear` into quant + gemm custom ops
+   + a custom post-grad pass (or norm surgery). Kernels exist in-repo
+   (`add_rmsnorm_pack_ext.cu`); see `docs/vllm_quant_tricks_survey.md` for the vLLM
+   pattern file:lines. Removes 1-2 kernels + one fp16 [M,K] round-trip per norm site.
+3. **o_proj column gather** (`x[..., col_order]`): a separate gather kernel + round
+   trip per o_proj; fold the static permutation into the qpfm pack's column indexing.
+4. **Structural +19 % weight bytes vs pure-FP4** (the MXFP8 ring) — accuracy-motivated,
+   not a perf bug; bounds the decode ceiling vs NVFP4.
+
+## 7. Reproduce
+
+```bash
+B=/home/luofan/vllm_integ/bench_r2
+# probes (graph-replay timing + bit gates):
+docker exec -w /home/luofan/plaquant-vllm-integ -e CUDA_VISIBLE_DEVICES=7 luofan-plaquant \
+  /home/luofan/baselines/venv/bin/python -m promix.vllm_integ.gemm_probe --out $B/r2_gemm_probe.json
+... -m promix.vllm_integ.pack_probe --out $B/r2_pack_probe.json   # sets PROMIX_HAD_PACK=1 itself
+... -m promix.vllm_integ.sf8_probe  --out $B/r2_sf8_probe.json
+# gates (3B): gate_t2 --graphs | --decode-route-m 16 | --decode-route-m 1 --graphs --max-chunks 30
+# serve A/B: bench_serve ... (levers on) vs PROMIX_SMALLM=0 PROMIX_QPFM=0 (control)
+# env switches: PROMIX_SMALLM=0 (128x128-only GEMM), PROMIX_QPFM=0 (two-launch pack),
+#               PROMIX_HAD_PACK=1 (opt-in fused had+pack, measured slower),
+#               PROMIX_DECODE_SF8=1 (opt-in 1-byte decode scales, measured slower)
+```
