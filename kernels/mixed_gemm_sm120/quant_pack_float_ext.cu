@@ -245,7 +245,8 @@ std::vector<torch::Tensor> quant_pack_float_fp4(torch::Tensor x, int64_t M, int6
   int Mi = (int)M, Ni = (int)N, Ki = (int)K, nblk = Ki / 16;
   auto layout_SFA = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
   auto data_out = torch::empty({(int64_t)Mi * (Ki / 2)}, u8opts(dev));
-  auto sf_out = torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
+  auto sf_out = (nblk % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
   launch_qpf<decltype(layout_SFA), 4>(x, data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
                                       layout_SFA, Mi, nblk, Ki, rs, co, stream);
   data_out = data_out.view({Mi, Ki / 2});
@@ -264,7 +265,8 @@ std::vector<torch::Tensor> quant_pack_float_fp8(torch::Tensor x, int64_t M, int6
   int Mi = (int)M, Ni = (int)N, Ki = (int)K, nblk = Ki / 32;
   auto layout_SFA = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
   auto data_out = torch::empty({(int64_t)Mi * Ki}, u8opts(dev));
-  auto sf_out = torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
+  auto sf_out = (nblk % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
   launch_qpf<decltype(layout_SFA), 8>(x, data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
                                       layout_SFA, Mi, nblk, Ki, rs, co, stream);
   data_out = data_out.view({Mi, Ki});

@@ -371,9 +371,11 @@ std::vector<torch::Tensor> add_rmsnorm_pack_mixed(torch::Tensor x, c10::optional
 
   auto resid_t   = has_add ? torch::empty({M, N}, x.options()) : torch::Tensor();
   auto code_lo_t = torch::empty({M, Klo / 2}, u8opts(dev));
-  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo_t = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto code_hi_t = torch::empty({M, Khi}, u8opts(dev));
-  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi_t = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   // probe-only norm output (empty unless requested); never allocated on the
   // production path.
   auto dbg_t = dbg ? torch::zeros({M, N}, x.options().dtype(torch::kFloat32))
@@ -433,8 +435,8 @@ std::vector<torch::Tensor> norm_pack_for_n(std::vector<torch::Tensor> const& pac
   if ((int64_t)sf_lo_t.numel() == sz4 && (int64_t)sf_hi_t.numel() == sz8) {
     return {code_lo_t, sf_lo_t, code_hi_t, sf_hi_t};
   }
-  auto phys4 = torch::empty({sz4}, u8opts(dev));
-  auto phys8 = torch::empty({sz8}, u8opts(dev));
+  auto phys4 = ((Klo / 16) % 4) ? torch::zeros({sz4}, u8opts(dev)) : torch::empty({sz4}, u8opts(dev));
+  auto phys8 = ((Khi / 32) % 4) ? torch::zeros({sz8}, u8opts(dev)) : torch::empty({sz8}, u8opts(dev));
   {
     const int nblk = Klo / 16, tpb = 256;
     int total = Mi * nblk;

@@ -385,8 +385,9 @@ static torch::Tensor interleave_sfa(torch::Tensor SFA, int Mi, int Ni, int Ki, c
   auto dev = SFA.device();
   auto layout_SFA = BSConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
   int64_t sz = (int64_t)size(filter_zeros(layout_SFA));
-  auto phys = torch::empty({sz}, u8opts(dev));
   int nblk = Ki / VEC, tpb = 256;
+  // pad-aware: zero-fill pad SF slots when K/VEC is not atom-aligned (see interleave_sfb)
+  auto phys = (nblk % 4) ? torch::zeros({sz}, u8opts(dev)) : torch::empty({sz}, u8opts(dev));
   if (EFFICIENT) {
     int total = Mi * nblk;
     cd_fill_sf_block_kernel<<<(total + tpb - 1) / tpb, tpb, 0, stream>>>(
@@ -464,7 +465,8 @@ static std::vector<torch::Tensor> quant_pack_impl(torch::Tensor data_in, torch::
   auto data_out = torch::empty({dsz}, u8opts(dev));
   auto layout_SFA = BSConfig::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Ki, 1));
   int64_t sfsz = ilv ? (int64_t)size(filter_zeros(layout_SFA)) : (int64_t)Mi * nblk;
-  auto sf_out = torch::empty({sfsz}, u8opts(dev));
+  auto sf_out = (ilv && (nblk % 4)) ? torch::zeros({sfsz}, u8opts(dev))
+                                     : torch::empty({sfsz}, u8opts(dev));
   int total = Mi * nblk, tpb = 256;
   dim3 grid((total + tpb - 1) / tpb);
   using L = decltype(layout_SFA);

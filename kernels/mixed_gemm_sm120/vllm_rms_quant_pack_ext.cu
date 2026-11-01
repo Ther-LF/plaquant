@@ -361,9 +361,11 @@ std::vector<torch::Tensor> vllm_add_rms_norm_quant_pack(
   auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi, 1));
 
   auto code_lo_t = torch::empty({M, Klo / 2}, u8opts(dev));
-  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo_t = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto code_hi_t = torch::empty({M, Khi}, u8opts(dev));
-  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi_t = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   auto xn_t      = torch::empty({M, N}, x.options());
   auto resid_t   = torch::empty({M, N}, x.options());
 

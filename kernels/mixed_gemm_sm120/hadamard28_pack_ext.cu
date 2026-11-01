@@ -389,9 +389,11 @@ std::vector<torch::Tensor> hadamard28_swiglu_pack_mixed(torch::Tensor gate, torc
   auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
   auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi > 0 ? Khi : 32, 1));
   auto code_lo_t = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
-  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo_t = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto code_hi_t = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
-  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi_t = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   const float scale = 1.0f / std::sqrt((float)(kGroups * kGroupN));   // 1/sqrt(14336)
 
   constexpr int kSmemBytes = kGroups * kTsStride * (int)sizeof(float);  // ~56.1 KB
@@ -444,9 +446,11 @@ std::vector<torch::Tensor> hadamard28_pack_mixed(torch::Tensor x, torch::Tensor 
   auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
   auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi > 0 ? Khi : 32, 1));
   auto code_lo_t = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
-  auto sf_lo_t   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo_t = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto code_hi_t = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
-  auto sf_hi_t   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi_t = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   const float scale = 1.0f / std::sqrt((float)(kGroups * kGroupN));   // 1/sqrt(14336)
 
   constexpr int kSmemBytes = kGroups * kTsStride * (int)sizeof(float);  // ~56.1 KB

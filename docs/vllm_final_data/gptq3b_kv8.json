@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "tag": "gptq3b_kv8",
+    "model": "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-gptq_w4a16",
+    "argv": [
+      "/home/luofan/plaquant-vllm-integ/promix/vllm_integ/bench_serve.py",
+      "--model",
+      "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-gptq_w4a16",
+      "--tag",
+      "gptq3b_kv8",
+      "--dtype",
+      "auto",
+      "--batches",
+      "16,64",
+      "--cases",
+      "2048:128,4096:128",
+      "--prefill-len",
+      "0",
+      "--max-model-len",
+      "8192",
+      "--gpu-mem-util",
+      "0.90",
+      "--extra-llm-kwargs",
+      "{\"kv_cache_dtype\":\"fp8\",\"max_num_seqs\":512}",
+      "--out",
+      "/home/luofan/vllm_integ/bench_final/gptq3b_kv8.json"
+    ],
+    "gpu": "5",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "time": "2026-11-01 09:19:55",
+    "vllm": "0.32.0",
+    "load_s": 50.4647271130234,
+    "quantization_resolved": "compressed-tensors",
+    "dtype_resolved": "torch.bfloat16",
+    "enforce_eager": false
+  },
+  "cases": {
+    "isl2048_osl128_b16": {
+      "isl": 2048,
+      "osl": 128,
+      "batch": 16,
+      "ttft_s": 0.686353384051472,
+      "full_s": 1.1812880961224437,
+      "tpot_ms": 3.897123717094266,
+      "gen_tok_per_s": 1733.7007007202749,
+      "total_tok_per_s": 29472.911912244672,
+      "ttft_runs_s": [
+        0.6851261840201914,
+        0.686353384051472,
+        0.687226289184764
+      ],
+      "full_runs_s": [
+        1.182873483048752,
+        1.1808675748761743,
+        1.1812880961224437
+      ]
+    },
+    "isl2048_osl128_b64": {
+      "isl": 2048,
+      "osl": 128,
+      "batch": 64,
+      "ttft_s": 2.730078301159665,
+      "full_s": 3.8857599711045623,
+      "tpot_ms": 9.09985566885746,
+      "gen_tok_per_s": 2108.2105073184307,
+      "total_tok_per_s": 35839.57862441332,
+      "ttft_runs_s": [
+        2.728459283011034,
+        2.730078301159665,
+        2.7313651209697127
+      ],
+      "full_runs_s": [
+        3.880323100835085,
+        3.8857599711045623,
+        3.887365338858217
+      ]
+    },
+    "isl4096_osl128_b16": {
+      "isl": 4096,
+      "osl": 128,
+      "batch": 16,
+      "ttft_s": 1.447865623049438,
+      "full_s": 2.108295883052051,
+      "tpot_ms": 5.20023826773711,
+      "gen_tok_per_s": 971.4006541791637,
+      "total_tok_per_s": 32056.2215879124,
+      "ttft_runs_s": [
+        1.4463170261587948,
+        1.447865623049438,
+        1.4484260140452534
+      ],
+      "full_runs_s": [
+        2.1094461840111762,
+        2.108295883052051,
+        2.1072630821727216
+      ]
+    },
+    "isl4096_osl128_b64": {
+      "isl": 4096,
+      "osl": 128,
+      "batch": 64,
+      "ttft_s": 5.819009610917419,
+      "full_s": 7.875669844215736,
+      "tpot_ms": 16.194175065341074,
+      "gen_tok_per_s": 1040.1654922110013,
+      "total_tok_per_s": 34325.46124296304,
+      "ttft_runs_s": [
+        5.790943572996184,
+        5.819009610917419,
+        5.941403230186552
+      ],
+      "full_runs_s": [
+        7.8566419740673155,
+        7.875669844215736,
+        7.925289006205276
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 86.234375,
+    "max_memory_allocated_gib": 85.65233516693115
+  }
+}

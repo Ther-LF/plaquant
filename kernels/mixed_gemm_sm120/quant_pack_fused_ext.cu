@@ -232,9 +232,11 @@ std::vector<torch::Tensor> quant_pack_float_mixed(torch::Tensor x, int64_t M, in
   auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
   auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi, 1));
   auto data_lo = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
-  auto sf_lo   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto data_hi = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
-  auto sf_hi   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   launch_qpf_mixed(x, /*gidx=*/nullptr,
                    data_lo.data_ptr<uint8_t>(), sf_lo.data_ptr<uint8_t>(), layout4,
                    data_hi.data_ptr<uint8_t>(), sf_hi.data_ptr<uint8_t>(), layout8,
@@ -267,9 +269,11 @@ std::vector<torch::Tensor> quant_pack_float_mixed_gather(
   auto layout4 = BSConfigNV::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Klo, 1));
   auto layout8 = BSConfigMX::tile_atom_to_shape_SFA(make_shape(Mi, Ni, Khi, 1));
   auto data_lo = torch::empty({(int64_t)Mi * (Klo / 2)}, u8opts(dev));
-  auto sf_lo   = torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
+  auto sf_lo = ((Klo / 16) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout4))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout4))}, u8opts(dev));
   auto data_hi = torch::empty({(int64_t)Mi * Khi}, u8opts(dev));
-  auto sf_hi   = torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
+  auto sf_hi = ((Khi / 32) % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout8))}, u8opts(dev))
+                : torch::empty({(int64_t)size(filter_zeros(layout8))}, u8opts(dev));
   launch_qpf_mixed(x, gidx.data_ptr<int>(),
                    data_lo.data_ptr<uint8_t>(), sf_lo.data_ptr<uint8_t>(), layout4,
                    data_hi.data_ptr<uint8_t>(), sf_hi.data_ptr<uint8_t>(), layout8,
