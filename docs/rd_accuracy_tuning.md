@@ -72,7 +72,35 @@ reproduce (PASS, see below).
   ranking is the better selector; ΔD's edge is only as a global
   budget-distribution signal.
 
-### Levers 3-5 (TBD)
+### Lever 4 — activation NVFP4 scale-search widening (3B, dense+measured base 8.2678)
+
+Candidates = base E4M3 scale + D lower steps + U upper steps
+(`PROMIX_ACT_MSE_STEPS` / `PROMIX_ACT_MSE_STEPS_UP`):
+
+| variant | candidates | 3B wiki | Δ vs base |
+|---|---|---|---|
+| shipped | d3 u0 (4) | 8.2678 | — |
+| **up2** | d3 u2 (6) | **8.2362** | **−0.032** |
+| d3u3 | d3 u3 (7) | 8.2576 | −0.010 |
+| d7u3 | d7 u3 (11) | 8.2627 | −0.005 |
+| d0u2 (up-only) | d0 u2 (3) | 8.3411 | +0.073 |
+
+The round-2 "7-step ≈ 3-step" saturation was a DOWN-only artifact: the win was
+hiding in the UP direction, and exactly 2 upper steps (u3 is already worse, and
+deepening down past 3 hurts). But down steps remain essential (up-only is
++0.073). Isolated verdict: **d3u2 wins −0.032 on the dense substrate** —
+interaction with ring512 measured in the stack section.
+
+### Lever 5 — weight micro-scale MSE deepening + GPTQ knobs (3B)
+
+| variant | 3B wiki | Δ vs base |
+|---|---|---|
+| **wmse7** (`PROMIX_WEIGHT_MSE_STEPS=7`) | **8.2426** | **−0.025** |
+| act_order=true | 22.2607 | +14 (BROKEN — incompatible with the reorder/frozen-scale pipeline; reject, do not re-try without a dedicated fix) |
+| percdamp 0.025 / 0.05 | TBD | — |
+
+### Lever 3 — calibration size (TBD)
+
 
 
 ## Best stack (1B/3B/8B × wiki/C4) vs shipped anchors
