@@ -99,7 +99,36 @@ interaction with ring512 measured in the stack section.
 | act_order=true | 22.2607 | +14 (BROKEN — incompatible with the reorder/frozen-scale pipeline; reject, do not re-try without a dedicated fix) |
 | percdamp 0.025 / 0.05 | TBD | — |
 
-### Lever 3 — calibration size (TBD)
+### Lever 3 — calibration size
+
+| variant | 3B wiki | Δ |
+|---|---|---|
+| gptq512 (GPTQ nsamples 128→512, shipped basis) | 8.2512 | −0.017 |
+| calib1024 (basis 1024 + GPTQ 1024 + ΔD 16k tokens) | TBD | — |
+
+First calib1024 attempt EXPLODED (PPL 440k): the 1024-sample basis had been
+generated with the mxfp8-nvfp4 config (o_proj_pca full_global) while the eval
+protocol forces per_head — basis regenerated with the fp-perhead config.
+Note for reproduction: Step-0 basis MUST be generated with
+`llama-3.2-3b-fp-perhead.yaml` (per-head o_proj), not the mxfp8-nvfp4 config.
+
+## Stacking (ring512+measured substrate)
+
+| stack | 1B wiki | 1B C4 | 3B wiki | 3B C4 | 8B wiki | 8B C4 |
+|---|---|---|---|---|---|---|
+| shipped anchor (dense+measured; 8B uniform) | 14.4717 | 20.1864 | 8.2678 | 11.3194 | 6.5882 | 9.6355 |
+| r512 | 14.2392 | 19.8676 | 8.2328 | 11.2968 | 6.5890 | 9.6076 |
+| r512+up2 | **14.2093** | **19.8041** | 8.2320 | 11.2802 | TBD | TBD |
+| r512+w7 | 14.3334 | — | 8.2245 | — | — | — |
+| r512+up2+w7 | 14.2851 | 19.8356 | **8.2214** | 11.2822 | **6.5785** | **9.5868** |
+
+Interactions are real and model-dependent:
+- up2's dense-substrate −0.032 shrinks to −0.001 on 3B ring512 (the ring
+  Hadamard reshapes activation blocks), but still −0.030 on 1B ring512.
+- w7 stacks on 3B (−0.008 on r512) and helps the 8B stack, but HURTS 1B
+  (+0.094 on r512) — per-model stack selection required.
+- 8B: the full stack is the first configuration to beat the shipped uniform
+  anchor on BOTH datasets (wiki −0.010, C4 −0.049).
 
 
 
