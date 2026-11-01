@@ -18,7 +18,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
 ap.add_argument("--output", required=True)
-ap.add_argument("--scheme", required=True, choices=["gptq_w4a16", "awq_w4a16", "nvfp4", "fp8"])
+ap.add_argument("--scheme", required=True, choices=["gptq_w4a16", "awq_w4a16", "nvfp4", "fp8", "int8_w8a8", "mxfp4"])
 ap.add_argument("--nsamples", type=int, default=256)
 ap.add_argument("--seqlen", type=int, default=2048)
 args = ap.parse_args()
@@ -50,6 +50,14 @@ elif args.scheme == "nvfp4":
     recipe = QuantizationModifier(targets="Linear", scheme="NVFP4", ignore=IGNORE)
 elif args.scheme == "fp8":
     recipe = QuantizationModifier(targets="Linear", scheme="FP8_DYNAMIC", ignore=IGNORE)
+elif args.scheme == "int8_w8a8":
+    # vLLM-standard INT8: SmoothQuant + GPTQ W8A8 (int8 weights channelwise, int8 dynamic per-token acts)
+    from llmcompressor.modifiers.smoothquant import SmoothQuantModifier
+    recipe = [SmoothQuantModifier(smoothing_strength=0.8),
+              GPTQModifier(targets="Linear", scheme="W8A8", ignore=IGNORE, dampening_frac=0.01)]
+elif args.scheme == "mxfp4":
+    # compressed-tensors MXFP4 W4A4 (e2m1 + ue8m0 group-32 scales)
+    recipe = QuantizationModifier(targets="Linear", scheme="MXFP4", ignore=IGNORE)
 
 oneshot(model=model, dataset=calib, recipe=recipe, max_seq_length=args.seqlen, num_calibration_samples=len(calib))
 os.makedirs(args.output, exist_ok=True)
