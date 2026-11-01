@@ -315,6 +315,10 @@ def main():
 
     config = load_config(args.config)
     config["_path"] = args.config
+    # keep the pack fallback in sync with the config (r-sweep exports); the
+    # per-wrapper configured high_bits_length still takes precedence.
+    global HIGH_FRACTION
+    HIGH_FRACTION = float(config["quantize"]["high_fraction"])
     init_distributed_for_ptq_main_if_needed()
     transformers.set_seed(config["calibration"].get("seed", 0))
 
