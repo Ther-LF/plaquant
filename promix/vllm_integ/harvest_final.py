@@ -34,18 +34,25 @@ def load(dirname, tag, kind):
 
 
 def kv_capacity(dirname, tag):
-    """Parse 'Available KV cache memory: X GiB' from the engine log."""
+    """'Available KV cache memory' (GiB) for the main-sweep engine.
+
+    Prefers kv_capacity.json (harvested from the remote logs); falls back to
+    parsing {tag}_main.log if present."""
+    j = os.path.join(dirname, "kv_capacity.json")
+    if os.path.exists(j):
+        with open(j) as f:
+            d = json.load(f)
+        if tag in d:
+            return d[tag]
     p = os.path.join(dirname, f"{tag}_main.log")
     if not os.path.exists(p):
         return None
-    gib = None
     with open(p, errors="replace") as f:
         for line in f:
             m = re.search(r"Available KV cache memory: ([\d.]+) GiB", line)
             if m:
-                gib = float(m.group(1))
-                break  # first engine (main sweep)
-    return gib
+                return float(m.group(1))
+    return None
 
 
 def fmt(v, nd=1):
