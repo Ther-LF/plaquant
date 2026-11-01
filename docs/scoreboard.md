@@ -146,3 +146,10 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 3. **vs FP8 W8A8:大 batch 持平**(0.90–1.09),而我们 4.97 bit 权重、W4A4。
 4. **vs NVFP4:0.72(b16)→0.93(3B b512)/0.87(8B b512)**,随 batch 单调收敛;prefill 0.58–0.68。差距=结构项(r5 §3c:双段 GEMM 1.33×、act-MSE pack、down-Hadamard)。
 5. **精度列:ProMix 是最准的 W4A4**(8.370/6.640 vs NVFP4 8.63/6.87),loop 期间精度净改善(m16 route −0.32 PPL)。
+
+### r-sweep(serving 实测曲线,2026-11-01;完整表+verdict 见 vllm_final_fiveway.md §4)
+
+- **精度旋钮在 serving 端近乎免费**(r≤3/16):3B decode TPOT b256 18.1–19.1 ms 平坦,PPL 8.50→8.33;8B 24.5–25.5 ms,PPL 6.82→6.59。
+- **全曲线每点精度都压 NVFP4**(3B −0.13..−0.35,8B −0.05..−0.28,连 4.62-bit 的 r=1/32 都赢),吞吐代价 10–16%(qserve c256 0.85–0.90)。
+- **对 FP8 W8A8:同吞吐、少一半权重字节**(8B r=1/8 qserve 4922 vs 4743),但精度最好点(r=1/4)仍差 FP8 +0.40 PPL —— bracket 的诚实表述:"FP8 级吞吐 @ 4.6–5.4 bit + 连续可调精度旋钮",不是"FP8 精度更快"。
+- 每点 T2 gate 过(|ΔPPL| 0.003–0.010 vs 各自 exporter 参考);3B r=1/4 decode 异常(22.9ms,慢于 BF16)未定位,挂 open item。

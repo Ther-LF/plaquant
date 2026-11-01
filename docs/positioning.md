@@ -56,4 +56,4 @@
 
 ## money 图
 
-一条 ProMix 曲线(精度 × 性能,扫 B)+ ARCQuant/MicroMix/SharQ 作为点 → 曲线压点 / 支配。精度轴现在可画(统一 regime),性能轴已有同强栈 serving 终表(`docs/vllm_final_fiveway.md`,含 r-sweep 多点曲线 vs 各单点方法)。
+一条 ProMix 曲线(精度 × 性能,扫 B)+ ARCQuant/MicroMix/SharQ 作为点 → 曲线压点 / 支配。精度轴现在可画(统一 regime),性能轴已有同强栈 serving 终表 + **实测 r-sweep 曲线**(`docs/vllm_final_fiveway.md` §4:3B 6 点 / 8B 4 点,每点 PPL+吞吐+gate;全曲线精度压 NVFP4、吞吐 0.85-0.93,serving 代价对 r 近乎平坦 —— "曲线压点"现在两条轴都是实测)。
