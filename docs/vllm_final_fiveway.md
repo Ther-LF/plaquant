@@ -182,7 +182,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 <!-- END GENERATED 3B -->
 
 <!-- BEGIN GENERATED 8B -->
-## 8B — methods: BF16, FP8 W8A8, GPTQ-Marlin W4A16, NVFP4 W4A4, ProMix W4A4
+## 8B — methods: BF16, FP8 W8A8, GPTQ-Marlin W4A16, AWQ-Marlin W4A16, NVFP4 W4A4, ProMix W4A4
 
 ### prefill-heavy 1024/128 — TTFT ms
 | method | b1 | b16 | b32 | b64 | b128 | b256 | b512 |
@@ -190,6 +190,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 48.5 | 664.6 | 1334.5 | 2695.6 | 5452.6 | 12226.7 | 24473.0 |
 | FP8 W8A8 | 33.2 | 393.5 | 783.9 | 1575.5 | 3180.2 | 6754.8 | 14615.3 |
 | GPTQ-Marlin W4A16 | 52.0 | 757.0 | 1506.5 | 3016.7 | 6121.3 | 13130.7 | 26325.6 |
+| AWQ-Marlin W4A16 | 51.8 | 760.4 | 1520.8 | 3019.6 | 6305.1 | 13672.3 | 27211.0 |
 | NVFP4 W4A4 | 42.2 | 246.6 | 481.2 | 959.0 | 1920.9 | 3861.1 | 7987.3 |
 | ProMix W4A4 | 41.9 | 378.9 | 760.4 | 1525.1 | 3068.8 | 6191.1 | 13006.3 |
 
@@ -199,6 +200,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 11.54 | 12.94 | 15.24 | 18.48 | 26.87 | 42.98 | 101.97 |
 | FP8 W8A8 | 7.16 | 8.62 | 10.33 | 13.55 | 20.40 | 41.66 | 79.26 |
 | GPTQ-Marlin W4A16 | 4.69 | 6.57 | 8.05 | 12.19 | 23.55 | 41.58 | 87.06 |
+| AWQ-Marlin W4A16 | 4.92 | 6.41 | 8.25 | 12.46 | 24.70 | 41.90 | 85.70 |
 | NVFP4 W4A4 | 5.66 | 7.21 | 8.68 | 11.51 | 18.28 | 34.11 | 74.65 |
 | ProMix W4A4 | 7.16 | 8.84 | 10.46 | 14.45 | 21.58 | 38.39 | 83.16 |
 
@@ -208,6 +210,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 85 | 887 | 1252 | 1625 | 1848 | 1853 | 1751 |
 | FP8 W8A8 | 136 | 1376 | 1954 | 2485 | 2839 | 2720 | 2655 |
 | GPTQ-Marlin W4A16 | 197 | 1287 | 1619 | 1795 | 1798 | 1780 | 1753 |
+| AWQ-Marlin W4A16 | 189 | 1301 | 1595 | 1780 | 1735 | 1725 | 1720 |
 | NVFP4 W4A4 | 168 | 1761 | 2586 | 3385 | 3862 | 3999 | 3752 |
 | ProMix W4A4 | 135 | 1364 | 1960 | 2438 | 2820 | 2961 | 2781 |
 
@@ -217,6 +220,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 11.46 | 12.37 | 13.80 | 15.98 | 20.11 | 29.50 | 57.03 |
 | FP8 W8A8 | 6.91 | 7.89 | 8.82 | 10.78 | 14.67 | 25.64 | 44.78 |
 | GPTQ-Marlin W4A16 | 4.52 | 5.49 | 6.66 | 9.58 | 16.33 | 28.59 | 54.90 |
+| AWQ-Marlin W4A16 | 4.71 | 5.66 | 6.82 | 9.76 | 16.50 | 29.16 | 54.66 |
 | NVFP4 W4A4 | 5.43 | 6.45 | 7.04 | 8.76 | 12.87 | 21.24 | 38.37 |
 | ProMix W4A4 | 6.84 | 7.81 | 9.05 | 11.92 | 15.82 | 24.88 | 44.18 |
 
@@ -226,6 +230,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 87 | 1286 | 2293 | 3926 | 6166 | 8302 | 8560 |
 | FP8 W8A8 | 145 | 2016 | 3589 | 5836 | 8505 | 9691 | 11014 |
 | GPTQ-Marlin W4A16 | 221 | 2867 | 4675 | 6437 | 7500 | 8498 | 8808 |
+| AWQ-Marlin W4A16 | 212 | 2783 | 4571 | 6318 | 7414 | 8306 | 8840 |
 | NVFP4 W4A4 | 184 | 2467 | 4509 | 7209 | 9767 | 11794 | 13030 |
 | ProMix W4A4 | 146 | 2033 | 3499 | 5288 | 7909 | 9992 | 11209 |
 
@@ -235,6 +240,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 93.6 | 1624.0 | 3178.2 | 6220.3 | 12268.8 | 23710.4 | 47319.0 |
 | FP8 W8A8 | 60.8 | 927.8 | 1883.6 | 3713.7 | 7335.2 | 14624.4 | 29363.2 |
 | GPTQ-Marlin W4A16 | 101.4 | 1737.2 | 3427.8 | 6741.9 | 13444.8 | 27160.4 | 54760.7 |
+| AWQ-Marlin W4A16 | 105.4 | 1718.5 | 3415.2 | 6772.7 | 13570.2 | 27225.7 | 53393.7 |
 | NVFP4 W4A4 | 39.1 | 519.2 | 1035.6 | 2068.4 | 4262.7 | 8655.9 | 17396.7 |
 | ProMix W4A4 | 61.8 | 891.2 | 1800.7 | 3582.7 | 7136.6 | 14270.6 | 28283.6 |
 
@@ -244,6 +250,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 2596 (19.41) | 3375 (27.31) | 3864 (43.38) |
 | FP8 W8A8 | 3687 (14.27) | 4565 (21.79) | 4743 (40.36) |
 | GPTQ-Marlin W4A16 | 3340 (13.29) | 3552 (24.04) | 3680 (43.59) |
+| AWQ-Marlin W4A16 | 3353 (13.22) | 3522 (23.94) | 3675 (43.32) |
 | NVFP4 W4A4 | 4446 (12.54) | 5283 (20.51) | 5845 (36.30) |
 | ProMix W4A4 | 3465 (15.54) | 4380 (23.28) | 4922 (39.94) |
 
@@ -251,8 +258,9 @@ large-batch primary (the serving regime; GEMMs saturated).
 | method | isl2048 b16 | isl2048 b64 | isl4096 b16 | isl4096 b64 |
 |---|---|---|---|---|
 | BF16 | 12.70 | 18.67 | 14.15 | 26.31 |
-| FP8 W8A8 | — | — | — | — |
+| FP8 W8A8 | 8.38 | 13.59 | 9.84 | 22.41 |
 | GPTQ-Marlin W4A16 | 6.04 | 13.25 | 7.32 | 18.12 |
+| AWQ-Marlin W4A16 | 6.03 | 12.65 | 7.74 | 18.42 |
 | NVFP4 W4A4 | 6.40 | 11.74 | 7.86 | 18.25 |
 | ProMix W4A4 | 8.66 | 14.73 | 10.06 | 22.14 |
 
@@ -262,6 +270,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 67.89 | 85.7 |
 | FP8 W8A8 | 73.81 | 84.7 |
 | GPTQ-Marlin W4A16 | 77.52 | 85.8 |
+| AWQ-Marlin W4A16 | — | 85.8 |
 | NVFP4 W4A4 | 77.48 | 89.9 |
 | ProMix W4A4 | 70.77 | 86.1 |
 
@@ -272,6 +281,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 1.61 | 1.46 | 1.46 | 1.28 | 1.25 | 1.12 | 1.23 |
 | FP8 W8A8 | 1.00 | 0.97 | 0.99 | 0.94 | 0.95 | 1.09 | 0.95 |
 | GPTQ-Marlin W4A16 | 0.66 | 0.74 | 0.77 | 0.84 | 1.09 | 1.08 | 1.05 |
+| AWQ-Marlin W4A16 | 0.69 | 0.72 | 0.79 | 0.86 | 1.14 | 1.09 | 1.03 |
 | NVFP4 W4A4 | 0.79 | 0.82 | 0.83 | 0.80 | 0.85 | 0.89 | 0.90 |
 
 **case 128/1024 TPOT ratio (x/pm):**
@@ -280,6 +290,7 @@ large-batch primary (the serving regime; GEMMs saturated).
 | BF16 | 1.68 | 1.58 | 1.53 | 1.34 | 1.27 | 1.19 | 1.29 |
 | FP8 W8A8 | 1.01 | 1.01 | 0.98 | 0.90 | 0.93 | 1.03 | 1.01 |
 | GPTQ-Marlin W4A16 | 0.66 | 0.70 | 0.74 | 0.80 | 1.03 | 1.15 | 1.24 |
+| AWQ-Marlin W4A16 | 0.69 | 0.72 | 0.75 | 0.82 | 1.04 | 1.17 | 1.24 |
 | NVFP4 W4A4 | 0.79 | 0.82 | 0.78 | 0.74 | 0.81 | 0.85 | 0.87 |
 
 <!-- END GENERATED 8B -->
@@ -413,8 +424,8 @@ Cross-point deltas below ~4% should not be over-read.
 | method | status | evidence |
 |---|---|---|
 | BF16 / FP8 W8A8 / GPTQ-Marlin / AWQ-Marlin / NVFP4 / ProMix | **run** | full tables above / below |
-| **INT8 W8A8** (SmoothQuant+GPTQ `W8A8` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | engine init: `RuntimeError: dispatch_scaled_mm ... Int8 not supported on SM120. Use FP8 quantization` (vllm csrc `w8a8/cutlass/c3x/scaled_mm_helper.hpp:34`) — vLLM's cutlass INT8 scaled-mm has no SM120 dispatch in this build |
-| **ct-MXFP4 W4A4** (llm-compressor `MXFP4` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | `FlashInferMxFp4LinearKernel` selected, then `flashinfer.utils.BackendSupportedError: mm_fp4 does not support backend 'cute-dsl' with capability 120` |
+| **INT8 W8A8** (SmoothQuant+GPTQ `W8A8` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | engine init: `RuntimeError: dispatch_scaled_mm ... Int8 not supported on SM120. Use FP8 quantization` (vllm csrc `w8a8/cutlass/c3x/scaled_mm_helper.hpp:34`) — vLLM's cutlass INT8 scaled-mm has no SM120 dispatch in this build (same error at 3B and 8B) |
+| **ct-MXFP4 W4A4** (llm-compressor `MXFP4` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | `FlashInferMxFp4LinearKernel` selected, then `flashinfer.utils.BackendSupportedError: mm_fp4 does not support backend 'cute-dsl' with capability 120` (same at 3B and 8B) |
 | fp_quant / QuTLASS (Quartet, rotation W4A4) | see §6 peer attempts | requires `qutlass` source build |
 | bitsandbytes etc. | skipped | not serving-grade paths |
 
@@ -425,7 +436,7 @@ the table above + AWQ — i.e. the five-way IS the census, plus AWQ-Marlin:
 20.00 ms / b512 37.04 vs ProMix 18.14 / 32.80 (ProMix 1.10x / 1.13x); prefill
 TTFT L2048 b16 734 ms vs ProMix 390.7 (ProMix 1.88x) — same verdict as GPTQ:
 ProMix wins the batched regime, loses b1-64 decode. Full AWQ rows are in the
-generated tables above (8B AWQ in flight at commit time).
+generated tables above (8B AWQ rows included).
 <!-- END EXT -->
 
 ## 6. Published W4A4 peer methods, end-to-end on this GPU
