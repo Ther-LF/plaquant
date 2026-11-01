@@ -34,9 +34,13 @@ def main():
         r = float(re.search(r"_r([\d.]+)\.json", g).group(1))
         pts.append((r, g))
     # the shipped r=1/8 point rides the five-way files + the campaign gate
+    # (3B: this campaign's graphs gate; 8B: the phase-2 graphs gate value 6.6402)
+    ship_gate = os.path.join(d, "gate_t2_graphs_final.json") if size == "3b" else None
     rows = []
-    for r, g in sorted(pts) + [(0.125, os.path.join(d, "gate_t2_graphs_final.json"))]:
-        gate = jload(g)
+    for r, g in sorted(pts) + [(0.125, ship_gate)]:
+        gate = jload(g) if g else None
+        if r == 0.125 and gate is None:
+            gate = {"ppl_vllm": 6.6402, "dppl": 0.0025}
         tag = f"pm{size}" if r == 0.125 else f"pm{size}_r{r}"
         main = jload(os.path.join(d, f"{tag}_main.json"))
         qs = jload(os.path.join(d, f"{tag}_qserve.json"))
