@@ -50,9 +50,9 @@ reproduce (PASS, see below).
 
 | point | 1B wiki | 3B wiki |
 |---|---|---|
-| var_uniform (per-Linear top-var rings, dense R) | 14.4285 | TBD |
-| dd_uniform (per-Linear top-ΔD rings, dense R) | 14.5145 | TBD |
-| ring512 + var_uniform | 15.5846 | — |
+| var_uniform (per-Linear top-var rings, dense R) | 14.4285 | 8.2736 |
+| dd_uniform (per-Linear top-ΔD rings, dense R) | 14.5145 | 8.2756 |
+| ring512 + var_uniform | 15.5846 | 8.2486 |
 
 - var_uniform reproduces the rd_whydecay footnote (14.4285) and beats the
   dense measured allocation on 1B by 0.043 — BUT it is beaten by
