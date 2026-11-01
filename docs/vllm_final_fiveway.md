@@ -313,7 +313,8 @@ L2048: ProMix 1.51-1.82x over BF16, **1.64-1.95x over GPTQ-Marlin**, 0.58-0.63x 
 ### The W4A16 verdict (the question this campaign had to answer)
 
 **At the serving operating region, yes — ProMix W4A4 beats the weight-only
-W4A16 Marlin reference**: every prefill point at every batch (1.3-2.0x), every
+W4A16 Marlin reference**: every prefill point from b16 up (1.3-2.0x; single
+exception: 3B b1 short-prompt TTFT 24.4 vs 27.7 ms), every
 decode point from b128 up (1.03-1.24x), and high-concurrency continuous
 batching (1.17x 3B / 1.34x 8B at c256) — while also being a 4-bit-activation
 method (W4A16 pays zero activation-quant cost and serves bf16 activations).
