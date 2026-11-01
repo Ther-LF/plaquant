@@ -34,17 +34,18 @@ def load(dirname, tag, kind):
 
 
 def kv_capacity(dirname, tag):
-    """Parse 'GPU KV cache size: N tokens' from the engine log."""
+    """Parse 'Available KV cache memory: X GiB' from the engine log."""
     p = os.path.join(dirname, f"{tag}_main.log")
     if not os.path.exists(p):
         return None
-    toks = None
+    gib = None
     with open(p, errors="replace") as f:
         for line in f:
-            m = re.search(r"GPU KV cache size: ([\d,]+) tokens", line)
+            m = re.search(r"Available KV cache memory: ([\d.]+) GiB", line)
             if m:
-                toks = int(m.group(1).replace(",", ""))
-    return toks
+                gib = float(m.group(1))
+                break  # first engine (main sweep)
+    return gib
 
 
 def fmt(v, nd=1):
@@ -172,7 +173,7 @@ def main():
 
     print("### capacity (GPU KV cache tokens @ gmu 0.90, mml 4096) "
           "+ peak reserved GiB")
-    print("| method | KV tokens | max reserved GiB |")
+    print("| method | KV cache GiB | max reserved GiB |")
     print("|---|---|---|")
     for m, t in tags:
         kv = kv_capacity(args.dir, t)
