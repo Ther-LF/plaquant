@@ -39,12 +39,18 @@ reproduce (PASS, see below).
 | **ring512 + measured** | **14.2392 (−0.233)** | **8.2328 (−0.035)** |
 
 - 1B (never ring-tested before): ring512+measured −0.233 vs the shipped
-  anchor — the largest single accuracy lever found in the campaign so far.
+  anchor — the largest single accuracy lever found in the campaign.
   Same mechanism as 3B: huge uniform rotation cost (ε = +0.31) but the
   measured allocation gain (−0.62 from ring-uniform) dominates.
 - 3B: digit-exact repro of the rd_ron ablation (−0.035 vs shipped measured,
   −0.065 vs dense uniform).
-- 8B (rd_ron): 6.5890 vs 6.5882 — tie; C4 at stack validation.
+- C4 fully corroborates (isolated lever-1 runs): 1B 19.8676 (shipped 20.1864,
+  **−0.319**); 3B 11.2968 (shipped 11.3194, −0.023); 8B 9.6076 (shipped
+  uniform 9.6355, −0.028). 8B wiki 6.5890 ties uniform 6.5882 (+0.0008),
+  bridge 6.1368 reproduced.
+- **VERDICT: PROMOTE ring512+measured as the universal shipping substrate**
+  (wins 1B/3B on both datasets, ties-or-wins 8B; K_high alignment holds,
+  512 % 32 = 0).
 
 ### Lever 2 — ring-variance ring selection (per-Linear uniform count)
 
