@@ -121,3 +121,43 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 - A4:r 不是最优点(扫 r=0/1/16/1/8/1/4/1/2,画 bit-vs-PPL 曲线);
 - P1:decode 落后 = 无 KV4 + attention 未量化 + GEMV 未到 HBM roof;
 - P2:prefill 落后 NVFP4 = 未开 8B 的 Hadamard 融合 + epilogue/生产端融合还未全覆盖。
+
+---
+
+## FINAL(post R1-R5 vLLM perf loop,2026-11-01)—— 五方同栈 serving 终表(取代上面 Phase-3/轴2 的旧 serving 数;历史保留)
+
+> 完整表:`docs/vllm_final_fiveway.md`(原始 JSON `docs/vllm_final_data/`)。同一 vLLM 0.32/SM120,一卡一引擎,graphs ON,batch 扩到 512。
+> Gate:T2 prefill 与 r5 逐位相同(8.37029131329681),m16 ΔPPL=−0.3200(逐字)。零漂移。
+
+### 精度 × serving 五方(decode-heavy 128/1024 TPOT ms @大 batch;PPL=绝对协议)
+
+| 方法 | 3B PPL | 8B PPL | 3B b128/b256/b512 | 8B b128/b256/b512 |
+|---|---|---|---|---|
+| BF16 | 7.82 | 6.14 | 12.74/19.70/37.27 | 20.11/29.50/57.03 |
+| FP8 W8A8 | 7.88 | — | 10.07/18.23/32.63 | 14.67/25.64/44.78 |
+| GPTQ-Marlin W4A16 | 8.20 | 6.52 | 11.21/19.86/36.82 | 16.33/28.59/54.90 |
+| NVFP4 W4A4 | 8.63 | 6.87 | 9.69/16.51/30.35 | 12.87/21.24/38.37 |
+| **ProMix W4A4** | **8.370** | **6.640** | 11.29/18.14/32.80 | 15.82/24.88/44.18 |
+
+### 判定(loop 收官)
+
+1. **赢 BF16**:decode 全 batch 1.09–1.68×,prefill 1.26–1.82×(两模型全点)。
+2. **赢 weight-only W4A16(用户点名要打的)**:prefill 全点 1.3–2.0×;decode b≥128 1.03–1.24×;QServe 协议 c256 吞吐 1.17×(3B)/1.34×(8B)。唯一让分:b1–64 小 batch decode(Marlin weight-streaming 的教科书区间,0.66–0.85×)。
+3. **vs FP8 W8A8:大 batch 持平**(0.90–1.09),而我们 4.97 bit 权重、W4A4。
+4. **vs NVFP4:0.72(b16)→0.93(3B b512)/0.87(8B b512)**,随 batch 单调收敛;prefill 0.58–0.68。差距=结构项(r5 §3c:双段 GEMM 1.33×、act-MSE pack、down-Hadamard)。
+5. **精度列:ProMix 是最准的 W4A4**(8.370/6.640 vs NVFP4 8.63/6.87),loop 期间精度净改善(m16 route −0.32 PPL)。
+
+### r-sweep(serving 实测曲线,2026-11-01;完整表+verdict 见 vllm_final_fiveway.md §4)
+
+- **精度旋钮在 serving 端近乎免费**(r≤3/16):3B decode TPOT b256 18.1–19.1 ms 平坦,PPL 8.50→8.33;8B 24.5–25.5 ms,PPL 6.82→6.59。
+- **全曲线每点精度都压 NVFP4**(3B −0.13..−0.35,8B −0.05..−0.28,连 4.62-bit 的 r=1/32 都赢),吞吐代价 10–16%(qserve c256 0.85–0.90)。
+- **对 FP8 W8A8:同吞吐、少一半权重字节**(8B r=1/8 qserve 4922 vs 4743),但精度最好点(r=1/4)仍差 FP8 +0.40 PPL —— bracket 的诚实表述:"FP8 级吞吐 @ 4.6–5.4 bit + 连续可调精度旋钮",不是"FP8 精度更快"。
+- 每点 T2 gate 过(|ΔPPL| 0.003–0.010 vs 各自 exporter 参考);3B r=1/4 decode 异常(22.9ms,慢于 BF16)未定位,挂 open item。
+
+### 已发表 W4A4 方法同卡 e2e(2026-11-01,详见 vllm_final_fiveway.md §6)
+
+| peer | 跑通状态 | 精度(3B wiki2) | serving vs ProMix |
+|---|---|---|---|
+| SharQ(自带 vLLM 集成) | RAN(同栈 vLLM 0.32) | 8.385(≈我们 8.370) | 我们 decode b128 1.14×、qserve c256 1.40×、prefill b128 2.41×;它赢 b1 |
+| fp_quant/Quartet(vLLM 原生) | as-shipped BLOCKED(wheel 仅 sm_100 cubin);源码编 qutlass 后 RAN | 9.62(NVFP4-RTN)/10.25(MXFP4) | 速度点:prefill 比我们快,精度差 1.3-1.9 PPL |
+| MicroMix(自带 e2e bench) | RAN-with-caveat(CUDA13 编译) | 9.045(其管线) | 同卡复现其论文 prefill 2.00×;decode as-shipped 慢 FP16 4.4× |

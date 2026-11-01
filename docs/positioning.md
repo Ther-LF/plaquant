@@ -24,7 +24,7 @@
 
 **曲线数据**:12 预算 × {1B/3B/8B/13B} × {PPL + C4 + 真实 prefill/decode 延迟}(42+ 点);悬崖 = outlier 集中(top-1/32 环 = 42% ΔD),平滑 S 坡,膝盖 ~1/96(实测细采样)。
 
-**性能(诚实)**:同弱栈 e2e W4A4/BF16 = 1.29×(8B b16);**格式全摆幅 GEMM-级 ~1.3×(我们形状,TC 没喂饱)/ 2.05×(16384³ 喂满)**;隔离对比我们融合 GEMM vs bf16 = **2.35–2.6× geomean(随 M→3.1×)**、vs 朴素 2-launch 同算法 = **1.3–1.7×**(融合的独立价值)。**上限 2–2.87×(vLLM 整栈证)——我们 1.29× 的差距是研究 harness 工程,不是格式/算法**;要在同强栈拿公平数 → vLLM 集成(进行中)。
+**性能(FINAL,2026-11-01,vLLM 0.32 同强栈实测;完整表 `docs/vllm_final_fiveway.md`)**:R1-R5 性能 loop 把 8B decode pm/nv 从 0.52 → **0.79-0.82**(b8/b16),大 batch 终表进一步到 **0.85-0.93**(b128-512,两模型);prefill pm/nv 0.54-0.57 → **0.58-0.68**。对 BF16:decode **1.09-1.68×**、prefill **1.26-1.82×** 全点赢;对 weight-only W4A16-Marlin:prefill 全点 1.3-2.0×、decode b≥128 1.03-1.24×、QServe 协议 c256 吞吐 1.17×(3B)/1.34×(8B) 赢(只让 b1-64 小 batch decode);对 FP8 W8A8:大 batch 持平(0.90-1.09)。**精度在 loop 期间净改善**(decode m16 marlin 路由 −0.32 PPL,3B 8.047;served 口径 8.370/6.640 仍是最准 W4A4)。**结构地板已分解**(r5 §3c):剩余 vs NVFP4 的差距 = 双段 mixed GEMM(1.33× vs 单段 fp4)+ act-MSE 量化(精度换的)+ down-proj 在线 Hadamard(ResQ 旋转的固有税)+ 插件 host 间隙;shipped 配置离分解地板 ~4%,无 ≥2% 的未试杠杆。旧"工程稀释 1.29×"叙事作废——现在是同强栈、同协议、可复现的 serving 数。
 
 ## 能 claim / 不能 claim(scope 到组合)
 
@@ -35,6 +35,7 @@
 ## 竞品(全文读过)
 
 - **必比 head-to-head(可在 Blackwell 跑)**:ARCQuant(纯NVFP4+残差,反 mixed-precision/反 rotation)、MicroMix(MXFP4/6/8 分段)、SharQ(全NVFP4 稀疏+残差)—— 全是同一实验室。
+  **已实测(2026-11-01,`docs/vllm_final_fiveway.md` §6)**:SharQ 用它自己的 vLLM 集成在同栈/同卡/同协议跑通 —— 精度打平(8.385 vs 我们 8.370),serving 我们在工作区间全面赢(decode b128 1.14×、qserve c256 1.40×、prefill b128 2.41×;它只赢 b1 小 batch)。MicroMix 用它自己的 e2e bench 在同卡复现其论文 prefill 2.00×,但 decode as-shipped 慢 FP16 4.4×,其管线 3B PPL 9.045 明显逊于我们;fp_quant/Quartet(vLLM 原生)RTN 精度 9.62-10.25,是速度点不是精度对手,且 as-shipped 在 SM120 上根本跑不了(wheel 只带 sm_100 cubin)。
 - **消融对象**:CoQuant(加权-PCA 子空间,证我们"比方差好"要小心)。
 - **仅引用**:FGMP(ASIC)、Oltron(ASIC INT4+fp8/12)、SHMQ(INT W4A8,激活 8-bit)、DualQuant/dMX/MosaicQuant(INT 或 Ada)。
 
@@ -50,9 +51,10 @@
 ## 已知 limitation(诚实列出)
 
 1. per-layer 误差分配增益小、≤3B 有感、随规模→0(8B/13B 持平)、下游看不出 —— 它是"安全精化 + 让曲线每点最优",不是精度 headline。
-2. 同弱栈性能只 1.29×(工程稀释);真实竞争力待 vLLM 集成坐实。
-3. decode:纯 NVFP4 path 走 prefill GEMM,无 decode-GEMV 变体(待补)。
+2. ~~同弱栈性能只 1.29×~~ 已被 vLLM 集成 + R1-R5 loop 取代(FINAL 表);真实剩余 limitation:vs 纯 NVFP4 仍 0.85-0.93(大 batch decode)/0.58-0.68(prefill),为双段结构+act-MSE+Hadamard 的结构税(r5 §3c 已分解到地板)。
+3. ~~无 decode-GEMV 变体~~ 已补齐:M=1 GEMV(字节级门控)+ M=2..48 marlin W4A16 低-M 路由 + MXFP8-marlin 高段伴侣(R4/R5),decode 精度还顺手 −0.32 PPL。
+4. 小 batch decode(b1-64)输 weight-only Marlin 0.66-0.85×——latency-bound 单用户区间,诚实列出。
 
 ## money 图
 
-一条 ProMix 曲线(精度 × 性能,扫 B)+ ARCQuant/MicroMix/SharQ 作为点 → 曲线压点 / 支配。精度轴现在可画(统一 regime),性能轴等 vLLM 集成(同强栈)。
+一条 ProMix 曲线(精度 × 性能,扫 B)+ ARCQuant/MicroMix/SharQ 作为点 → 曲线压点 / 支配。精度轴现在可画(统一 regime),性能轴已有同强栈 serving 终表 + **实测 r-sweep 曲线**(`docs/vllm_final_fiveway.md` §4:3B 6 点 / 8B 4 点,每点 PPL+吞吐+gate;全曲线精度压 NVFP4、吞吐 0.85-0.93,serving 代价对 r 近乎平坦 —— "曲线压点"现在两条轴都是实测)。
