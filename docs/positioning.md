@@ -35,6 +35,7 @@
 ## 竞品(全文读过)
 
 - **必比 head-to-head(可在 Blackwell 跑)**:ARCQuant(纯NVFP4+残差,反 mixed-precision/反 rotation)、MicroMix(MXFP4/6/8 分段)、SharQ(全NVFP4 稀疏+残差)—— 全是同一实验室。
+  **已实测(2026-11-01,`docs/vllm_final_fiveway.md` §6)**:SharQ 用它自己的 vLLM 集成在同栈/同卡/同协议跑通 —— 精度打平(8.385 vs 我们 8.370),serving 我们在工作区间全面赢(decode b128 1.14×、qserve c256 1.40×、prefill b128 2.41×;它只赢 b1 小 batch)。MicroMix 用它自己的 e2e bench 在同卡复现其论文 prefill 2.00×,但 decode as-shipped 慢 FP16 4.4×,其管线 3B PPL 9.045 明显逊于我们;fp_quant/Quartet(vLLM 原生)RTN 精度 9.62-10.25,是速度点不是精度对手,且 as-shipped 在 SM120 上根本跑不了(wheel 只带 sm_100 cubin)。
 - **消融对象**:CoQuant(加权-PCA 子空间,证我们"比方差好"要小心)。
 - **仅引用**:FGMP(ASIC)、Oltron(ASIC INT4+fp8/12)、SHMQ(INT W4A8,激活 8-bit)、DualQuant/dMX/MosaicQuant(INT 或 Ada)。
 

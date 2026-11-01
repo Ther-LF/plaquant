@@ -153,3 +153,11 @@ SHIPPED = round-6 真·kernel:act-MSE(默认开)+ **weight 两级 scale(per-tens
 - **全曲线每点精度都压 NVFP4**(3B −0.13..−0.35,8B −0.05..−0.28,连 4.62-bit 的 r=1/32 都赢),吞吐代价 10–16%(qserve c256 0.85–0.90)。
 - **对 FP8 W8A8:同吞吐、少一半权重字节**(8B r=1/8 qserve 4922 vs 4743),但精度最好点(r=1/4)仍差 FP8 +0.40 PPL —— bracket 的诚实表述:"FP8 级吞吐 @ 4.6–5.4 bit + 连续可调精度旋钮",不是"FP8 精度更快"。
 - 每点 T2 gate 过(|ΔPPL| 0.003–0.010 vs 各自 exporter 参考);3B r=1/4 decode 异常(22.9ms,慢于 BF16)未定位,挂 open item。
+
+### 已发表 W4A4 方法同卡 e2e(2026-11-01,详见 vllm_final_fiveway.md §6)
+
+| peer | 跑通状态 | 精度(3B wiki2) | serving vs ProMix |
+|---|---|---|---|
+| SharQ(自带 vLLM 集成) | RAN(同栈 vLLM 0.32) | 8.385(≈我们 8.370) | 我们 decode b128 1.14×、qserve c256 1.40×、prefill b128 2.41×;它赢 b1 |
+| fp_quant/Quartet(vLLM 原生) | as-shipped BLOCKED(wheel 仅 sm_100 cubin);源码编 qutlass 后 RAN | 9.62(NVFP4-RTN)/10.25(MXFP4) | 速度点:prefill 比我们快,精度差 1.3-1.9 PPL |
+| MicroMix(自带 e2e bench) | RAN-with-caveat(CUDA13 编译) | 9.045(其管线) | 同卡复现其论文 prefill 2.00×;decode as-shipped 慢 FP16 4.4× |

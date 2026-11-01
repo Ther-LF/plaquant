@@ -498,7 +498,7 @@ these are NOT directly comparable absolute numbers; anchor strength matters
 | AWQ / TinyChat W4A16 | 4/16 | 4090 / Orin | HF eager FP16 (**weak anchor**) | decode latency | 2.7-3.9x (as published) |
 | vLLM NVFP4 W4A4 | 4.5/4 | **RTX Pro 6000 (this work's GPU)** | vLLM 0.32 BF16 (strong) | ISL/OSL 1024/512, c256 (measured here) | **1.27x (3B) / 1.51x (8B)**; decode-heavy b256 1.19/1.39x; prefill L2048 b16 2.56/3.13x |
 | MicroMix MXFP4/6/8 | ~5.35/mixed | **RTX Pro 6000 (same GPU, measured here via their shipped bench)** | HF FP16 (weak-medium) | prefill 2048 bs32 / decode 128-step | **2.00x prefill (reproduces their paper's 1.98-2.02x)**; decode 0.23x bs1 / 1.03x bs32 as shipped (eager decode path) |
-| SharQ W4A4 (their vLLM integ) | 4.5+sparse/4 | **RTX Pro 6000 (measured here)** | vLLM 0.32 BF16 (strong) | same protocol as ours | decode-heavy b256 TPOT 0.92x vs BF16 (21.40 vs 19.70 — slower); qserve c256 0.81x (4946 vs 6119); small-batch decode 1.56x (b1) |
+| SharQ W4A4 (their vLLM integ) | 4.5+sparse/4 | **RTX Pro 6000 (measured here)** | vLLM 0.32 BF16 (strong) | same protocol as ours | decode-heavy b256 TPOT 0.92x vs BF16 (21.40 vs 19.70 — slower); qserve c256 0.81x (4946 vs 6119); small-batch decode ~1.5x (b1) |
 | **ProMix W4A4 (ours)** | 4.97/4 | **RTX Pro 6000** | vLLM 0.32 BF16 (strong) | ISL/OSL 1024/512, c256 (measured here) | **1.13x (3B) / 1.27x (8B)**; decode-heavy b256 TPOT 1.09/1.19x (b512 1.14/1.29x); prefill L2048 1.26-1.82x |
 
 Honesty footnotes: (1) different GPUs/generations — on Blackwell the BF16
