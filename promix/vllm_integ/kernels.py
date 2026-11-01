@@ -127,6 +127,22 @@ def load_norm_pack():
     return _load_ext("vrq", "vllm_rms_quant_pack_ext.cu", extra_flags=act_mse_cflags())
 
 
+def load_cd_bias():
+    """vllm-perf r5 lever 2: GEMM epilogue output-cast (+bias) fold
+    (codesign_fused_bias_ext, the round-26 lever-A ext). The r5 prefill
+    decomposition profile measured the per-Linear `D.to(fp16)` cast at 3.3 ms
+    (3B) / 6.8 ms (8B) per L2048 prefill step (112/128 direct_copy launches —
+    12% of kernel time); the ext folds it into the GEMM epilogue as
+    half(float(bf16(acc)) + float(bias)), BIT-IDENTICAL to the two-step
+    bf16-store + .to(fp16) (+ bias) path (bias-less layers use an internal
+    zero buffer; r26 probe bit-gated). Disabled via PROMIX_CAST_FOLD=0.
+    Routing: only outside the r2/r3 small-M/split-K windows (those exts keep
+    their measured wins + the small cast)."""
+    if os.environ.get("PROMIX_CAST_FOLD", "1") == "0":
+        return None
+    return _load_ext("cdb", "codesign_fused_bias_ext.cu")
+
+
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
     the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).

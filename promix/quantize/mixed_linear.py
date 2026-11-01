@@ -135,15 +135,49 @@ _SPLITK_TABLE = {
 # windows are capped at the SERVE-measured m_hi=8. 3B keeps m_hi=16 (serve
 # b16 -2%). Root cause not isolated (probe = idle-GPU back-to-back replay;
 # engine = full-graph with interleaved attention/norm kernels).
+# SERVE-LEVEL CORRECTION (honest probe/serve discrepancy): the kernel-level
+# probe showed 8B M=16 wins (qkv 1.07x / o-chain 1.12x / gate_up 1.19x) but
+# the same-session serve A/B measured 8B decode-b16 TPOT +3..+4% with M=16
+# routing ON, reproduced across two sessions, and PROMIX_MARLIN_MMAX=8
+# restores the control digits exactly (pm8b_mmax8 vs pm8b_r4ctl) — so the 8B
+# windows were capped at the SERVE-measured m_hi=8 in r4.
+# r5 UPDATE (r5_marlin_hi_probe2.json, graph-replay, >=5% rule): with the
+# MXFP8-marlin high companion (which is near-flat in M like the low GEMM,
+# replacing the linearly-scaling hi_add inside _MARLIN_HI_TABLE windows) the
+# route beats the W4A4 GEMM out to M=32-48 on most shapes (e.g. 8B qkv M16
+# 1.50x, M32 1.30x; 8B gate_up M32 1.73x, M48 1.35x). The windows ship at the
+# probe values; the r4 8B serve cap is re-checked by the r5 serve A/B
+# (PROMIX_MARLIN_MMAX remains the kill switch if the discrepancy persists).
+# 3B o keeps (2,8): the r5 gather chain reads 1.00x at M16 (no win).
 _MARLIN_TABLE = {
-    (5120, 3072): (2, 16),      # 3B qkv   (1.56-1.84x, M16 1.36x)
-    (3072, 3072): (2, 8),       # 3B o     (chain 1.23-1.47x; M16 0.96 stop)
-    (16384, 3072): (2, 16),     # 3B gate_up (1.71-2.33x, M16 1.11x)
-    (3072, 8192): (2, 16),      # 3B down  (1.77-2.56x, M16 1.22x)
-    (6144, 4096): (2, 8),       # 8B qkv   (1.49-2.08x at M<=8)
-    (4096, 4096): (2, 8),       # 8B o     (chain 1.45-1.64x at M<=8)
-    (28672, 4096): (2, 8),      # 8B gate_up (1.85-2.83x at M<=8)
-    (4096, 14336): (2, 8),      # 8B down  (1.71-3.05x; M16 1.02 stop)
+    (5120, 3072): (2, 48),      # 3B qkv   (M8 1.64x, M16 1.43x, M48 1.09x)
+    (3072, 3072): (2, 8),       # 3B o     (chain 1.11-1.21x; M16 1.00 stop)
+    (16384, 3072): (2, 32),     # 3B gate_up (M8 2.28x, M32 1.35x; M48 1.02 stop)
+    (3072, 8192): (2, 48),      # 3B down  (M8 1.92x, M32 1.49x, M48 1.09x)
+    (6144, 4096): (2, 48),      # 8B qkv   (M8 1.63x, M16 1.50x, M48 1.08x)
+    (4096, 4096): (2, 32),      # 8B o     (chain 1.14-1.40x; M48 0.95 stop)
+    (28672, 4096): (2, 48),     # 8B gate_up (M8 2.84x, M32 1.73x, M48 1.35x)
+    (4096, 14336): (2, 32),     # 8B down  (M8 2.18x, M32 1.23x; M48 0.99 stop)
+}
+
+# vllm-perf r5 lever 1: per-shape smallest M where the MXFP8-marlin high
+# companion (MarlinHigh.gemm + fused axpy) beats the hi_add GEMV at the ROUTE
+# level (slice-cast included; the GEMV scales ~linearly in M — the r4
+# bottleneck — while the companion is near-flat). Measured by
+# promix/vllm_integ/marlin_hi_probe.py under CUDA-graph replay
+# (r5_marlin_hi_probe2.json route_speedup_vs_r4). Below the crossover (and
+# when PROMIX_MARLIN_HI=0 / prepack unavailable) the route keeps the hi_add
+# GEMV; above M=32 (the hi_add kernel bound) the route REQUIRES the companion
+# (marlin_route refuses otherwise).
+_MARLIN_HI_TABLE = {
+    (5120, 3072): 16,     # 3B qkv   (M16 1.01x tie, M24 1.30x)
+    (3072, 3072): 16,     # 3B o     (M16 1.06x)
+    (16384, 3072): 4,     # 3B gate_up (M4 1.08x, M8 1.37x)
+    (3072, 8192): 8,      # 3B down  (M8 1.07x, M16 1.34x)
+    (6144, 4096): 8,      # 8B qkv   (M8 1.14x, M16 1.43x)
+    (4096, 4096): 16,     # 8B o     (M8 0.95, M16 1.10x)
+    (28672, 4096): 2,     # 8B gate_up (M2 1.11x, M8 1.60x)
+    (4096, 14336): 8,     # 8B down  (M8 1.23x, M16 1.48x)
 }
 
 
@@ -265,6 +299,10 @@ class MixedQuantLinear(nn.Module):
         # priority over the W4A4 GEMM tables inside its window.
         self._marlin = None
         self._marlin_win = None
+        # vllm-perf r5 lever 1: MXFP8-marlin high companion (MarlinHigh) + its
+        # measured per-shape crossover vs the hi_add GEMV.
+        self._marlin_hi = None
+        self._marlin_hi_mlo = 8
         # decode-GEMV weight-stream warp count per shape (round-3 Win 4): large N
         # saturates HBM with more warps/block; small N stays launch-bound at 8.
         self._dec_warps = 24 if self.N >= 4096 else 8
@@ -293,6 +331,16 @@ class MixedQuantLinear(nn.Module):
         # A bias-less Linear never needed the extra pass anyway.
         if self.bias is None:
             self.bias_in_epilogue = True
+        # vllm-perf r5: cached zero bias for the cast-fold epilogue (the ext
+        # would otherwise torch.zeros per call for bias-less layers).
+        self._zb = None
+
+    def _bias_or_zero(self, dev):
+        if self.bias is not None:
+            return self.bias
+        if self._zb is None or self._zb.device != dev:
+            self._zb = torch.zeros(self.N, dtype=torch.float16, device=dev)
+        return self._zb
 
     @classmethod
     def from_linear(cls, linear, nv, mx, cd, high_fraction=0.125, out_dtype=torch.float16, qpf=None, dg=None, qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None):
@@ -426,7 +474,9 @@ class MixedQuantLinear(nn.Module):
             if self.bias is not None:
                 D = D + self.bias.to(D.dtype)
             return D
-        if self.bias_in_epilogue and self._cd_bias is not None:
+        if self.bias_in_epilogue and self._cd_bias is not None and self.bias is not None:
+            # A REAL bias: the epilogue fold wins everywhere (removes the cast
+            # AND the bias add; r26 lever A, bit-identical by construction).
             return self._cd_bias.fused_gemm_prepacked_bias(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
@@ -452,6 +502,19 @@ class MixedQuantLinear(nn.Module):
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                 M, self.N, self.K_low, self.K_high, self.g_w, cfg)
         else:
+            if self._cd_bias is not None:
+                # vllm-perf r5 lever 2 (cast fold): outside the r2/r3 windows
+                # (= every prefill chunk M>=1024 and the no-window mid-M
+                # points) the bias ext's half(float(bf16(acc))+0.0) epilogue
+                # stores fp16 directly — BIT-IDENTICAL to the bf16 store +
+                # .to(fp16) cast it replaces (r26 lever-A gate), one fewer
+                # [M,N] round-trip per Linear (the r5 prefill profile's #1
+                # actionable item: 3.3/6.8 ms per 3B/8B L2048 step).
+                return self._cd_bias.fused_gemm_prepacked_bias(
+                    A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                    A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                    self._bias_or_zero(A_lo.device),
+                    M, self.N, self.K_low, self.K_high, self.g_w)
             D = self._cd.fused_gemm_prepacked(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
@@ -550,12 +613,17 @@ class MixedQuantLinear(nn.Module):
                 and decode_mode() == "w4a16"
                 and hasattr(self._dg, "decode_gemv_w4a16_mb"))
 
-    def attach_marlin(self, marlin_low, hi_warps=16):
+    def attach_marlin(self, marlin_low, hi_warps=16, marlin_high=None):
         """vllm-perf r4 lever 1: attach the load-time Marlin repack of the low
         segment (promix.vllm_integ.marlin_w4a16.MarlinLow). The high segment
         rides decode_gemv_w8a16_hi_add on the decode-GEMV fp32 scale buffers,
         so the route additionally requires dg + fp32 S_hi_dec (default loader
-        config; the opt-in sf8 experiment keeps uint8 scales and skips Marlin)."""
+        config; the opt-in sf8 experiment keeps uint8 scales and skips Marlin).
+
+        r5 lever 1: `marlin_high` (MarlinHigh) is the MXFP8-marlin tensor-core
+        high companion; inside the measured _MARLIN_HI_TABLE window it replaces
+        the hi_add GEMV (which scales ~linearly in M). None keeps the pure-r4
+        route."""
         if (self._dg is None or self.is_pure_nvfp4 or self.S_hi_dec is None
                 or self.S_hi_dec.dtype != torch.float32
                 or not hasattr(self._dg, "decode_gemv_w8a16_hi_add")):
@@ -563,7 +631,15 @@ class MixedQuantLinear(nn.Module):
         self._marlin = marlin_low
         self._marlin_win = _MARLIN_TABLE.get((self.N, self.K))
         self._marlin_hi_warps = int(hi_warps)
+        self._marlin_hi = marlin_high
+        self._marlin_hi_mlo = _MARLIN_HI_TABLE.get((self.N, self.K), 8)
         return True
+
+    def _hi_marlin_route(self, M):
+        """True iff the high segment at this M rides the MXFP8-marlin companion
+        (r5) rather than the hi_add GEMV (r4). Capture-safe (M static per
+        captured graph, r1 pattern)."""
+        return self._marlin_hi is not None and M >= self._marlin_hi_mlo
 
     def marlin_route(self, M):
         """True iff forward(x) at this flattened M takes the Marlin W4A16
@@ -576,19 +652,32 @@ class MixedQuantLinear(nn.Module):
         capture-safe (r1 pattern)."""
         if self._marlin is None or self._marlin_win is None or M == 1:
             return False
+        if M > 32 and not self._hi_marlin_route(M):
+            return False      # hi_add kernel bound (M<=32)
         m_lo, m_hi = self._marlin_win
         return m_lo <= M <= min(m_hi, _marlin_env_mmax())
 
     def _marlin_forward(self, x2d):
-        """W4A16 small-M route: Marlin fp4 GEMM on the low columns + in-place
-        MXFP8 high-segment add. x2d: contiguous (M, K) fp16/bf16/fp32. Returns
-        fp16 (M, N). The activation is consumed EXACTLY (no quantization)."""
+        """W4A16 small-M route: Marlin fp4 GEMM on the low columns + MXFP8
+        high-segment add — the r5 marlin companion (TC, near-flat in M) inside
+        its window, the r4 hi_add GEMV below it. x2d: contiguous (M, K)
+        fp16/bf16/fp32. Returns fp16 (M, N). The activation is consumed
+        EXACTLY (no quantization)."""
         xh = x2d if x2d.dtype == torch.float16 else x2d.to(torch.float16)
         x_lo = xh[:, :self.K_low].contiguous()
         Y = self._marlin.gemm(x_lo)
-        self._dg.decode_gemv_w8a16_hi_add(
-            Y, xh, self.W_hi_dec, self.S_hi_dec,
-            self.N, self.K_low, self.K_high, self._marlin_hi_warps)
+        if self._hi_marlin_route(xh.shape[0]):
+            # bf16 slice-cast: marlin's e8m0 kernels are bf16-activation-only
+            # (see MarlinHigh.gemm); the W4A4 reference quantizes this slice
+            # to E4M3, so bf16 stays the more-accurate numerics class. The g
+            # scale + cast + add ride the ext's fused axpy (one kernel).
+            self._marlin_hi.gemm_add(
+                Y, xh[:, self.K_low:].to(torch.bfloat16),
+                axpy=getattr(self._dg, "axpy_bf16_into_half", None))
+        else:
+            self._dg.decode_gemv_w8a16_hi_add(
+                Y, xh, self.W_hi_dec, self.S_hi_dec,
+                self.N, self.K_low, self.K_high, self._marlin_hi_warps)
         return Y
 
     def fp16_route(self, M):
