@@ -1,0 +1,270 @@
+{
+  "meta": {
+    "tag": "pm8b_post",
+    "model": "/home/luofan/vllm_integ/promix-llama-3-8b",
+    "argv": [
+      "/home/luofan/plaquant-vllm-integ/promix/vllm_integ/prefill_profile.py",
+      "--model",
+      "/home/luofan/vllm_integ/promix-llama-3-8b",
+      "--dtype",
+      "float16",
+      "--tag",
+      "pm8b_post",
+      "--out",
+      "/home/luofan/vllm_integ/bench_r5/prof_pm8b_post.json"
+    ],
+    "gpu": "6",
+    "torch": "2.13.0+cu130",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "time": "2026-10-30 21:51:52",
+    "vllm": "0.32.0"
+  },
+  "isl": 2048,
+  "batch": 1,
+  "wall_ms": 63.859666930511594,
+  "walls_ms": [
+    65.45367697253823,
+    65.18955109640956,
+    63.76293092034757,
+    65.48250606283545,
+    63.956402940675616,
+    62.91247787885368,
+    61.499170027673244,
+    61.131397960707545,
+    61.13601382821798,
+    63.98861110210419
+  ],
+  "kernel_total_ms": 47.8309898000003,
+  "buckets": {
+    "fused_gemm": {
+      "us": 27030.70620000018,
+      "calls": 128.0
+    },
+    "pack_quant": {
+      "us": 7004.4806000000635,
+      "calls": 128.0
+    },
+    "other": {
+      "us": 5557.9518000000635,
+      "calls": 42.0
+    },
+    "elementwise_cast": {
+      "us": 3002.010999999978,
+      "calls": 133.0
+    },
+    "nv_gemm": {
+      "us": 1722.649599999991,
+      "calls": 32.0
+    },
+    "hadamard": {
+      "us": 1056.7518000000043,
+      "calls": 32.0
+    },
+    "norm": {
+      "us": 1400.4482000000037,
+      "calls": 65.0
+    },
+    "gemv": {
+      "us": 729.4808000000106,
+      "calls": 1.0
+    },
+    "attention": {
+      "us": 305.3064000000142,
+      "calls": 32.0
+    },
+    "gather": {
+      "us": 15.314999999998419,
+      "calls": 5.0
+    },
+    "sampler_logits": {
+      "us": 3.059200000014971,
+      "calls": 1.0
+    },
+    "memops": {
+      "us": 2.829199999978937,
+      "calls": 7.0
+    }
+  },
+  "kernels": [
+    {
+      "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperativeBlockScaledSm120ILi3EEENS4_IJNS9_ILi128EEESE_SE_EEENS4_IJNS_12float_e2m1_tENS_13float_ue4m3_tEEEENS4_IJNS4_IJlSA_lEEENS3_6LayoutINS4_IJNS4_IJNS4_IJNS9_ILi32EEENS9_ILi4EEEEEEiEEENS4_IJNS4_IJNS9_ILi16EEESM_EEEiEEENS4_IJSA_iEEEEEENS4_IJSR_NS4_IJNS4_IJNS9_ILi0EEESA_EEENS9_ILi512EEEEEENS4_IJSU_iEEEEEEEEEEESI_S11_NS3_8TiledMMAINS3_8MMA_AtomIJNS3_5SM12011BLOCKSCALED19SM120_16x8x64_TN_VSISG_SG_fSH_Li16EEEEEENSK_INS4_IJSM_NS9_ILi2EEESA_EEENS4_IJSA_SM_SU_EEEEENS4_IJSE_NSK_INS4_IJNS9_ILi8EEES19_S19_EEENS4_IJSA_SP_S1D_EEEEENS9_ILi64EEEEEEEENS4_IJNS3_13SM90_TMA_LOADES1K_EEENS4_IJNS3_14ComposedLayoutINS3_7SwizzleILi2ELi4ELi3EEENS3_18smem_ptr_flag_bitsILi4EEENSK_INS4_IJS1D_SE_EEENS4_IJSE_SA_EEEEEEENSK_INS4_IJNS4_IJSN_SA_EEENS4_IJSQ_SA_S19_EEEEEENS4_IJNS4_IJSQ_SW_EEENS4_IJSV_SM_SW_EEEEEEEEEEENS4_IJNS3_9Copy_AtomIJNS3_17SM75_U32x4_LDSM_NENS_15integer_subbyteILi4ELb0EEEEEENS23_IJNS3_13UniversalCopyISH_SH_EESH_EEEEEENS3_8identityES1L_S22_S2B_S2C_Lb1EEENS8_ILi2ELi3ESB_SD_SF_NS4_IJNS_12float_e4m3_tENS_13float_ue8m0_tEEEENS4_IJSJ_NSK_INS4_IJSO_SO_SS_EEESZ_EEEEES2G_S2J_NS12_INS13_IJNS15_19SM120_16x8x32_TN_VSIS2E_S2E_fS2F_Li32EEEEEES1C_NS4_IJSE_S1G_SL_EEEEES1L_NS4_IJNS1M_INS1N_ILi3ELi4ELi3EEENS1P_ILi8EEES1T_EENSK_INS4_IJS1V_NS4_IJNS4_IJSL_SA_EEESM_SA_EEEEEENS4_IJS1Y_NS4_IJSV_SA_SW_EEEEEEEEEEENS4_IJNS23_IJS24_hEEENS23_IJNS28_IS2F_S2F_EES2F_EEEEEES2C_S1L_S2Y_S32_S2C_Lb0EEENS_8epilogue10collective18CollectiveEpilogueINS34_22Sm90TmaWarpSpecializedILi3ELi2ELi4ELb1ELb0EEEJSF_NS4_IJS1H_SL_EEENS_6half_tESJ_S3A_SJ_NS34_6fusion15FusionCallbacksINS34_23Sm120TmaWarpSpecializedILi3ELi2ELi4ELb1ELb0EEENS3B_22LinCombBiasBFRoundHalfIS3A_S3A_Li8EEESF_S39_JEEES1K_NS1M_IS1O_NS1P_ILi16EEENSK_INS4_IJS1D_SL_EEES2S_EEEENS3_17SM75_U32x2_LDSM_NENS3_14SM90_TMA_STOREES3L_NS3_17SM90_U32x2_STSM_NENS23_IJS3O_S3A_EEEvEEENS6_25StaticPersistentSchedulerELb1EEEEEvNT_6ParamsE",
+      "us": 27030.70620000018,
+      "calls": 128.0
+    },
+    {
+      "name": "void qpf_mixed_kernel<false, __half, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > > >(unsigned char*, unsigned char*, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, unsigned char*, unsigned char*, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, __half const*, int const*, int, int, int, int, int, int)",
+      "us": 5787.580200000084,
+      "calls": 96.0
+    },
+    {
+      "name": "void flash::flash_fwd_splitkv_kernel<Flash_fwd_kernel_traits<128, 64, 128, 4, false, false, cutlass::half_t, Flash_kernel_traits<128, 64, 128, 4, cutlass::half_t> >, true, false, false, false, true, false, false, false>(flash::Flash_fwd_params)",
+      "us": 5502.687600000053,
+      "calls": 32.0
+    },
+    {
+      "name": "triton_poi_fused_mul_silu_slice_1",
+      "us": 2526.947799999988,
+      "calls": 32.0
+    },
+    {
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align2>(cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align2::Params)",
+      "us": 1722.649599999991,
+      "calls": 32.0
+    },
+    {
+      "name": "void qpf_mixed_kernel<true, __half, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > > >(unsigned char*, unsigned char*, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, unsigned char*, unsigned char*, cute::Layout<cute::tuple<cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<32>, cute::C<4> >, int>, cute::tuple<cute::C<1>, int> >, cute::tuple<cute::tuple<cute::tuple<cute::C<16>, cute::C<4> >, int>, cute::tuple<cute::tuple<cute::C<0>, cute::C<1> >, cute::C<512> >, cute::tuple<cute::C<0>, int> > >, __half const*, int const*, int, int, int, int, int, int)",
+      "us": 1216.9003999999793,
+      "calls": 32.0
+    },
+    {
+      "name": "void fast_hadamard_transform_kernel<fast_hadamard_transform_kernel_traits<32, 9, c10::Half> >(HadamardParamsBase)",
+      "us": 1056.7518000000043,
+      "calls": 32.0
+    },
+    {
+      "name": "triton_red_fused_fused_add_rms_norm_2",
+      "us": 784.0354000000123,
+      "calls": 32.0
+    },
+    {
+      "name": "std::enable_if<!(false), void>::type internal::gemvx::kernel<int, int, __half, __half, __half, float, false, true, true, false, 5, false, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<__half const>, cublasGemvTensorStridedBatched<__half const>, cublasGemvTensorStridedBatched<__half>, float> >(cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<__half const>, cublasGemvTensorStridedBatched<__half const>, cublasGemvTensorStridedBatched<__half>, float>)",
+      "us": 729.4808000000106,
+      "calls": 1.0
+    },
+    {
+      "name": "triton_red_fused_fused_add_rms_norm_0",
+      "us": 604.7458000000008,
+      "calls": 32.0
+    },
+    {
+      "name": "void vllm::reshape_and_cache_flash_kernel<unsigned short, unsigned short, (vllm::Fp8KVCacheDataType)0>(unsigned short const*, unsigned short const*, unsigned short*, unsigned short*, long const*, long, long, long, long, long, int, int, int, float const*, float const*, int)",
+      "us": 305.3064000000142,
+      "calls": 32.0
+    },
+    {
+      "name": "triton_poi_fused_3",
+      "us": 261.21040000000994,
+      "calls": 31.0
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::float16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::float16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
+      "us": 105.3971999999998,
+      "calls": 32.0
+    },
+    {
+      "name": "triton_poi_fused_4",
+      "us": 89.99819999998854,
+      "calls": 31.0
+    },
+    {
+      "name": "_gumbel_sample_kernel",
+      "us": 28.915200000000187,
+      "calls": 1.0
+    },
+    {
+      "name": "_apply_write_kernel",
+      "us": 14.56660000000711,
+      "calls": 4.0
+    },
+    {
+      "name": "triton_red_fused__to_copy_embedding_rms_norm_0",
+      "us": 11.666999999990548,
+      "calls": 1.0
+    },
+    {
+      "name": "triton_poi_fused_1",
+      "us": 7.9295999999969355,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::index_elementwise_kernel<128, 4, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<2> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<2> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1}>(long, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<2> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<2> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1})",
+      "us": 6.041399999998975,
+      "calls": 1.0
+    },
+    {
+      "name": "_prepare_prefill_inputs_kernel",
+      "us": 4.3771999999908076,
+      "calls": 1.0
+    },
+    {
+      "name": "_compute_slot_mappings_kernel",
+      "us": 3.5137999999913516,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::ArgMaxOps<float>, unsigned int, long, 4, 4> >(at::native::ReduceOp<float, at::native::ArgMaxOps<float>, unsigned int, long, 4, 4>)",
+      "us": 3.059200000014971,
+      "calls": 1.0
+    },
+    {
+      "name": "_gather_block_tables_kernel",
+      "us": 3.0079999999948086,
+      "calls": 1.0
+    },
+    {
+      "name": "triton_poi_fused_2",
+      "us": 2.8991999999952895,
+      "calls": 1.0
+    },
+    {
+      "name": "_post_update_kernel",
+      "us": 2.8607999999949243,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::index_elementwise_kernel<128, 4, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<4> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<4> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1}>(long, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<4> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<4> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1})",
+      "us": 2.304000000006636,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::index_elementwise_kernel<128, 4, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<8> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<8> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1}>(long, at::native::gpu_index_kernel<at::native::index_kernel_impl<at::native::OpaqueType<8> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1}>(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>, at::native::index_kernel_impl<at::native::OpaqueType<8> >(at::TensorIteratorBase&, c10::ArrayRef<long>, c10::ArrayRef<long>)::{lambda(char*, char const*, long)#1} const&, bool)::{lambda(int)#1})",
+      "us": 2.291199999998207,
+      "calls": 1.0
+    },
+    {
+      "name": "_get_num_sampled_and_rejected_kernel",
+      "us": 2.2270000000076835,
+      "calls": 1.0
+    },
+    {
+      "name": "_combine_sampled_and_draft_tokens_kernel",
+      "us": 1.9072000000004663,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::array<char*, 1ul> >(int, at::native::FillFunctor<int>, std::array<char*, 1ul>)",
+      "us": 1.6834000000102605,
+      "calls": 2.0
+    },
+    {
+      "name": "void at::native::_scatter_gather_elementwise_kernel<128, 8, at::native::_cuda_scatter_gather_internal_kernel<false, at::native::OpaqueType<8>, long>::operator()<at::native::TensorAssign>(at::TensorIterator&, long, long, long, at::native::TensorAssign const&)::{lambda(int)#1}>(int, at::native::_cuda_scatter_gather_internal_kernel<false, at::native::OpaqueType<8>, long>::operator()<at::native::TensorAssign>(at::TensorIterator&, long, long, long, at::native::TensorAssign const&)::{lambda(int)#1})",
+      "us": 1.6703999999997905,
+      "calls": 1.0
+    },
+    {
+      "name": "Memcpy HtoD (Pinned -> Device)",
+      "us": 1.5873999999871558,
+      "calls": 5.0
+    },
+    {
+      "name": "_prepare_pos_seq_lens_kernel",
+      "us": 1.273600000008082,
+      "calls": 1.0
+    },
+    {
+      "name": "Memcpy DtoH (Device -> Pinned)",
+      "us": 1.241799999991781,
+      "calls": 2.0
+    },
+    {
+      "name": "void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{lambda()#3}::operator()() const::{lambda(long)#1}>(int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{lambda()#3}::operator()() const::{lambda(long)#1}, function_traits<at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{lambda()#3}::operator()() const::{lambda(long)#1}>::result_type*)",
+      "us": 0.7935999999952401,
+      "calls": 1.0
+    },
+    {
+      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<bool>, std::array<char*, 1ul> >(int, at::native::FillFunctor<bool>, std::array<char*, 1ul>)",
+      "us": 0.7744000000028791,
+      "calls": 1.0
+    }
+  ]
+}
