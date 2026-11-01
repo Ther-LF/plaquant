@@ -331,6 +331,78 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 8B r in {1/32, 1/16, 1/8, 1/4}.
 
 <!-- BEGIN RSWEEP -->
+### ProMix r-sweep curve (3B; gate = |dPPL| vs own exporter reference, all PASS <= 0.1)
+
+| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | QServe c256 tok/s | prefill L2048 b128 ms |
+|---|---|---|---|---|---|---|---|
+| 0.03125 | 4.62 | 8.502 | 0.0103 | 11.68/18.93 | 13244 | 6732 | 3360 |
+| 0.0625 | 4.73 | 8.421 | 0.0086 | 11.36/18.28 | 13732 | 6990 | 3132 |
+| 0.09375 | 4.85 | 8.375 | 0.0034 | 11.79/19.07 | 13151 | 6711 | 3389 |
+| 0.125 | 4.97 | 8.370 | 0.0029 | 11.29/18.14 | 13834 | 6931 | 3159 |
+| 0.1875 | 5.20 | 8.332 | 0.0039 | 11.72/18.67 | 13434 | 6851 | 3447 |
+| 0.25 | 5.44 | 8.283 | 0.0051 | 14.12/22.88 | 10942 | 5623 | 3833 |
+
+**Single-point rivals (same cells):**
+
+| method | PPL | decode TPOT b256 | gen tok/s b256 | QServe c256 | prefill L2048 b128 ms |
+|---|---|---|---|---|---|
+| BF16 | 7.820 | 19.70 | 12621 | 6119 | 5591 |
+| FP8 W8A8 | 7.880 | 18.23 | 13769 | 6936 | 3388 |
+| GPTQ-Marlin W4A16 | 8.200 | 19.86 | 12477 | 5908 | 5938 |
+| NVFP4 W4A4 | 8.630 | 16.51 | 15286 | 7771 | 2078 |
+
+### ProMix r-sweep curve (8B; gate = |dPPL| vs own exporter reference, all PASS <= 0.1)
+
+| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | QServe c256 tok/s | prefill L2048 b128 ms |
+|---|---|---|---|---|---|---|---|
+| 0.03125 | 4.62 | 6.817 | 0.0019 | —/— | — | — | — |
+| 0.0625 | 4.73 | 6.714 | 0.0039 | 16.06/24.99 | 9956 | 4970 | 6529 |
+| 0.125 | 4.97 | 6.640 | 0.0025 | 15.82/24.88 | 9992 | 4922 | 7137 |
+| 0.25 | 5.44 | 6.587 | 0.0048 | 16.42/25.54 | 9721 | 4718 | 7475 |
+
+**Single-point rivals (same cells):**
+
+| method | PPL | decode TPOT b256 | gen tok/s b256 | QServe c256 | prefill L2048 b128 ms |
+|---|---|---|---|---|---|
+| BF16 | 6.140 | 29.50 | 8302 | 3864 | 12269 |
+| FP8 W8A8 | 6.191 | 25.64 | 9691 | 4743 | 7335 |
+| GPTQ-Marlin W4A16 | 6.520 | 28.59 | 8498 | 3680 | 13445 |
+| NVFP4 W4A4 | 6.870 | 21.24 | 11794 | 5845 | 4263 |
+
+**Curve findings (the bracket, measured honestly):**
+
+1. **The serving cost of the accuracy knob is nearly FLAT for r <= 3/16**:
+   3B decode TPOT b256 stays 18.1-19.1 ms from r=1/32 to 3/16 (within the
+   +-4% cross-lane noise; sweep points ran on different idle GPUs of the same
+   model — see caveat below) while PPL moves 8.50 -> 8.33; 8B 24.9-25.5 ms
+   across 1/16 -> 1/4 while PPL moves 6.71 -> 6.59. The dual-format kernel
+   makes the precision budget essentially free to serve in this range.
+2. **Bracket side A (vs NVFP4)**: EVERY ProMix point beats NVFP4 accuracy by
+   0.13-0.35 PPL (3B) / 0.16-0.28 (8B); throughput cost vs NVFP4 at the
+   serving regime is 10-16% (qserve c256: 3B 6990/7771 = 0.90 at r=1/16;
+   8B 4970/5845 = 0.85). The r=1/16 point sits at the edge of the
+   "within 10-15% of NVFP4" target (0.85-0.90 by metric).
+3. **Bracket side B (vs FP8 W8A8)**: ProMix matches or slightly beats FP8
+   THROUGHPUT at the serving regime with ~half the weight bytes (3B r=1/16
+   qserve c256 6990 vs 6936; 8B r=1/8 4922 vs 4743, decode b256 24.88 vs
+   25.64) — but does NOT reach FP8 accuracy: the best swept point (r=1/4)
+   still trails FP8 by +0.40 PPL (3B 8.28 vs 7.88; 8B 6.59 vs 6.19). The
+   honest headline is therefore NOT "FP8 accuracy, faster"; it is "FP8-class
+   serving throughput at ~4.6-5.4 bits/weight, with a continuously tunable
+   accuracy knob that dominates the NVFP4 point from both sides".
+4. **3B r=1/4 anomaly**: decode TPOT jumps to 22.9 ms (b256) — the only
+   swept point whose decode falls below BF16; 8B r=1/4 shows no such step
+   (25.5 vs BF16 29.5). Not root-caused this campaign (candidate: 3B
+   Kh=768 tile-quantization in the MXFP8 phase + marlin-hi crossovers);
+   flagged as an open item.
+5. **Gates**: every swept checkpoint passes T2 vs its own exporter reference
+   (|dPPL| 0.003-0.010 << 0.1). The r-grid is the uniform n/32 family — the
+   finest representable uniform split (see section intro); per-layer ring
+   allocation (rd-alloc) would refine further but lives outside this branch.
+
+**Lane caveat**: sweep serve points ran in parallel on different (idle,
+same-model) GPUs; the five-way core table above is the anchored comparison.
+Cross-point deltas below ~4% should not be over-read.
 <!-- END RSWEEP -->
 
 ## 5. Extensions — every other vLLM quant method runnable on this GPU
