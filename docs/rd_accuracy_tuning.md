@@ -105,6 +105,7 @@ interaction with ring512 measured in the stack section.
 | variant | 3B wiki | Δ |
 |---|---|---|
 | gptq512 (GPTQ nsamples 128→512, shipped basis) | 8.2512 | −0.017 |
+| gptq1024 (GPTQ nsamples 128→1024, shipped basis) | 8.2421 | −0.026 |
 | calib1024 (basis 1024 + GPTQ 1024 + ΔD 16k tokens) | TBD | — |
 
 First calib1024 attempt EXPLODED (PPL 440k): the 1024-sample basis had been
@@ -122,8 +123,9 @@ Note for reproduction: Step-0 basis MUST be generated with
 | r512+up2 | **14.2093** | **19.8041** | 8.2320 | 11.2802 | TBD | TBD |
 | r512+w7 | 14.3334 | — | 8.2245 | — | — | — |
 | r512+up2+w7 | 14.2851 | 19.8356 | 8.2214 | 11.2822 | **6.5785** | **9.5868** |
-| r512+up2+w7+g512 | — | — | 8.2203 | 11.2782 | TBD | TBD |
-| r512+up2+w7+g512+d025 | — | — | **8.2180** | **11.2549** | TBD | TBD |
+| r512+up2+w7+g512 | — | — | 8.2203 | 11.2782 | **6.5642** | **9.5639** |
+| r512+up2+w7+g512+d025 | — | — | **8.2180** | **11.2549** | 6.5624 | 9.5735 |
+| r512+up2+w7+d025 | — | — | 8.2312 | — | — | — |
 | r512+up2+g512 (1B winner probe) | **14.2035** | **19.7121** | — | — | — | — |
 | r512+up2+d025 (1B) | 14.2704 | 19.9047 | — | — | — | — |
 
