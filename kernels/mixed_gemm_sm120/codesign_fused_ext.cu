@@ -358,7 +358,12 @@ static torch::Tensor interleave_sfb(torch::Tensor SFB, int Ni, int Ki, cudaStrea
   auto dev = SFB.device();
   auto layout_SFB = BSConfig::tile_atom_to_shape_SFB(make_shape(1, Ni, Ki, 1));
   int64_t sz = (int64_t)size(filter_zeros(layout_SFB));
-  auto phys = torch::empty({sz}, u8opts(dev));
+  // zeros (not empty): when K/VEC is not a multiple of the SF atom K-extent the
+  // padded slots are never written by the fill kernel. They are numerically
+  // harmless (pad K-blocks carry zero data), but deterministic zero pads make
+  // the exported checkpoint bytes and the exporter's torch.equal self-check
+  // reproducible (load-time path only; no per-call cost).
+  auto phys = torch::zeros({sz}, u8opts(dev));
   int nblk = Ki / VEC, tpb = 256;
   if (EFFICIENT) {
     int total = Ni * nblk;
