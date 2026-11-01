@@ -355,7 +355,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 | r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | QServe c256 tok/s | prefill L2048 b128 ms |
 |---|---|---|---|---|---|---|---|
-| 0.03125 | 4.62 | 6.817 | 0.0019 | —/— | — | — | — |
+| 0.03125 | 4.62 | 6.817 | 0.0019 | 15.62/24.51 | 10156 | 5026 | 6868 |
 | 0.0625 | 4.73 | 6.714 | 0.0039 | 16.06/24.99 | 9956 | 4970 | 6529 |
 | 0.125 | 4.97 | 6.640 | 0.0025 | 15.82/24.88 | 9992 | 4922 | 7137 |
 | 0.25 | 5.44 | 6.587 | 0.0048 | 16.42/25.54 | 9721 | 4718 | 7475 |
@@ -378,7 +378,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
    across 1/16 -> 1/4 while PPL moves 6.71 -> 6.59. The dual-format kernel
    makes the precision budget essentially free to serve in this range.
 2. **Bracket side A (vs NVFP4)**: EVERY ProMix point beats NVFP4 accuracy by
-   0.13-0.35 PPL (3B) / 0.16-0.28 (8B); throughput cost vs NVFP4 at the
+   0.13-0.35 PPL (3B) / 0.05-0.28 (8B; even the 4.62-bit r=1/32 point edges NVFP4: 6.817 vs 6.87); throughput cost vs NVFP4 at the
    serving regime is 10-16% (qserve c256: 3B 6990/7771 = 0.90 at r=1/16;
    8B 4970/5845 = 0.85). The r=1/16 point sits at the edge of the
    "within 10-15% of NVFP4" target (0.85-0.90 by metric).
