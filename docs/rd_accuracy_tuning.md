@@ -97,7 +97,8 @@ interaction with ring512 measured in the stack section.
 |---|---|---|
 | **wmse7** (`PROMIX_WEIGHT_MSE_STEPS=7`) | **8.2426** | **−0.025** |
 | act_order=true | 22.2607 | +14 (BROKEN — incompatible with the reorder/frozen-scale pipeline; reject, do not re-try without a dedicated fix) |
-| percdamp 0.025 / 0.05 | TBD | — |
+| percdamp 0.025 | 8.2457 | −0.022 |
+| percdamp 0.05 | 8.2643 | −0.004 |
 
 ### Lever 3 — calibration size
 
@@ -120,7 +121,11 @@ Note for reproduction: Step-0 basis MUST be generated with
 | r512 | 14.2392 | 19.8676 | 8.2328 | 11.2968 | 6.5890 | 9.6076 |
 | r512+up2 | **14.2093** | **19.8041** | 8.2320 | 11.2802 | TBD | TBD |
 | r512+w7 | 14.3334 | — | 8.2245 | — | — | — |
-| r512+up2+w7 | 14.2851 | 19.8356 | **8.2214** | 11.2822 | **6.5785** | **9.5868** |
+| r512+up2+w7 | 14.2851 | 19.8356 | 8.2214 | 11.2822 | **6.5785** | **9.5868** |
+| r512+up2+w7+g512 | — | — | 8.2203 | 11.2782 | TBD | TBD |
+| r512+up2+w7+g512+d025 | — | — | **8.2180** | **11.2549** | TBD | TBD |
+| r512+up2+g512 (1B winner probe) | **14.2035** | **19.7121** | — | — | — | — |
+| r512+up2+d025 (1B) | 14.2704 | 19.9047 | — | — | — | — |
 
 Interactions are real and model-dependent:
 - up2's dense-substrate −0.032 shrinks to −0.001 on 3B ring512 (the ring
@@ -128,7 +133,15 @@ Interactions are real and model-dependent:
 - w7 stacks on 3B (−0.008 on r512) and helps the 8B stack, but HURTS 1B
   (+0.094 on r512) — per-model stack selection required.
 - 8B: the full stack is the first configuration to beat the shipped uniform
-  anchor on BOTH datasets (wiki −0.010, C4 −0.049).
+  anchor on BOTH datasets (wiki −0.010, C4 −0.049); w7 helps 8B (up2-only
+  6.5815/9.5915 is worse than +w7).
+- GPTQ-512 calibration stacks on 1B (14.2093 → 14.2035 wiki, 19.8041 → 19.7121
+  C4) and on 3B (with d025: 8.2180/11.2549). percdamp 0.025 stacks on 3B but
+  HURTS 1B (+0.061) — per-model again.
+- KV4 re-measure BLOCKED mechanically: per-head KV high segment = head_dim/8 =
+  16 channels < MXFP8 block 32 (`MXFP8 quantization requires K (16) divisible
+  by block_size (32)` in setup_k_quant path under this harness); needs a
+  dedicated fix, out of campaign scope.
 
 
 
