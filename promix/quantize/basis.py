@@ -525,6 +525,12 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="YAML config file")
     parser.add_argument("--output_dir", type=str, default=None, help="Override output directory")
     parser.add_argument("--nsamples", type=int, default=None, help="Override nsamples")
+    parser.add_argument("--calib_dataset", type=str, default=None,
+                        help="Override calibration dataset (wikitext|c4); "
+                             "defaults to config calibration.dataset")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Override model name/path (e.g. a local model dir); "
+                             "defaults to config model.name")
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -534,12 +540,12 @@ def main():
     nsamples = args.nsamples or config["calibration"]["nsamples"]
 
     basis_path, rotation_path, eval_path = compute_basis(
-        model_name=config["model"]["name"],
+        model_name=args.model or config["model"]["name"],
         output_dir=output_dir,
         seqlen=config["calibration"]["seqlen"],
         nsamples=nsamples,
         seed=config["calibration"].get("seed", 0),
-        calib_dataset=config["calibration"]["dataset"],
+        calib_dataset=args.calib_dataset or config["calibration"]["dataset"],
         high_fraction=config["quantize"]["high_fraction"],
         low_fraction=config["quantize"].get("low_fraction", 0.0),
         sparse_fraction=config["quantize"].get("sparse_fraction", 0.0),
