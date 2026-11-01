@@ -449,13 +449,14 @@ generated tables above (8B AWQ rows included).
 |---|---|---|
 | **SharQ** (arXiv 2606.26587, sparse-FP4 main + dense-FP4 residual) | **RAN — its own vLLM integration, end-to-end, same GPU, same vLLM 0.32** | out-of-tree `register_quantization_config` wrapper around their shipped `sharq.py`; kernels rebuilt unmodified vs venv torch 2.13 (shipped .so was torch-2.11 ABI); fallback 3-kernel path (repo ships no fused `sharq_ops_vllm`) |
 | **fp_quant / QuTLASS** (Quartet, rotation-based W4A4; vLLM-native method) | **RAN-WITH-CAVEAT** | vLLM 0.32's bundled `_qutlass_C` contains ONLY sm_100 cubins (cuobjdump-verified) → fails on SM120 as shipped; substituted the same project's qutlass v0.2.0 built from source for sm_120a. Checkpoints via IST-DASLab/FP-Quant (RTN + online Hadamard, c4 calib). `fp_quant` is marked deprecated in 0.32 (`allow_deprecated_quantization=true`). |
-| **MicroMix** (arXiv 2508.02343, MXFP4/6/8 segmented GEMM; paper publishes RTX PRO 6000 numbers — same GPU) | ran as-shipped e2e benchmark (their protocol, synthetic weights + real SM120 kernels, ICLR branch) — numbers in the cross-paper table; caveat: kernels built vs CUDA 13 (paper used CUDA 12.8) | container torch 2.11 |
+| **MicroMix** (arXiv 2508.02343, MXFP4/6/8 segmented GEMM; paper publishes RTX PRO 6000 numbers — same GPU) | **RAN-WITH-CAVEAT** — their own e2e benchmark + accuracy pipeline, real SM120 kernels (ICLR branch; kernels rebuilt vs CUDA 13.0, authors require 12.8 — unvalidated by them on CUDA 13; llama-3.1-8b stats from llama-3-8b calibration, identical dims, avg 5.35 bits) | container torch 2.11 |
 
 ### Same-protocol serving (Llama-3.2-3B, OUR bench_serve protocol, idle GPU 0)
 
 | method | PPL (wikitext-2) | decode-heavy TPOT b128/b256 (ms) | gen tok/s b256 | qserve 1024:512 c256 tok/s | prefill L2048 b128 (ms) |
 |---|---|---|---|---|---|
 | SharQ (their vLLM integ) | 8.385 (their pipeline, real kernels) | 12.90 / 21.40 | 11442 | 4946 | 7621 |
+| fp_quant NVFP4 (RTN+had128) | 9.62 (their pipeline, 141 chunks) | 11.54 / 18.13 | 13916 | — | 2332 |
 | fp_quant MXFP4 (RTN+had32) | 10.25 (their pipeline, 141 chunks) | 13.07 / 17.59 | 14338 | — | 2282 |
 | ProMix (ours, r=1/8) | 8.370 (absolute protocol) | 11.29 / 18.14 | 13834 | 6931 | 3159 |
 | NVFP4 (llm-compressor) | 8.63 | 9.69 / 16.51 | 15286 | 7771 | 2078 |
@@ -466,9 +467,21 @@ prefill L2048 b128 2.41x (SharQ's unfused 3-kernel sparse+residual path taxes
 prefill heavily; it wins only small-batch decode, TPOT 3.51 vs 4.09 at b1).
 **fp_quant-MXFP4** is fast (single-format MXFP4: prefill 2282 ms beats even
 our 3159) but its RTN accuracy (10.25; NVFP4-RTN variant 9.62) is 1.9-2.6 PPL
-worse than ProMix — a speed point, not an accuracy competitor, and it required
-a source-built kernel package to run on SM120 at all. SharQ zero-shot
-(their pipeline) logged in `peers/PEERS_SUMMARY.md`.
+worse than ProMix — a speed point, not an accuracy competitor, and **as
+literally shipped it is BLOCKED on SM120**: the vllm 0.32.0 cu130 wheel's
+bundled `_qutlass_C.abi3.so` carries sm_100 cubins ONLY (cuobjdump-verified;
+runtime `fused_quantize_nv_sm100.cu:187 Error Internal`) — it runs only with
+a source-built qutlass v0.2.0 for sm_120a. SharQ zero-shot (their pipeline)
+logged in `peers/PEERS_SUMMARY.md`.
+
+**MicroMix e2e (their shipped benchmark, same GPU as its paper):** prefill
+2048 bs32 1982.5 ms vs HF-FP16 3955.2 ms = **2.00x — reproduces the paper's
+1.98-2.02x e2e-vs-FP16 claim on this GPU**; bs1 1.11x. Decode as shipped is
+4.4x SLOWER than FP16 at bs1 (87.5 ms/step, batch-size-independent =>
+eager-Python-bound decode path; the paper's decode claims are vs Atom, not
+FP16 — consistent). MicroMix accuracy via their own pipeline on Llama-3.2-3B:
+wikitext-2 PPL **9.045** (vs ProMix 8.370, SharQ 8.385, llm-compressor NVFP4
+8.63). Logs: `peers/mm_e2e_micromix.log`, `mm_e2e_fp16.log`, `mm_ppl_3b.log`.
 <!-- END PEERS -->
 
 ## 7. Cross-paper end-to-end comparison (relative to same-stack FP16/BF16, ISL/OSL 1024/512)
@@ -484,6 +497,8 @@ these are NOT directly comparable absolute numbers; anchor strength matters
 | Atom W4A4KV4 | 4/4 + KV4 | RTX 4090 | Punica FP16 (medium) | serving throughput, batch 2-256 (large-batch partially simulated) | up to 2.5x (as published) |
 | AWQ / TinyChat W4A16 | 4/16 | 4090 / Orin | HF eager FP16 (**weak anchor**) | decode latency | 2.7-3.9x (as published) |
 | vLLM NVFP4 W4A4 | 4.5/4 | **RTX Pro 6000 (this work's GPU)** | vLLM 0.32 BF16 (strong) | ISL/OSL 1024/512, c256 (measured here) | **1.27x (3B) / 1.51x (8B)**; decode-heavy b256 1.19/1.39x; prefill L2048 b16 2.56/3.13x |
+| MicroMix MXFP4/6/8 | ~5.35/mixed | **RTX Pro 6000 (same GPU, measured here via their shipped bench)** | HF FP16 (weak-medium) | prefill 2048 bs32 / decode 128-step | **2.00x prefill (reproduces their paper's 1.98-2.02x)**; decode 0.23x bs1 / 1.03x bs32 as shipped (eager decode path) |
+| SharQ W4A4 (their vLLM integ) | 4.5+sparse/4 | **RTX Pro 6000 (measured here)** | vLLM 0.32 BF16 (strong) | same protocol as ours | decode-heavy b256 TPOT 0.92x vs BF16 (21.40 vs 19.70 — slower); qserve c256 0.81x (4946 vs 6119); small-batch decode 1.56x (b1) |
 | **ProMix W4A4 (ours)** | 4.97/4 | **RTX Pro 6000** | vLLM 0.32 BF16 (strong) | ISL/OSL 1024/512, c256 (measured here) | **1.13x (3B) / 1.27x (8B)**; decode-heavy b256 TPOT 1.09/1.19x (b512 1.14/1.29x); prefill L2048 1.26-1.82x |
 
 Honesty footnotes: (1) different GPUs/generations — on Blackwell the BF16
