@@ -634,10 +634,18 @@ ACT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_ACT_MSE", "1") != "0"      # Win 
 # scale SELECTION; the weight-A2 path (_mse_best_scale) is untouched.
 ACT_MSE_FAST = _os.environ.get("PROMIX_ACT_MSE_FAST", "1") != "0"
 ACT_MSE_STEPS = int(_os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
+# rd-acctune lever 4: optional UPWARD widening of the activation NVFP4 scale
+# search. PROMIX_ACT_MSE_STEPS_UP (default 0 = shipped, byte-identical) adds N
+# higher E4M3 grid steps ABOVE the ceil base to the candidate set (the base is
+# clip-free, so upper candidates trade fine-grid rounding near zero against
+# coarser steps at the top of the block's range).
+ACT_MSE_STEPS_UP = int(_os.environ.get("PROMIX_ACT_MSE_STEPS_UP", "0"))
 # Win 2 (weight-A2) is DEFAULT-ON: it is a re-pack-only change (GPTQ frozen block
 # scales), zero forward cost, free accuracy win.
 WEIGHT_MSE_SCALE_SEARCH = _os.environ.get("PROMIX_WEIGHT_MSE", "1") != "0"  # Win 2 (shipped)
-_MSE_STEPS = 3
+# rd-acctune lever 5: weight micro-scale MSE search depth (lower E4M3 steps
+# below the ceil base tried per block). Default 3 = shipped behavior.
+_MSE_STEPS = int(_os.environ.get("PROMIX_WEIGHT_MSE_STEPS", "3"))
 
 # Round-6 (WEIGHT two-level scale, deployable). The NVFP4 weight block scale
 # becomes `g * micro` where `g` is a per-tensor FP32 global (derived from the low
@@ -720,6 +728,17 @@ def _next_lower_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     masked = torch.where(g < sc.unsqueeze(-1), g, torch.full_like(g, -1.0))
     best = masked.max(dim=-1).values
     return torch.where(best < 0, sc, best)
+
+
+def _next_higher_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
+    """Per-element, the smallest grid value strictly above `sc` (or `sc` itself
+    if none is higher). `grid` is 1D ascending. Upward twin of
+    `_next_lower_grid` (rd-acctune lever 4, PROMIX_ACT_MSE_STEPS_UP)."""
+    g = grid.view(*([1] * sc.dim()), -1)
+    masked = torch.where(g > sc.unsqueeze(-1), g,
+                         torch.full_like(g, float("inf")))
+    best = masked.min(dim=-1).values
+    return torch.where(torch.isinf(best), sc, best)
 
 
 def _mse_best_scale(blk: torch.Tensor, cands, max_fmt: float,
@@ -1023,6 +1042,12 @@ def fake_quantize_nvfp4(
         for _ in range(ACT_MSE_STEPS):
             cur = _next_lower_grid(cur, fp8_e4m3_values)
             cands.append(cur)
+        if ACT_MSE_STEPS_UP > 0:
+            # lever-4 widening: N higher E4M3 steps above the clip-free base.
+            cur = base_scale
+            for _ in range(ACT_MSE_STEPS_UP):
+                cur = _next_higher_grid(cur, fp8_e4m3_values)
+                cands.append(cur)
         if ACT_MSE_FAST:
             block_scale = _mse_best_scale_act_fast(x_blk, cands)
         else:
