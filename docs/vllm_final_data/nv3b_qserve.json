@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "tag": "nv3b_qserve",
+    "model": "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-nvfp4",
+    "argv": [
+      "/home/luofan/plaquant-vllm-integ/promix/vllm_integ/bench_serve.py",
+      "--model",
+      "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-nvfp4",
+      "--tag",
+      "nv3b_qserve",
+      "--dtype",
+      "auto",
+      "--batches",
+      "64,128,256",
+      "--cases",
+      "1024:512",
+      "--prefill-len",
+      "0",
+      "--max-model-len",
+      "4096",
+      "--gpu-mem-util",
+      "0.90",
+      "--extra-llm-kwargs",
+      "{\"max_num_seqs\":512}",
+      "--out",
+      "/home/luofan/vllm_integ/bench_final/nv3b_qserve.json"
+    ],
+    "gpu": "3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "time": "2026-11-01 08:54:49",
+    "vllm": "0.32.0",
+    "load_s": 57.97731722705066,
+    "quantization_resolved": "compressed-tensors",
+    "dtype_resolved": "torch.bfloat16",
+    "enforce_eager": false
+  },
+  "cases": {
+    "isl1024_osl512_b64": {
+      "isl": 1024,
+      "osl": 512,
+      "batch": 64,
+      "ttft_s": 0.4863034279551357,
+      "full_s": 5.346487837145105,
+      "tpot_ms": 9.511124088434382,
+      "gen_tok_per_s": 6128.883296496438,
+      "total_tok_per_s": 18386.649889489312,
+      "ttft_runs_s": [
+        0.48505805898457766,
+        0.4866344449110329,
+        0.4863034279551357
+      ],
+      "full_runs_s": [
+        5.338771847076714,
+        5.346487837145105,
+        5.370762740960345
+      ]
+    },
+    "isl1024_osl512_b128": {
+      "isl": 1024,
+      "osl": 512,
+      "batch": 128,
+      "ttft_s": 0.9658231430221349,
+      "full_s": 9.191672937944531,
+      "tpot_ms": 16.09755341472093,
+      "gen_tok_per_s": 7129.931672117932,
+      "total_tok_per_s": 21389.795016353797,
+      "ttft_runs_s": [
+        0.9650972119998187,
+        0.9659552839584649,
+        0.9658231430221349
+      ],
+      "full_runs_s": [
+        9.189294868847355,
+        9.191672937944531,
+        9.21061778604053
+      ]
+    },
+    "isl1024_osl512_b256": {
+      "isl": 1024,
+      "osl": 512,
+      "batch": 256,
+      "ttft_s": 1.929777645971626,
+      "full_s": 16.866961914114654,
+      "tpot_ms": 29.231280368185967,
+      "gen_tok_per_s": 7770.931165162352,
+      "total_tok_per_s": 23312.793495487054,
+      "ttft_runs_s": [
+        1.925822471966967,
+        1.933531589107588,
+        1.929777645971626
+      ],
+      "full_runs_s": [
+        16.86298174597323,
+        16.866961914114654,
+        16.88434490095824
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 88.2421875,
+    "max_memory_allocated_gib": 87.56794452667236
+  }
+}
