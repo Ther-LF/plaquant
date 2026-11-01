@@ -442,6 +442,32 @@ generated tables above (8B AWQ rows included).
 ## 6. Published W4A4 peer methods, end-to-end on this GPU
 
 <!-- BEGIN PEERS -->
+### Verdicts (full evidence trail: `peers/PEERS_SUMMARY.md` + logs on the GPU host under `/home/luofan/vllm_integ/bench_final/peers/`)
+
+| peer (published W4A4 method) | outcome | stack |
+|---|---|---|
+| **SharQ** (arXiv 2606.26587, sparse-FP4 main + dense-FP4 residual) | **RAN — its own vLLM integration, end-to-end, same GPU, same vLLM 0.32** | out-of-tree `register_quantization_config` wrapper around their shipped `sharq.py`; kernels rebuilt unmodified vs venv torch 2.13 (shipped .so was torch-2.11 ABI); fallback 3-kernel path (repo ships no fused `sharq_ops_vllm`) |
+| **fp_quant / QuTLASS** (Quartet, rotation-based W4A4; vLLM-native method) | **RAN-WITH-CAVEAT** | vLLM 0.32's bundled `_qutlass_C` contains ONLY sm_100 cubins (cuobjdump-verified) → fails on SM120 as shipped; substituted the same project's qutlass v0.2.0 built from source for sm_120a. Checkpoints via IST-DASLab/FP-Quant (RTN + online Hadamard, c4 calib). `fp_quant` is marked deprecated in 0.32 (`allow_deprecated_quantization=true`). |
+| **MicroMix** (arXiv 2508.02343, MXFP4/6/8 segmented GEMM; paper publishes RTX PRO 6000 numbers — same GPU) | ran as-shipped e2e benchmark (their protocol, synthetic weights + real SM120 kernels, ICLR branch) — numbers in the cross-paper table; caveat: kernels built vs CUDA 13 (paper used CUDA 12.8) | container torch 2.11 |
+
+### Same-protocol serving (Llama-3.2-3B, OUR bench_serve protocol, idle GPU 0)
+
+| method | PPL (wikitext-2) | decode-heavy TPOT b128/b256 (ms) | gen tok/s b256 | qserve 1024:512 c256 tok/s | prefill L2048 b128 (ms) |
+|---|---|---|---|---|---|
+| SharQ (their vLLM integ) | 8.385 (their pipeline, real kernels) | 12.90 / 21.40 | 11442 | 4946 | 7621 |
+| fp_quant MXFP4 (RTN+had32) | 10.25 (their pipeline, 141 chunks) | 13.07 / 17.59 | 14338 | — | 2282 |
+| ProMix (ours, r=1/8) | 8.370 (absolute protocol) | 11.29 / 18.14 | 13834 | 6931 | 3159 |
+| NVFP4 (llm-compressor) | 8.63 | 9.69 / 16.51 | 15286 | 7771 | 2078 |
+
+Reading: **SharQ** is the accuracy-comparable peer (8.385 vs our 8.370) and
+ProMix beats it at the serving regime — decode b128 1.14x, qserve c256 1.40x,
+prefill L2048 b128 2.41x (SharQ's unfused 3-kernel sparse+residual path taxes
+prefill heavily; it wins only small-batch decode, TPOT 3.51 vs 4.09 at b1).
+**fp_quant-MXFP4** is fast (single-format MXFP4: prefill 2282 ms beats even
+our 3159) but its RTN accuracy (10.25; NVFP4-RTN variant 9.62) is 1.9-2.6 PPL
+worse than ProMix — a speed point, not an accuracy competitor, and it required
+a source-built kernel package to run on SM120 at all. SharQ zero-shot
+(their pipeline) logged in `peers/PEERS_SUMMARY.md`.
 <!-- END PEERS -->
 
 ## 7. Cross-paper end-to-end comparison (relative to same-stack FP16/BF16, ISL/OSL 1024/512)
