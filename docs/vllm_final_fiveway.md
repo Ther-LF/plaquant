@@ -42,17 +42,17 @@ Llama-3-8B ("8B"). One GPU per engine, otherwise-idle card.
 | method | 3B PPL | 8B PPL | activations |
 |---|---|---|---|
 | BF16 | 7.82 | 6.14 | bf16 |
-| FP8 W8A8 | **7.880** | *(measuring)* | fp8 dynamic |
-| INT8 W8A8 (ext) | *(measuring)* | *(measuring)* | int8 dynamic |
+| FP8 W8A8 | **7.880** | **6.191** | fp8 dynamic |
+| INT8 W8A8 (ext) | not servable on SM120 | — | int8 dynamic |
 | GPTQ-Marlin W4A16 | 8.20 | 6.52 | **bf16 (not quantized)** |
 | AWQ-Marlin W4A16 | 8.48 | 6.73 | **bf16 (not quantized)** |
 | NVFP4 W4A4 | 8.63 | 6.87 | fp4 static |
-| ct-MXFP4 W4A4 (ext) | *(measuring)* | *(measuring)* | mxfp4 dynamic |
+| ct-MXFP4 W4A4 (ext) | not servable on SM120 | — | mxfp4 dynamic |
 | **ProMix W4A4 (served config, real kernel)** | **8.370** | **6.640** | fp4+1/8 mxfp8, act-MSE |
 | ProMix decode-route (marlin W4A16 m<=16 windows active) | 8.047 | — | w4a16 at small M |
 
 ProMix is the most accurate W4A4 row: −0.26 PPL vs NVFP4 at 3B, −0.23 at 8B
-(and −0.88/−0.56 vs ct-MXFP4). W4A16 rows keep bf16 activations (no activation
+W4A16 rows keep bf16 activations (no activation
 quantization cost) and are the weight-only reference, not a same-condition
 W4A4 comparison. 3B/8B BF16, GPTQ, AWQ, NVFP4 from
 `docs/baselines_on_hardware.md` (same harness/protocol); FP8/INT8/MXFP4
@@ -336,6 +336,24 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 ## 5. Extensions — every other vLLM quant method runnable on this GPU
 
 <!-- BEGIN EXT -->
+### Runnability census (vLLM 0.32 cu130 wheel, SM120)
+
+| method | status | evidence |
+|---|---|---|
+| BF16 / FP8 W8A8 / GPTQ-Marlin / AWQ-Marlin / NVFP4 / ProMix | **run** | full tables above / below |
+| **INT8 W8A8** (SmoothQuant+GPTQ `W8A8` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | engine init: `RuntimeError: dispatch_scaled_mm ... Int8 not supported on SM120. Use FP8 quantization` (vllm csrc `w8a8/cutlass/c3x/scaled_mm_helper.hpp:34`) — vLLM's cutlass INT8 scaled-mm has no SM120 dispatch in this build |
+| **ct-MXFP4 W4A4** (llm-compressor `MXFP4` checkpoint, produced fine) | **BLOCKED on SM120 as shipped** | `FlashInferMxFp4LinearKernel` selected, then `flashinfer.utils.BackendSupportedError: mm_fp4 does not support backend 'cute-dsl' with capability 120` |
+| fp_quant / QuTLASS (Quartet, rotation W4A4) | see §6 peer attempts | requires `qutlass` source build |
+| bitsandbytes etc. | skipped | not serving-grade paths |
+
+So on THIS GPU the complete set of runnable same-stack quant methods is exactly
+the table above + AWQ — i.e. the five-way IS the census, plus AWQ-Marlin:
+
+**AWQ-Marlin W4A16** (identical protocol): at 3B — decode-heavy TPOT b256
+20.00 ms / b512 37.04 vs ProMix 18.14 / 32.80 (ProMix 1.10x / 1.13x); prefill
+TTFT L2048 b16 734 ms vs ProMix 390.7 (ProMix 1.88x) — same verdict as GPTQ:
+ProMix wins the batched regime, loses b1-64 decode. Full AWQ rows are in the
+generated tables above (8B AWQ in flight at commit time).
 <!-- END EXT -->
 
 ## 6. Published W4A4 peer methods, end-to-end on this GPU
