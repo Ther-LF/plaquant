@@ -15,9 +15,14 @@ D=docs/rd_oppareto_data
 mkdir -p $D
 nvidia-smi --query-gpu=index,utilization.gpu,memory.used,clocks.sm,power.draw --format=csv
 
-# 1) OUR full latency-vs-r curve (shipping dispatch), M=2048 + 8192
-PYTHONPATH=$ROOT TORCH_EXTENSIONS_DIR=$ROOT/.torchext \
-  python3 promix/eval/rd_oppareto_ours.py --ms 2048,8192 --out $D/ours_curve.json
+# 1) OUR full latency-vs-r curve (shipping dispatch), M=2048 + 8192 —
+#    one invocation per shape so each shape's JSON is a harvestable checkpoint
+for S in 3B:qkvo 3B:gate_up 3B:down 8B:qkvo 8B:gate_up 8B:down; do
+  TAG=$(echo $S | tr ':' '_')
+  PYTHONPATH=$ROOT TORCH_EXTENSIONS_DIR=$ROOT/.torchext \
+    python3 promix/eval/rd_oppareto_ours.py --ms 2048,8192 --shapes $S \
+    --out $D/ours_curve_$TAG.json
+done
 
 # 2) torch-native FP4 / FP8 / bf16 points
 PYTHONPATH=$ROOT TORCH_EXTENSIONS_DIR=$ROOT/.torchext \

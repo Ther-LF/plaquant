@@ -10,7 +10,7 @@ Long format, one row per plotted element:
 
 Run from repo root: python3 promix/eval/rd_oppareto_agg.py
 """
-import csv, json, os
+import csv, glob, json, os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -47,7 +47,11 @@ def main():
     out = []
 
     # ---- ours: full curve + fp16 anchor ----
-    for r in load("ours_curve.json"):
+    ours_rows = []
+    for p in sorted(glob.glob(os.path.join(D, "ours_curve*.json"))):
+        with open(p) as f:
+            ours_rows += json.load(f)["rows"]
+    for r in ours_rows:
         if r.get("dispatch") == "fp16_cublas":
             out.append(row("point", "fp16_cublas", r, eff_bits=16.0,
                            tflops=r.get("tflops", ""), dispatch="fp16_cublas"))
