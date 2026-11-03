@@ -123,6 +123,21 @@ class PromixConfig(QuantizationConfig):
 
     @classmethod
     def from_config(cls, config: dict) -> "PromixConfig":
+        # vllm-ring512: the activation quantizers live in JIT-compiled producers
+        # whose act-MSE search width is fixed by compile flags read from env at
+        # load_kernels() time. Default the env from the CHECKPOINT's recorded
+        # act_mse block so serving reproduces the exporter's reference without
+        # manual env plumbing (explicit env still wins via setdefault).
+        am = config.get("act_mse") or {}
+        if am:
+            os.environ.setdefault("PROMIX_ACT_MSE",
+                                  "1" if am.get("enabled", True) else "0")
+            os.environ.setdefault("PROMIX_ACT_MSE_FAST",
+                                  "1" if am.get("fast", True) else "0")
+            os.environ.setdefault("PROMIX_ACT_MSE_STEPS",
+                                  str(int(am.get("steps", 3))))
+            os.environ.setdefault("PROMIX_ACT_MSE_STEPS_UP",
+                                  str(int(am.get("steps_up", 0))))
         return cls(
             k_high=cls.get_from_keys(config, ["k_high"]),
             hadamard_down_proj=cls.get_from_keys_or(
