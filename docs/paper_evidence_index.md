@@ -35,6 +35,8 @@
 | 融合的独立价值(vs 同算法朴素 2-launch) | 1.33×(3B)/1.28×(8B)geomean,随 M→1.7× | `rd_torchfp4_report.md` |
 | INT4 系对手在 Blackwell 不可行 | QuaRot 慢 FP16 4.2-6.8×(所有 M);QServe 编不过;Atom s4→INT8 | `rd_largem_report.md`、peers RESULTS |
 | 单 launch 双格式 kernel 达 CUTLASS TC 平价 | alu/tc≈1、ACTIVE 入 CUTLASS 带(co-design 分析) | `b1_opt_round13/14/15/16_report.md` |
+| **算子 Pareto 曲线(终版 kernel,132 点)** | r≤1/8 全平坦区(距曲线最低 6-11%);r=1/8 在 M=8192 反而比 r=0 快 4-23%;保护代价 = 比"无保护纯FP4上限"(cuBLASLt)仅 +11-28%,为所有保护机制里最便宜;对手:ARCQuant 平手±8%、SharQ 赢 1.11-1.5×、MicroMix 赢 1.4-2.9×、vLLM-NVFP4 赢 11/12;loop 把端点提速 1.37-1.86× | `rd_operator_pareto.md` + `.csv` |
+| **64 对齐悬崖(设计验证)** | K_high%64==32 的半环配置慢 15-40% —— 生产分配器只发 64 倍数,天然避开;= 64-环原子选择的实证 | `rd_oppareto_data/misaligned_khalf32_pass.json` |
 
 ## 4. serving claims(vLLM 0.32 同栈,FINAL)
 
