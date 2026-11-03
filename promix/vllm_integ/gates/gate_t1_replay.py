@@ -112,9 +112,14 @@ def main():
             xr = matmul_hadU_cuda(
                 x, None if had_K is None else had_K.to(dev), Kfac,
                 fold_scale=qcfg.get("fold_had_scale", True)).to(x.dtype)
-        elif kind == "o_proj" and qcfg.get("o_proj_reorder", True):
-            order = state[members[0] + ".column_order"].to(dev, torch.long)
-            xr = x[..., order]
+        # vllm-ring512: generic runtime input gather (any reordered prefix —
+        # ring-substrate measured allocation; column_order lives at the merged
+        # module name). Applied AFTER the down_proj Hadamard, matching
+        # ActQuantWrapper.forward and the plugin.
+        okey = prefix + ".column_order"
+        if okey in state:
+            order = state[okey].to(dev, torch.long)
+            xr = xr[..., order]
         y_ref = mql(xr)
 
         eq = torch.equal(y_ref, y_vllm)

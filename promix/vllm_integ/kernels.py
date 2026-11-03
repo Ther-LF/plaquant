@@ -27,8 +27,10 @@ def act_mse_cflags():
         return []
     fast = 0 if os.environ.get("PROMIX_ACT_MSE_FAST", "1") == "0" else 1
     steps = int(os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
+    steps_up = int(os.environ.get("PROMIX_ACT_MSE_STEPS_UP", "0"))
     return ["-DPROMIX_ACT_MSE=1", f"-DPROMIX_ACT_MSE_FAST={fast}",
-            f"-DPROMIX_ACT_MSE_STEPS={steps}"]
+            f"-DPROMIX_ACT_MSE_STEPS={steps}",
+            f"-DPROMIX_ACT_MSE_STEPS_UP={steps_up}"]
 
 
 def load_kernels():

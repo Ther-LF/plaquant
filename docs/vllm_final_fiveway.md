@@ -48,10 +48,20 @@ Llama-3-8B ("8B"). One GPU per engine, otherwise-idle card.
 | AWQ-Marlin W4A16 | 8.48 | 6.73 | **bf16 (not quantized)** |
 | NVFP4 W4A4 | 8.63 | 6.87 | fp4 static |
 | ct-MXFP4 W4A4 (ext) | not servable on SM120 | — | mxfp4 dynamic |
-| **ProMix W4A4 (served config, real kernel)** | **8.370** | **6.640** | fp4+1/8 mxfp8, act-MSE |
-| ProMix decode-route (marlin W4A16 m<=16 windows active) | 8.047 | — | w4a16 at small M |
+| **ProMix W4A4 (served config, real kernel, ring512+measured substrate)** | **8.282** | **6.628** | fp4+1/8 mxfp8, act-MSE d3u2 |
+| ProMix decode-route (marlin W4A16 m<=16 windows active, ring512 ckpt) | 8.033 | — | w4a16 at small M |
 
-ProMix is the most accurate W4A4 row: −0.26 PPL vs NVFP4 at 3B, −0.23 at 8B
+> **Substrate update (2026-11-03, vllm-ring512):** the served ProMix
+> checkpoints moved from the dense-R1 substrate to the promoted
+> **ring512 R-on substrate + global measured-ΔD allocation + per-model
+> acctune stack** (docs/rd_accuracy_tuning.md). Shared-g references moved
+> 8.3646 → **8.2785** (3B) and 6.6363 → **6.6269** (8B); the vLLM-scored
+> numbers above are the new checkpoints' gate-T2 (graphs) values (old: 8.370 /
+> 6.640). A 1B checkpoint now exists too (shared-g 14.2736, vLLM 14.267).
+> Gates (T0/T1 bit-exact, T2 |Δ| ≤ 0.013) + same-session serving parity A/B in
+> `docs/vllm_ring512_export.md`.
+
+ProMix is the most accurate W4A4 row: −0.35 PPL vs NVFP4 at 3B, −0.24 at 8B
 W4A16 rows keep bf16 activations (no activation
 quantization cost) and are the weight-only reference, not a same-condition
 W4A4 comparison. 3B/8B BF16, GPTQ, AWQ, NVFP4 from
@@ -59,6 +69,14 @@ W4A4 comparison. 3B/8B BF16, GPTQ, AWQ, NVFP4 from
 measured this campaign (`/home/luofan/baselines/results/*.json` on the host).
 
 ## 3. Serving tables
+
+> **Substrate note (vllm-ring512):** the ProMix rows below were measured on
+> the dense-substrate checkpoints during this campaign. The ring512+measured
+> checkpoints were A/B-served same-session at the key points (decode-heavy
+> b16/b128/b256 + prefill L2048, both sizes): decode b16 is FASTER (3B −6.8 %,
+> 8B −4.1 % — pure-NVFP4 down_proj marlin route), large-batch decode/prefill
+> within +2–4 % (ring-granularity cost); see `docs/vllm_ring512_export.md`.
+> The tables are kept as the campaign's measured record.
 
 Cases: prefill-heavy ISL/OSL 1024/128, decode-heavy 128/1024, prefill-only
 TTFT L2048, QServe-protocol continuous batching 1024/512 at concurrency

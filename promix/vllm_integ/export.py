@@ -187,11 +187,12 @@ def vllm_prefix_key(name, short):
 
 
 def export_checkpoint(model, packed, meta, linear_sf, out_dir, config,
-                      ref_ppl_sharedg, ref_ppl_perproj):
+                      ref_ppl_sharedg, ref_ppl_perproj, provenance=None):
     from safetensors.torch import save_file
     os.makedirs(out_dir, exist_ok=True)
     state = {}
     k_high_map = {}
+    order_map = {}   # merged full HF prefix -> column_order (int32, cpu)
     for name, short, wrapper in fn.iter_target_wrappers(model):
         pk = packed[name]
         sf_lo, sf_hi = linear_sf[name]
@@ -202,13 +203,32 @@ def export_checkpoint(model, packed, meta, linear_sf, out_dir, config,
             state[name + ".weight_hi_scale"] = sf_hi.cpu()
         state[name + ".weight_global_scale"] = torch.tensor([pk.g_w], dtype=torch.float32)
         assert pk.bias is None, f"{name}: llama linears are bias-free"
-        if short == "o_proj":
-            order = getattr(wrapper, "_column_order", None)
-            if order is not None:
-                state[name + ".column_order"] = order.to(torch.int32).cpu()
         key = vllm_prefix_key(name, short)
-        prev = k_high_map.setdefault(key, pk.K_high)
-        assert prev == pk.K_high, f"{key}: inconsistent K_high within merged group"
+        # column reorder export (generalized for the ring-substrate measured
+        # allocation: ANY reorder_before_quant Linear serves with a runtime
+        # input gather, not just o_proj). Identity orders are dropped (no
+        # gather needed); merged-group members must agree bit-for-bit.
+        order = getattr(wrapper, "_column_order", None)
+        if order is not None and getattr(wrapper, "reorder_before_quant", False):
+            order = order.to(torch.int32).cpu()
+            if torch.equal(order, torch.arange(order.numel(), dtype=torch.int32)):
+                order = None   # identity — no runtime gather
+        else:
+            order = None
+        full_prefix = "model." + key   # HF module path of the merged linear
+        if key in k_high_map:
+            prev_o = order_map.get(full_prefix)
+            assert (prev_o is None) == (order is None) and (
+                order is None or torch.equal(prev_o, order)), (
+                f"{key}: merged-group members disagree on column_order")
+            assert k_high_map[key] == pk.K_high, \
+                f"{key}: inconsistent K_high within merged group"
+        else:
+            k_high_map[key] = pk.K_high
+            if order is not None:
+                order_map[full_prefix] = order
+    for full_prefix, order in order_map.items():
+        state[full_prefix + ".column_order"] = order
 
     # non-quantized weights (fp16, HF Llama names)
     state["model.embed_tokens.weight"] = model.model.embed_tokens.weight.data.to(torch.float16).cpu()
@@ -223,7 +243,7 @@ def export_checkpoint(model, packed, meta, linear_sf, out_dir, config,
     save_file(state, os.path.join(out_dir, "model.safetensors"))
     print(f"wrote model.safetensors ({len(state)} tensors)", flush=True)
 
-    o_proj_reorder = any(k.endswith(".column_order") for k in state)
+    o_proj_reorder = any(p.endswith(".o_proj") for p in order_map)
     d = model.config.to_dict()
     d["architectures"] = ["LlamaForCausalLM"]
     d["tie_word_embeddings"] = False
@@ -241,13 +261,21 @@ def export_checkpoint(model, packed, meta, linear_sf, out_dir, config,
             "enabled": os.environ.get("PROMIX_ACT_MSE", "1") != "0",
             "fast": os.environ.get("PROMIX_ACT_MSE_FAST", "1") != "0",
             "steps": int(os.environ.get("PROMIX_ACT_MSE_STEPS", "3")),
+            "steps_up": int(os.environ.get("PROMIX_ACT_MSE_STEPS_UP", "0")),
         },
+        # vllm-ring512: merged prefixes that serve with a runtime input gather
+        # (k_high-map key format). Old checkpoints lack this key -> plugin
+        # falls back to the legacy o_proj-only reorder behavior.
+        "reordered_prefixes": sorted(
+            p[len("model."):] for p in order_map),
         "weight_two_level": bool(qu.WEIGHT_TWO_LEVEL),
         "out_dtype": "float16",
         "reference_ppl_sharedg": ref_ppl_sharedg,
         "reference_ppl_perproj_g": ref_ppl_perproj,
         "source_config": os.path.basename(config.get("_path", "unknown")),
     }
+    if provenance:
+        d["quantization_config"]["provenance"] = provenance
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump(d, f, indent=2)
     tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
@@ -311,10 +339,33 @@ def main():
     ap.add_argument("--no-perproj-ppl", dest="perproj_ppl", action="store_false")
     ap.add_argument("--max-chunks", type=int, default=None,
                     help="limit eval/snapshot chunks (smoke runs)")
+    # vllm-ring512: acctune-recipe knobs (docs/rd_accuracy_tuning.md). Defaults
+    # keep the legacy dense/prepare_ptq_model path byte-identical.
+    ap.add_argument("--substrate", choices=["dense", "ring"], default="dense")
+    ap.add_argument("--ring_size", type=int, default=512)
+    ap.add_argument("--alloc", choices=["config", "measured"], default="config",
+                    help="config = legacy uniform high_fraction split; "
+                         "measured = global measured-deltaD ring allocation")
+    ap.add_argument("--gptq_nsamples", type=int, default=None)
+    ap.add_argument("--percdamp", type=float, default=None)
+    ap.add_argument("--collect_tokens", type=int, default=4096)
+    ap.add_argument("--calib_samples", type=int, default=16)
+    ap.add_argument("--resolve-paths", action="store_true",
+                    help="apply rd_ron.resolve_paths (local model dirs + "
+                         "per-head basis/rotation artifacts, acctune protocol)")
     args = ap.parse_args()
 
     config = load_config(args.config)
     config["_path"] = args.config
+    # vllm-ring512: acctune substrate/allocation knobs (docs/rd_accuracy_tuning.md)
+    if args.resolve_paths:
+        sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
+        import rd_ron
+        config = rd_ron.resolve_paths(config)
+    if args.gptq_nsamples is not None:
+        config["calibration"]["nsamples"] = args.gptq_nsamples
+    if args.percdamp is not None:
+        config["quantize"]["percdamp"] = args.percdamp
     # keep the pack fallback in sync with the config (r-sweep exports); the
     # per-wrapper configured high_bits_length still takes precedence.
     global HIGH_FRACTION
@@ -325,7 +376,46 @@ def main():
     print("Loading kernels (JIT may take minutes)...", flush=True)
     nv, mx, cd, qpf = load_kernels()
 
-    model = prepare_ptq_model(config, DEV, run_gptq=args.gptq)
+    if args.substrate == "ring" or args.alloc == "measured":
+        # acctune build path: ring-R1 substrate + global measured-deltaD ring
+        # allocation via the proven rd_validity machinery (the same build that
+        # produced the docs/rd_accuracy_tuning.md anchors). GPTQ always runs
+        # inside rv.build_eval.
+        sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
+        import rd_validity as rv
+        ring_r1 = args.substrate == "ring"
+        chosen = None
+        if args.alloc == "measured":
+            tok0 = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
+            calib = get_wikitext2(nsamples=args.calib_samples,
+                                  seed=config["calibration"].get("seed", 0),
+                                  seqlen=2048, tokenizer=tok0, eval_mode=False)
+            cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
+                                   ring_size=args.ring_size)
+            cmodel.to(DEV)
+            stats = rv.collect_stats(cmodel, calib,
+                                     max_tokens=args.collect_tokens,
+                                     ring=args.ring_size)
+            del cmodel
+            cleanup_memory()
+            total_rings = sum(stats[n]["nr"] for n in stats)
+            budget = int(round(HIGH_FRACTION * total_rings))
+            chosen = rv.measured_alloc(stats, budget, total_rings)
+            nsel = sum(len(v) for v in chosen.values())
+            print(f"ALLOC total_rings={total_rings} sel={nsel} "
+                  f"(frac={nsel/total_rings:.4f})", flush=True)
+        model = rv.build_eval(config, r1_off=False, chosen=chosen,
+                              ring_r1=ring_r1, ring_size=args.ring_size)
+    else:
+        model = prepare_ptq_model(config, DEV, run_gptq=args.gptq)
+    provenance = {
+        "substrate": args.substrate, "ring_size": args.ring_size,
+        "alloc": args.alloc,
+        "gptq_nsamples": config["calibration"].get("nsamples"),
+        "percdamp": config["quantize"].get("percdamp"),
+        "weight_mse_steps": int(qu._MSE_STEPS),
+        "act_mse_steps_up": int(os.environ.get("PROMIX_ACT_MSE_STEPS_UP", "0")),
+    }
     model.to(DEV)
     model.seqlen = config["eval"]["max_length"]
     tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
@@ -365,7 +455,8 @@ def main():
                 max_chunks=args.max_chunks)
 
     export_checkpoint(model, packed_sg, meta, linear_sf, args.out, config,
-                      ref_ppl_sharedg=ppl_sharedg, ref_ppl_perproj=ppl_perproj)
+                      ref_ppl_sharedg=ppl_sharedg, ref_ppl_perproj=ppl_perproj,
+                      provenance=provenance)
     print("EXPORT_DONE", flush=True)
 
 
