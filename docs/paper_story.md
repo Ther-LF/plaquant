@@ -127,7 +127,7 @@ ProMix vs:fp16 **2.3-3.1×**、vLLM-NVFP4 1.0-1.53×、SharQ 1.12-1.51×、Micro
 - 叙事顺序建议:硬件拐点(INT4 死、FP4 生)→ 单点方法的局限 → 三个观察 → 方法 → 曲线结果 → 机制 → 系统;
 - "数值对齐 gate 方法论"(T0/T1/T2 + 签名 ΔPPL)可写成 systems 小节,是可复现性卖点;
 - 所有"诚实负收益/负结果"保留(4 个 kernel 负收益、loss 加权、CoQuant 未复现、小 batch 输 Marlin)—— 它们是信誉资产;
-- 进行中(写作时留占位):ring512→serving 导出(serving 表精度列将更新)、KV4 行。
+- ✅ ring512→serving 已落地(2026-11-03):served 精度 1B 14.267 / 3B 8.282 / 8B 6.628(shared-g,gate 全绿;serving 平价,decode b16 还快 4-7%)—— serving 表(Tab.2)精度列用这组;KV4 行仍在收尾(占位)。
 
 ---
 ## 附:配套精确蓝本

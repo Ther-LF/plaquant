@@ -53,7 +53,7 @@
 
 ## 5. 待收尾(进行中)
 
-- ring512 基座 → vLLM serving 导出(新锚点进 serving 表)— `feat/vllm-integ` 跑中
+- ✅ ring512 → serving 已落地:served 1B 14.267/3B 8.282/8B 6.628(`vllm_ring512_export.md`;fiveway ProMix 行已更新)
 - KV4 16ch 修复 + W4A4KV4 公平行 — `feat/rd-kv4` 跑中
 
 ## 总定位
