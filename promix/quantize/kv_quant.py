@@ -14,6 +14,7 @@ import torch.nn as nn
 
 from promix.quantize.quant_utils import (
     ActQuantizer, AsymSTEQuantize, STEQuantize, _quant_enabled, get_minq_maxq,
+    kv_fp_high_length,
 )
 from promix.utils import HadamardTransform
 
@@ -351,8 +352,17 @@ def setup_k_quant(model, config, basis_path, rotation_path):
     head_dim = model.config.hidden_size // model.config.num_attention_heads
     high_fraction = qcfg['high_fraction']
     low_fraction = qcfg.get('low_fraction', 0.0)
-    high_bits_length = int(high_fraction * head_dim)
-    low_bits_length = int(low_fraction * head_dim)
+    if isinstance(k_bits, str):
+        # FP block-scaled K cache (rd-kv4): align the per-head high segment
+        # to the MXFP8/NVFP4 block grid (lever-6 blocker: int(head_dim*hf)
+        # = 16 or 8 < the MXFP8 block of 32). Same policy knob as the
+        # V path in configure_quantizers.
+        high_bits_length = kv_fp_high_length(
+            head_dim, high_fraction, qcfg.get('kv_fp_high', 'up'))
+        low_bits_length = 0
+    else:
+        high_bits_length = int(high_fraction * head_dim)
+        low_bits_length = int(low_fraction * head_dim)
 
     k_quant_config = {
         "k_bits": k_bits,
