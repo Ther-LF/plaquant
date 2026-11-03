@@ -128,3 +128,9 @@ ProMix vs:fp16 **2.3-3.1×**、vLLM-NVFP4 1.0-1.53×、SharQ 1.12-1.51×、Micro
 - "数值对齐 gate 方法论"(T0/T1/T2 + 签名 ΔPPL)可写成 systems 小节,是可复现性卖点;
 - 所有"诚实负收益/负结果"保留(4 个 kernel 负收益、loss 加权、CoQuant 未复现、小 batch 输 Marlin)—— 它们是信誉资产;
 - 进行中(写作时留占位):ring512→serving 导出(serving 表精度列将更新)、KV4 行。
+
+---
+## 附:配套精确蓝本
+- **算法规格**(记号/公式/三个伪代码/发货配置):`docs/paper_algorithm.md`
+- **kernel 设计与优化**(结构/杠杆清单/TC-平价研究/纪律/图表):`docs/paper_kernel.md`
+- **证据索引**(claim→文件→数字):`docs/paper_evidence_index.md`
