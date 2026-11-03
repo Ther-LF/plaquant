@@ -603,8 +603,7 @@ class MixedQuantLinear(nn.Module):
         Used by the vLLM plugin for down_proj: the GEMV consumes an fp16
         activation (so the torch Hadamard must run first), while the GEMM route
         can use the fused Hadamard+pack producer instead."""
-        use_dec = (self._dg is not None and not self.is_pure_nvfp4
-                   and self.W_lo_dec is not None)
+        use_dec = (self._dg is not None and self.W_lo_dec is not None)
         if not use_dec:
             return False
         if M == 1:
@@ -623,8 +622,21 @@ class MixedQuantLinear(nn.Module):
         r5 lever 1: `marlin_high` (MarlinHigh) is the MXFP8-marlin tensor-core
         high companion; inside the measured _MARLIN_HI_TABLE window it replaces
         the hi_add GEMV (which scales ~linearly in M). None keeps the pure-r4
-        route."""
-        if (self._dg is None or self.is_pure_nvfp4 or self.S_hi_dec is None
+        route.
+
+        vllm-ring512: pure-NVFP4 Linears (K_high==0) need NO high companion at
+        all — marlin alone covers the whole weight, so the dg/S_hi_dec/hi_add
+        requirements are waived."""
+        if self.is_pure_nvfp4:
+            if self._dg is None:
+                return False
+            self._marlin = marlin_low
+            self._marlin_win = _MARLIN_TABLE.get((self.N, self.K))
+            self._marlin_hi_warps = int(hi_warps)
+            self._marlin_hi = None
+            self._marlin_hi_mlo = _MARLIN_HI_TABLE.get((self.N, self.K), 8)
+            return True
+        if (self._dg is None or self.S_hi_dec is None
                 or self.S_hi_dec.dtype != torch.float32
                 or not hasattr(self._dg, "decode_gemv_w8a16_hi_add")):
             return False
@@ -652,7 +664,7 @@ class MixedQuantLinear(nn.Module):
         capture-safe (r1 pattern)."""
         if self._marlin is None or self._marlin_win is None or M == 1:
             return False
-        if M > 32 and not self._hi_marlin_route(M):
+        if M > 32 and not self.is_pure_nvfp4 and not self._hi_marlin_route(M):
             return False      # hi_add kernel bound (M<=32)
         m_lo, m_hi = self._marlin_win
         return m_lo <= M <= min(m_hi, _marlin_env_mmax())
@@ -666,6 +678,8 @@ class MixedQuantLinear(nn.Module):
         xh = x2d if x2d.dtype == torch.float16 else x2d.to(torch.float16)
         x_lo = xh[:, :self.K_low].contiguous()
         Y = self._marlin.gemm(x_lo)
+        if self.K_high == 0:
+            return Y   # pure-NVFP4: marlin covers the whole weight, no hi add
         if self._hi_marlin_route(xh.shape[0]):
             # bf16 slice-cast: marlin's e8m0 kernels are bf16-activation-only
             # (see MarlinHigh.gemm); the W4A4 reference quantizes this slice
@@ -689,9 +703,12 @@ class MixedQuantLinear(nn.Module):
         return self.gemv_route(M) or self.marlin_route(M)
 
     def can_had_pack(self):
-        """True iff forward_had_pack is available for this Linear's K."""
-        if self.is_pure_nvfp4:
-            return False
+        """True iff forward_had_pack is available for this Linear's K.
+
+        vllm-ring512: pure-NVFP4 (K_high==0, e.g. the ring512+measured
+        allocation's down_proj) is allowed — both hadamard_pack entries
+        TORCH_CHECK `K_high % 32 == 0 || K_high == 0` and emit an (M, 0) high
+        pair that the single-phase _gemm ignores."""
         if self.K == 8192:
             return self._hpk is not None and hasattr(self._hpk, "hadamard_pack_mixed")
         if self.K == 14336:

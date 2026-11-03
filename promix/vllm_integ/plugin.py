@@ -285,10 +285,11 @@ class PromixLinearMethod(LinearMethodBase):
         # GEMV's even-k-low-nibble layout; weight_hi_bytes is raw FP8), plus raw
         # FP32 effective block scales with the per-tensor g folded in — exactly
         # pack_weight_mixed's W_*_dec/S_*_dec recipe.
-        if dg is not None and K_high > 0:
+        if dg is not None:
             packed.W_lo_dec = packed.W_lo_packed                     # shared bytes
             packed.W_hi_dec = packed.W_hi_bytes                      # shared bytes
-            if (os.environ.get("PROMIX_DECODE_SF8", "0") == "1"
+            if (K_high > 0
+                    and os.environ.get("PROMIX_DECODE_SF8", "0") == "1"
                     and os.environ.get("PROMIX_DECODE_MODE", "w4a16") != "w4a4"
                     and hasattr(dg, "decode_gemv_w4a16_sf8")):
                 # vllm-perf r2 (secondary lever): stream the checkpoint's RAW
@@ -304,7 +305,9 @@ class PromixLinearMethod(LinearMethodBase):
                 packed.S_lo_dec = (layer.weight_lo_scale.data
                                    .view(torch.float8_e4m3fn).float() * g).contiguous()
                 packed.S_hi_dec = (torch.exp2(
-                    layer.weight_hi_scale.data.float() - 127.0) * g).contiguous()
+                    layer.weight_hi_scale.data.float() - 127.0) * g).contiguous() \
+                    if K_high > 0 else \
+                    torch.empty((N, 0), dtype=torch.float32, device=dev)
         # down_proj online-Hadamard setup (needed before mql construction: the
         # fused Hadamard+pack producer takes the CPU 28x28 had_K for K=14336).
         had_K, Kfac = None, 1
@@ -330,7 +333,7 @@ class PromixLinearMethod(LinearMethodBase):
                                                     marlin_hi_enabled,
                                                     prepack_marlin_high,
                                                     prepack_marlin_low)
-        if marlin_enabled() and dg is not None and K_high > 0:
+        if marlin_enabled() and dg is not None:
             try:
                 ml = prepack_marlin_low(packed.W_lo_packed,
                                         layer.weight_lo_scale.data.contiguous(),
@@ -343,8 +346,9 @@ class PromixLinearMethod(LinearMethodBase):
                 # near-flat in M. g rides the companion's add alpha. Memory:
                 # a second copy of the high-segment bytes (~K_high/K of the
                 # weight). PROMIX_MARLIN_HI=0 restores the r4 hi_add-only route.
+                # vllm-ring512: pure-NVFP4 (K_high==0) needs no companion.
                 mh = None
-                if marlin_hi_enabled():
+                if marlin_hi_enabled() and K_high > 0:
                     mh = prepack_marlin_high(packed.W_hi_bytes,
                                              layer.weight_hi_scale.data.contiguous(),
                                              g, N, K_high)
