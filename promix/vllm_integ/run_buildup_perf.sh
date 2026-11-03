@@ -57,6 +57,26 @@ model_ladder() {  # model_ladder <3b|8b> <ckpt>
   serve_step $ck pb_${m}_s6_fusions  "$S6"
 }
 
+serve_step16() {  # small-batch pass: decode b16 (where the GEMV/marlin
+  local ck=$1 tag=$2 envstr=$3   # m<=16 windows actually engage)
+  if [ -f $OUT/$tag.json ]; then echo "SKIP $tag"; return; fi
+  env $envstr $P -m promix.vllm_integ.bench_serve --model $ck \
+    --tag $tag --dtype float16 \
+    --batches 16 --cases 128:1024 --prefill-len 2048 \
+    --max-model-len 4096 --gpu-mem-util 0.90 \
+    --extra-llm-kwargs '{"max_num_seqs":512}' \
+    --out $OUT/$tag.json > $OUT/$tag.log 2>&1
+}
+
+model_ladder_b16() {
+  local m=$1 ck=$2
+  serve_step16 $ck pb_${m}_b16_s2_fused_r0 "$S2"
+  serve_step16 $ck pb_${m}_b16_s3_dispatch "$S3"
+  serve_step16 $ck pb_${m}_b16_s4_splitk   "$S4"
+  serve_step16 $ck pb_${m}_b16_s5_gemv     "$S5"
+  serve_step16 $ck pb_${m}_b16_s6_fusions  "$S6"
+}
+
 naive_gemm() {
   # step-1 material: torch-native 2-launch (torchmix2) vs ours, GEMM-only,
   # decode-M (128) and prefill-chunk-M (8192); container base env.
@@ -64,12 +84,17 @@ naive_gemm() {
     python -m promix.eval.gemm_h2h_torchfp4 --models 3B,8B --ms 128,8192 \
       --out $OUT/h2h_naive.json > $OUT/h2h_naive.log 2>&1
   fi
+  if [ ! -f $OUT/h2h_naive_m16.json ]; then
+    python -m promix.eval.gemm_h2h_torchfp4 --models 3B,8B --ms 16 \
+      --out $OUT/h2h_naive_m16.json > $OUT/h2h_naive_m16.log 2>&1
+  fi
 }
 
 case ${1:-all} in
   3b)    model_ladder 3b $CK3 ;;
   8b)    model_ladder 8b $CK8 ;;
   naive) naive_gemm ;;
+  b16)   naive_gemm; model_ladder_b16 3b $CK3; model_ladder_b16 8b $CK8 ;;
   all)   naive_gemm; model_ladder 3b $CK3; model_ladder 8b $CK8 ;;
   *) echo "unknown phase $1"; exit 1 ;;
 esac
