@@ -101,6 +101,11 @@ ROWS = {
     # weight/activation compensation on the raw model.
     "norot_full": dict(substrate="none", hf=0.0, weights="gptq",
                        alloc="pure", env="full"),
+    # CONTROL 2 (attribution for norot_full's regression): same but act-MSE
+    # OFF — separates GPTQ+weight-scale from the activation scale search
+    # (hypothesis: MSE-optimal act scales CLIP the unrotated outliers).
+    "norot_gw": dict(substrate="none", hf=0.0, weights="gptq",
+                     alloc="pure", env="wmse"),
 }
 
 
