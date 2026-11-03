@@ -60,27 +60,27 @@ bf16_8b)
 # ---- peers as-shipped (quantize exactly as the committed PPL runs) ----------
 arc_3b)
   cd /home/luofan/baselines/peers/arcquant/ARCQuant && \
-  $ACL $PEER_SCRIPT --peer arcquant --repo . \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $ACL $PEER_SCRIPT --peer arcquant --repo . \
     --model /home/luofan/models/Llama-3.2-3B --quant NVFP4 --datasets none \
-    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 32 \
+    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 8 \
     --out $OUT/arc_3b_mmlu.json ;;
 arc_8b)
   cd /home/luofan/baselines/peers/arcquant/ARCQuant && \
-  $ACL $PEER_SCRIPT --peer arcquant --repo . \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $ACL $PEER_SCRIPT --peer arcquant --repo . \
     --model /home/luofan/models/llama-3-8b --quant NVFP4 --datasets none \
-    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 16 \
+    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 4 \
     --out $OUT/arc_8b_mmlu.json ;;
 sharq_3b)
   cd /home/luofan/baselines/peers/sharq/SharQ && \
-  $ACL $PEER_SCRIPT --peer sharq --repo . \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $ACL $PEER_SCRIPT --peer sharq --repo . \
     --model /home/luofan/models/Llama-3.2-3B --quant SHARQ --datasets none \
-    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 32 \
+    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 8 \
     --out $OUT/sharq_3b_mmlu.json ;;
 sharq_8b)
   cd /home/luofan/baselines/peers/sharq/SharQ && \
-  $ACL $PEER_SCRIPT --peer sharq --repo . \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $ACL $PEER_SCRIPT --peer sharq --repo . \
     --model /home/luofan/models/llama-3-8b --quant SHARQ --datasets none \
-    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 16 \
+    --lmeval_tasks mmlu --num_fewshot 5 --lmeval_batch 4 \
     --out $OUT/sharq_8b_mmlu.json ;;
 # ---- vLLM-NVFP4 (llm-compressor ckpt through lm-eval vllm backend) ----------
 nv_3b)
