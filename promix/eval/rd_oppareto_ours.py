@@ -26,8 +26,7 @@ os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
 from promix.eval.full_network_realkernel import load_kernels  # noqa: E402
 from promix.vllm_integ.kernels import load_smallm, load_splitk, load_cd_bias  # noqa: E402
 from promix.quantize.weight_pack import pack_weight_mixed  # noqa: E402
-from promix.quantize.mixed_linear import (MixedQuantLinear, _SPLITK_TABLE,  # noqa: E402
-                                          _SMALLM_TABLE)
+from promix.quantize.mixed_linear import MixedQuantLinear  # noqa: E402
 
 DEV = "cuda"
 RING = 64   # rd_validity RING — one NVFP4 ring kept at the r=1 end
@@ -122,8 +121,18 @@ def main():
     ap.add_argument("--ms", default="2048,8192")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-graph", action="store_true")
+    ap.add_argument("--shapes", default="",
+                    help="comma list of model:shape filters, e.g. 3B:qkvo,8B:down")
+    ap.add_argument("--rs", default="", help="comma list of nominal r to run")
     args = ap.parse_args()
     ms = [int(x) for x in args.ms.split(",")]
+    shapes = SHAPES
+    if args.shapes:
+        want = set(args.shapes.split(","))
+        shapes = [s for s in SHAPES if f"{s[0]}:{s[1]}" in want]
+    r_grid = R_GRID
+    if args.rs:
+        r_grid = [float(eval(x)) for x in args.rs.split(",")]
 
     nv, mx, cd, qpf = load_kernels()
     cd_sm, cd_sk, cd_bias = load_smallm(), load_splitk(), load_cd_bias()
@@ -131,13 +140,13 @@ def main():
           f"cd_bias={cd_bias is not None})", flush=True)
 
     rows = []
-    for mdl, name, N, K in SHAPES:
+    for mdl, name, N, K in shapes:
         torch.manual_seed(0)
         W = (torch.randn(N, K, device=DEV) * 0.08)
         for M in ms:
             x = torch.randn(M, K, device=DEV)
             ref = None
-            for r_nom in R_GRID:
+            for r_nom in r_grid:
                 K_high = snap_khigh(K, r_nom)
                 K_low = K - K_high
                 packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd)
