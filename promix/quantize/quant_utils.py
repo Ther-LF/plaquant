@@ -89,6 +89,53 @@ def _apply_fp_format(x, fmt):
     raise ValueError(f"Unsupported FP format identifier: {fmt!r}")
 
 
+# MXFP8 / NVFP4 hardware block sizes (docs/specs/spec-mxfp8-nvfp4.md).
+MXFP8_BLOCK = 32
+NVFP4_BLOCK = 16
+
+
+def kv_fp_high_length(head_dim, high_fraction, mode="up"):
+    """Block-aligned per-head KV high-segment length for FP KV quantization.
+
+    The rd-acctune lever-6 mechanical blocker: with per-head KV grouping
+    (k_groupsize = v_groupsize = head_dim), the raw high segment
+    ``int(head_dim * high_fraction)`` (16 for head_dim 128 at hf=1/8, 8 for
+    head_dim 64) is smaller than the MXFP8 block of 32, and the complementary
+    main segment can violate the NVFP4 block of 16 (56 % 16 != 0 for
+    head_dim 64) — so the W4A4KV4 FP configs could not run at all.
+
+    Policies (config knob ``quantize.kv_fp_high``):
+      mode="up"   (option a, default): round the high segment UP to the next
+                  multiple of 32. More KV channels get MXFP8 than the main
+                  path's hf (effective per-head hf = 32/head_dim: 1/4 at
+                  head_dim 128, 1/2 at head_dim 64); tiny KV-bit cost,
+                  simplest mechanically.
+      mode="zero" (option b, ablation): drop the high segment entirely —
+                  pure-NVFP4 KV ([main] only, head_dim % 16 must hold).
+
+    Returns the aligned high length. Raises ValueError if the result cannot
+    satisfy both block constraints (high % 32 == 0, (head_dim - high) % 16
+    == 0, high < head_dim).
+    """
+    raw = int(head_dim * high_fraction)
+    if mode == "zero":
+        high = 0
+    elif mode == "up":
+        high = 0 if raw == 0 else (
+            (raw + MXFP8_BLOCK - 1) // MXFP8_BLOCK * MXFP8_BLOCK)
+    else:
+        raise ValueError(
+            f"unknown kv_fp_high mode {mode!r}; expected 'up' or 'zero'")
+    main = head_dim - high
+    if main <= 0 or high % MXFP8_BLOCK != 0 or main % NVFP4_BLOCK != 0:
+        raise ValueError(
+            f"kv_fp_high_length: no valid aligned split for head_dim="
+            f"{head_dim}, high_fraction={high_fraction}, mode={mode!r} "
+            f"(got high={high}, main={main}; need high % {MXFP8_BLOCK} == 0, "
+            f"main % {NVFP4_BLOCK} == 0, main > 0)")
+    return high
+
+
 class STEQuantize(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, scale, maxq):
@@ -181,6 +228,26 @@ class ActQuantizer(nn.Module):
         # underlying helper (MXFP8 needs %32, NVFP4 needs %16).
         if isinstance(self.bits, str):
             x_dtype = x.dtype
+            init_shape = x.shape
+            # rd-kv4: honor groupsize on the FP path (the INT branch below
+            # always did). Needed by the per-head KV quantizers (V-cache
+            # out_quantizer on v_proj, groupsize = head_dim): the
+            # [low | main | high] split must apply WITHIN each head, because
+            # the per-head rotation places the high-variance channels at the
+            # tail of EACH head — splitting the flat (num_heads*head_dim)
+            # vector would route only the last head's tail to the high
+            # format. Zero-regression: every previously-working FP quantizer
+            # is configured with groupsize=-1 (this reshape is a no-op); the
+            # only FP user with groupsize>0 was the KV4 path, which crashed
+            # on block misalignment before this fix.
+            if self.groupsize > 0:
+                assert init_shape[-1] % self.groupsize == 0, (
+                    f"FP groupwise quantization requires last dim "
+                    f"({init_shape[-1]}) divisible by groupsize "
+                    f"({self.groupsize})"
+                )
+                x = x.reshape(*init_shape[:-1],
+                              init_shape[-1] // self.groupsize, self.groupsize)
             high_len = int(self.high_bits_length)
             low_len = int(self.low_bits_length)
             high_fmt = self.high_bits if isinstance(self.high_bits, str) else None
@@ -189,7 +256,7 @@ class ActQuantizer(nn.Module):
 
             # Single-format path (no high/low split): quantize whole tensor.
             if high_len == 0 and low_len == 0:
-                return _apply_fp_format(x, main_fmt).to(x_dtype)
+                return _apply_fp_format(x, main_fmt).reshape(init_shape).to(x_dtype)
 
             # Mixed: split [low_seg | main_seg | high_seg] along last dim.
             high_dim = x.shape[-1] - high_len
@@ -221,7 +288,7 @@ class ActQuantizer(nn.Module):
                     f"high_bits={self.high_bits!r}"
                 )
 
-            return torch.cat(parts, dim=-1).to(x_dtype)
+            return torch.cat(parts, dim=-1).reshape(init_shape).to(x_dtype)
 
         x_dtype = x.dtype
 

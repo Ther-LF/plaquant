@@ -23,6 +23,7 @@ from promix.quantize.quant_utils import (
     add_actquant,
     assert_quant_format,
     find_qlayers,
+    kv_fp_high_length,
 )
 from promix.quantize.hadamard import get_hadK
 from promix.quantize.kv_quant import setup_k_quant
@@ -141,8 +142,19 @@ def configure_quantizers(model, config):
 
         if "v_proj" in name and _quant_enabled(qcfg.get('v_bits', 16)):
             v_groupsize = head_dim
-            v_high = int(v_groupsize * high_fraction)
-            v_low = int(v_groupsize * low_fraction)
+            if isinstance(qcfg['v_bits'], str):
+                # FP block-scaled KV (rd-kv4): the raw per-head high segment
+                # int(head_dim * hf) violates the MXFP8/NVFP4 block grid
+                # (lever-6 blocker); align it per quantize.kv_fp_high
+                # ("up" = round to 32, "zero" = pure-NVFP4 KV). low segment
+                # is unused on the FP path (low_fraction = 0 in all FP
+                # configs).
+                v_high = kv_fp_high_length(
+                    head_dim, high_fraction, qcfg.get('kv_fp_high', 'up'))
+                v_low = 0
+            else:
+                v_high = int(v_groupsize * high_fraction)
+                v_low = int(v_groupsize * low_fraction)
             qlayers[name].out_quantizer.configure(
                 bits=qcfg['v_bits'],
                 groupsize=v_groupsize,

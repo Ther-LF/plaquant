@@ -97,6 +97,16 @@ def main():
     ap.add_argument("--percdamp", type=float, default=None)
     ap.add_argument("--act_order", action="store_true")
     ap.add_argument("--c4", action="store_true", help="also eval C4 PPL")
+    ap.add_argument("--kv4", action="store_true",
+                    help="rd-kv4: quantize the KV cache too (k_bits/v_bits = "
+                         "nvfp4, per-head grouping, MXFP8-aligned high "
+                         "segment). Off = byte-identical to the acctune "
+                         "anchor runs.")
+    ap.add_argument("--kv_high", choices=["up", "zero"], default="up",
+                    help="FP KV per-head high-segment policy (with --kv4): "
+                         "'up' rounds int(head_dim*hf) UP to 32 (option a); "
+                         "'zero' drops the KV high segment -> pure-NVFP4 KV "
+                         "(option b ablation)")
     ap.add_argument("--bridge", action="store_true",
                     help="also run the bf16 bridge (protocol gate)")
     ap.add_argument("--out", required=True)
@@ -116,6 +126,17 @@ def main():
         config["quantize"]["percdamp"] = args.percdamp
     if args.act_order:
         config["quantize"]["act_order"] = True
+    if args.kv4:
+        # rd-kv4 lever-6 fix: enable FP KV-cache quantization on top of any
+        # acctune stack. Any positive k_groupsize selects the per-head K
+        # path in QKRotationWrapper (the reshape uses the model's real
+        # head_dim); v grouping always uses head_dim. kv_fp_high is consumed
+        # by kv_fp_high_length (quant_utils) in configure_quantizers +
+        # setup_k_quant.
+        config["quantize"].update(
+            k_bits="nvfp4", v_bits="nvfp4", k_asym=True, v_asym=True,
+            k_groupsize=64, v_groupsize=64, kv_fp_high=args.kv_high,
+        )
     for p in (config["paths"]["basis"], config["paths"]["rotation"]):
         assert os.path.exists(p), f"missing artifact: {p}"
 
@@ -135,7 +156,8 @@ def main():
                 act_mse_steps_up=qu.ACT_MSE_STEPS_UP,
                 weight_mse_steps=qu._MSE_STEPS,
                 kv_bits=(config["quantize"].get("k_bits"),
-                         config["quantize"].get("v_bits")))
+                         config["quantize"].get("v_bits")),
+                kv_fp_high=config["quantize"].get("kv_fp_high"))
     results = {"meta": meta}
     print(f"START rd_acctune {json.dumps(meta)}", flush=True)
 

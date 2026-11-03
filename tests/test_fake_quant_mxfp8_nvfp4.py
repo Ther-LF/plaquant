@@ -3059,3 +3059,103 @@ def test_no_stale_ac9_terms_in_derived_docs():
             for p, ln, tid, excerpt in unexpected_hits
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# rd-kv4 (acctune lever-6 fix): per-head FP KV quantization.
+# 1. kv_fp_high_length — block-aligned per-head KV high segment.
+# 2. ActQuantizer FP branch groupsize support — the [low|main|high] split
+#    must apply WITHIN each head (group), not on the flat vector.
+# ---------------------------------------------------------------------------
+
+def test_kv_fp_high_length_up_mode():
+    from promix.quantize.quant_utils import kv_fp_high_length
+    # head_dim 128 @ hf 1/8: raw 16 -> aligned 32 (main 96 % 16 == 0)
+    assert kv_fp_high_length(128, 0.125, "up") == 32
+    # head_dim 64 @ hf 1/8: raw 8 -> aligned 32 (main 32 % 16 == 0)
+    assert kv_fp_high_length(64, 0.125, "up") == 32
+    # already aligned stays put: head_dim 128 @ hf 1/4 -> 32
+    assert kv_fp_high_length(128, 0.25, "up") == 32
+    # hf 0 -> no high segment
+    assert kv_fp_high_length(128, 0.0, "up") == 0
+
+
+def test_kv_fp_high_length_zero_mode():
+    from promix.quantize.quant_utils import kv_fp_high_length
+    assert kv_fp_high_length(128, 0.125, "zero") == 0
+    assert kv_fp_high_length(64, 0.125, "zero") == 0
+
+
+def test_kv_fp_high_length_rejects_bad_inputs():
+    from promix.quantize.quant_utils import kv_fp_high_length
+    with pytest.raises(ValueError):
+        kv_fp_high_length(128, 0.125, "sideways")   # unknown mode
+    with pytest.raises(ValueError):
+        kv_fp_high_length(32, 0.125, "up")          # high 32 >= head_dim
+    with pytest.raises(ValueError):
+        kv_fp_high_length(24, 0.125, "zero")        # main 24 % 16 != 0
+
+
+def test_act_quantizer_fp_groupsize_per_head_split():
+    """groupsize=head_dim must apply the [main|high] split within EACH head.
+
+    This is the V-cache (out_quantizer on v_proj) layout: the per-head
+    rotation places high-variance channels at the tail of each head. Before
+    rd-kv4 the FP branch ignored groupsize and split the flat vector, which
+    both mis-routed heads and violated MXFP8 block alignment.
+    """
+    from promix.quantize.quant_utils import ActQuantizer
+
+    head_dim, n_heads, high = 64, 4, 32
+    q = ActQuantizer()
+    q.configure(bits="nvfp4", groupsize=head_dim, sym=True,
+                high_bits_length=high, high_bits="mxfp8",
+                low_bits_length=0, low_bits="nvfp4")
+    torch.manual_seed(3)
+    x = torch.randn(2, 5, n_heads * head_dim, dtype=torch.float32)
+    out = q(x)
+    assert out.shape == x.shape
+    # Expected: per-head manual split.
+    exp = torch.empty_like(x)
+    for h in range(n_heads):
+        seg = x[..., h * head_dim:(h + 1) * head_dim]
+        exp[..., h * head_dim:h * head_dim + head_dim - high] = \
+            fake_quantize_nvfp4(seg[..., :head_dim - high])
+        exp[..., h * head_dim + head_dim - high:(h + 1) * head_dim] = \
+            fake_quantize_mxfp8(seg[..., head_dim - high:])
+    assert torch.equal(out, exp), (
+        "FP groupsize split does not match per-head manual quantization"
+    )
+
+
+def test_act_quantizer_fp_groupsize_minus1_unchanged():
+    """Zero-regression: groupsize=-1 FP output is byte-identical to the
+    pre-rd-kv4 flat split (all previously-working FP quantizers use -1)."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(bits="nvfp4", groupsize=-1, sym=True,
+                high_bits_length=32, high_bits="mxfp8",
+                low_bits_length=0, low_bits="nvfp4")
+    torch.manual_seed(4)
+    x = torch.randn(2, 5, 256, dtype=torch.float32)
+    out = q(x)
+    exp = torch.cat([fake_quantize_nvfp4(x[..., :224]),
+                     fake_quantize_mxfp8(x[..., 224:])], dim=-1)
+    assert torch.equal(out, exp)
+
+
+def test_act_quantizer_fp_groupsize_single_format():
+    """Pure-NVFP4 (kv_fp_high='zero' ablation): groupsize reshape must be a
+    value-level no-op when head_dim % 16 == 0 (blocks tile head boundaries)."""
+    from promix.quantize.quant_utils import ActQuantizer
+
+    q = ActQuantizer()
+    q.configure(bits="nvfp4", groupsize=64, sym=True,
+                high_bits_length=0, high_bits="nvfp4",
+                low_bits_length=0, low_bits="nvfp4")
+    torch.manual_seed(5)
+    x = torch.randn(3, 7, 256, dtype=torch.float32)
+    out = q(x)
+    assert out.shape == x.shape
+    assert torch.equal(out, fake_quantize_nvfp4(x))

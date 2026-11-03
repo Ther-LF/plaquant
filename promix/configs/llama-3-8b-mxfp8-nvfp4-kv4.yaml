@@ -23,6 +23,10 @@ quantize:
   v_asym: true
   k_groupsize: 128
   v_groupsize: 128
+  # rd-kv4: per-head FP KV high-segment alignment policy. "up" rounds
+  # int(head_dim * high_fraction) UP to the MXFP8 block (32); "zero" drops
+  # the KV high segment (pure-NVFP4 KV). See kv_fp_high_length().
+  kv_fp_high: "up"
   w_groupsize: -1
   w_clip: true
   percdamp: 0.01
