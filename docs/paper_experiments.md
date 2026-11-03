@@ -36,11 +36,11 @@
 ## 块 4:机制/内部分析
 
 全部 ✅(ΔD谱、三方gate、ε/gain、悬崖、衰减机理、down_proj 对照、校准2×2、loss加权、负收益)。
-**新增(用户定)E5 —— 系统组件逐项收益分解(cumulative build-up 表,"bias 实验")**:
+**新增(用户定)E5 —— 系统组件逐项收益分解(cumulative build-up 表,"bias 实验")** ✅ 已完成(`docs/rd_buildup_ablation.md`,feat/rd-buildup):
 - **精度侧**(同协议 3B 为主、1B/8B 复核):base(RTN 纯NVFP4 无旋转)→ +PCA U → +ring512 R1 → +GPTQ → +两级 weight scale → +act-MSE(d3u2)→ +measured 分配 → +decode-W4A16 —— **每步一行,累计 PPL**,一张表看清每个组件买了多少;
 - **性能侧**(vLLM serving,3B/8B b128):朴素 2-launch → 单 launch 融合 → +per-shape dispatch → +split-K → +GEMV/marlin 路由 → +pack/gather/cast 融合 —— 每步累计 TPOT/吞吐。
 - 素材大部分已散落(acctune 逐杠杆/perf rounds),但要**同一基底一次性重跑成干净的累计表**(消融表是论文核心,不能拼凑)。
-- **误差棒 E6**:headline 数字(3B/8B 的 ProMix 主点 + gate 三方)跑 3 个校准种子,报 mean±std。
+- **误差棒 E6**:headline 数字(3B/8B 的 ProMix 主点 + gate 三方)跑 3 个校准种子,报 mean±std。✅ 已完成(同上:3B 8.2158±0.0020 / 8B 6.5668±0.0026,gate 三方排序 3 seed 全稳)。
 
 ## 块 5:配方消融
 
@@ -55,7 +55,7 @@
 | E1 | MMLU 5-shot + 新配方 0-shot(ProMix/ARCQuant/SharQ/NVFP4/BF16 × 3B/8B) | 4 | 1 天 |
 | E2 | 32B/70B 规模扩展(可行性→精度→serving-带注) | 0-2 | 2-3 天(含下载)|
 | E4 | 算子 Pareto 终版复测(延迟 vs r 全曲线 + 对手点) | 6 | 半天 |
-| E5 | 组件累计消融(精度 build-up + 性能 build-up) | 5(精度)/7(性能) | 1-2 天 |
-| E6 | 3-seed 误差棒(headline 点) | 搭 E5 车道 | 半天 |
+| E5 | 组件累计消融(精度 build-up + 性能 build-up) ✅ `docs/rd_buildup_ablation.md` | 5(精度)/7(性能) | 完成 |
+| E6 | 3-seed 误差棒(headline 点) ✅ 同上 | 搭 E5 车道 | 完成 |
 | E3 | 8B r-sweep 补密 | 低优,E2 后 | — |
 | (KV4) | 🔄 进行中 | 3 | — |
