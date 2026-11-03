@@ -85,18 +85,21 @@ token-pooled 2048-chunk PPL; C4 = QuaRot 256×2048 validation windows.
 rd_scale reproduces the committed acctune points digit-for-digit —
 ring512 uniform 14.8557 / ring512 measured 14.2392 (+ sel_rings 72/576).
 
-- [ ] gate run — pending
+- [x] gate PASSED 2026-11-03: uniform **14.8557** (== committed 14.855731),
+  measured **14.2392** (== committed 14.239173), alloc sel_rings **72/576**
+  (== committed) — the offload stats path yields the identical allocation.
+  Raw: `docs/rd_scale_data/gate_1b_ring512_{uniform,measured}.json`.
 
 ## 3. Results (70B)
 
 | point | wikitext | C4 | notes |
 |---|---|---|---|
-| bf16 bridge | — | — | |
+| bf16 bridge | **5.3159** | **9.2036** | 803 s, layer-offload eval; Meta-Llama-3-70B-**Instruct** |
 | ring512 uniform-1/8 | — | — | |
 | ring512 measured-1/8 | — | — | |
 | dense uniform-1/8 (committed-ladder substrate) | — | — | stretch |
 | dense measured-1/8 | — | — | stretch |
-| vLLM NVFP4 W4A4 | — | — | llm-compressor quantize + vLLM prompt_logprobs |
+| vLLM NVFP4 W4A4 | — | — | llm-compressor quantize (GPUs 1-2, device_map=balanced) + vLLM prompt_logprobs; scripts: `/home/luofan/rdscale/{quantize_70b_nvfp4,ppl_70b_nvfp4}.py` |
 
 ## 4. Scaling verdict
 
