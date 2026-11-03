@@ -17,6 +17,7 @@ ROWS_3B = [
     ("3b_r6_wscale", "6. + two-level weight scale (micro-MSE)"),
     ("3b_r7_actmse", "7. + act-MSE scale search (d3u2)"),
     ("3b_r8_measured", "8. + measured-dD allocation"),
+    ("3b_c1_norot_full", "C. control: no-rotation + full weight/act stack"),
 ]
 PERF_STEPS = [
     ("s2_fused_r0", "2. single-launch fused GEMM (levers off)"),

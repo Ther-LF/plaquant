@@ -95,6 +95,12 @@ ROWS = {
                       alloc="uniform", env="full"),
     "measured":  dict(substrate="ring", hf=0.125, weights="gptq",
                       alloc="measured", env="full"),
+    # CONTROL (not a ladder row): strongest NO-ROTATION baseline = pure
+    # NVFP4 + GPTQ + two-level weight scale + act-MSE. Isolates the net
+    # end-point value of the rotation+partition substrate vs just stacking
+    # weight/activation compensation on the raw model.
+    "norot_full": dict(substrate="none", hf=0.0, weights="gptq",
+                       alloc="pure", env="full"),
 }
 
 

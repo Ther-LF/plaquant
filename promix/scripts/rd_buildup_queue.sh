@@ -71,6 +71,11 @@ e6_seeds() {
   done
 }
 
+controls() {
+  # strongest no-rotation pure-NVFP4 baseline (GPTQ + wscale + act-MSE)
+  row $CFG3 3b_c1_norot_full norot_full "$FULL_3B"
+}
+
 e6_gate() {
   # 3B three-way allocation gate (rd_validity, R1-off regime) x 3 seeds,
   # same-session protocol (seed 0 re-run for comparability)
@@ -88,6 +93,7 @@ case ${1:-all} in
   e5a_final) e5a_final ;;
   e6_seeds)  e6_seeds ;;
   e6_gate)   e6_gate ;;
+  controls)  controls ;;
   all)       e5a_3b; e5a_final; e6_seeds; e6_gate ;;
   *) echo "unknown phase $1"; exit 1 ;;
 esac
