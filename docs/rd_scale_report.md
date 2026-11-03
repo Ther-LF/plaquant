@@ -99,7 +99,7 @@ ring512 uniform 14.8557 / ring512 measured 14.2392 (+ sel_rings 72/576).
 | ring512 measured-1/8 | — | — | |
 | dense uniform-1/8 (committed-ladder substrate) | — | — | stretch |
 | dense measured-1/8 | — | — | stretch |
-| vLLM NVFP4 W4A4 | — | — | llm-compressor quantize (GPUs 1-2, device_map=balanced) + vLLM prompt_logprobs; scripts: `/home/luofan/rdscale/{quantize_70b_nvfp4,ppl_70b_nvfp4}.py` |
+| vLLM NVFP4 W4A4 | **5.9279** | **9.7461** | llm-compressor quantize (GPUs 1-2, device_map=balanced) + vLLM prompt_logprobs; scripts: `/home/luofan/rdscale/{quantize_70b_nvfp4,ppl_70b_nvfp4}.py` |
 
 ## 4. Scaling verdict
 
