@@ -26,22 +26,27 @@ cd $PM
 case $STAGE in
 # ---- ProMix NEW recipe (rd_accuracy_tuning.md shipping recipes) -------------
 pm_1b)
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   PROMIX_ACT_MSE_STEPS_UP=2 python promix/scripts/rd_mmlu.py \
     --config promix/configs/llama-3.2-1b-mxfp8-nvfp4.yaml --point pm_1b \
     --substrate ring --ring_size 512 --alloc measured --gptq_nsamples 1024 \
-    --expect_wiki 14.1694 --zeroshot --batch_size 32 \
+    --expect_wiki 14.1694 --zeroshot --batch_size 16 \
     --out $OUT/pm_1b.json ;;
 pm_3b)
+  # quantized-model lm-eval OOMs at bs32 (act-quant intermediates on ~2k-tok
+  # 5-shot contexts); bs8 + expandable_segments fits.
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   PROMIX_ACT_MSE_STEPS_UP=2 PROMIX_WEIGHT_MSE_STEPS=7 python promix/scripts/rd_mmlu.py \
     --config promix/configs/llama-3.2-3b-mxfp8-nvfp4.yaml --point pm_3b \
     --substrate ring --ring_size 512 --alloc measured --gptq_nsamples 512 \
-    --percdamp 0.025 --expect_wiki 8.2180 --mmlu --zeroshot --batch_size 32 \
+    --percdamp 0.025 --expect_wiki 8.2180 --mmlu --zeroshot --batch_size 8 \
     --out $OUT/pm_3b.json ;;
 pm_8b)
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   PROMIX_ACT_MSE_STEPS_UP=2 PROMIX_WEIGHT_MSE_STEPS=7 python promix/scripts/rd_mmlu.py \
     --config promix/configs/llama-3-8b-mxfp8-nvfp4.yaml --point pm_8b \
     --substrate ring --ring_size 512 --alloc measured --gptq_nsamples 512 \
-    --expect_wiki 6.5642 --mmlu --zeroshot --batch_size 16 \
+    --expect_wiki 6.5642 --mmlu --zeroshot --batch_size 4 \
     --out $OUT/pm_8b.json ;;
 # ---- bf16 MMLU anchors (same lm-eval 0.4.5 HF harness) ----------------------
 bf16_3b)
