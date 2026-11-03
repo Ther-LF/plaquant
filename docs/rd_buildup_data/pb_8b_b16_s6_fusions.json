@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "tag": "pb_8b_b16_s6_fusions",
+    "model": "/home/luofan/vllm_ring512/promix-8b-ring512",
+    "argv": [
+      "/home/luofan/plaquant-buildup/promix/vllm_integ/bench_serve.py",
+      "--model",
+      "/home/luofan/vllm_ring512/promix-8b-ring512",
+      "--tag",
+      "pb_8b_b16_s6_fusions",
+      "--dtype",
+      "float16",
+      "--batches",
+      "16",
+      "--cases",
+      "128:1024",
+      "--prefill-len",
+      "2048",
+      "--max-model-len",
+      "4096",
+      "--gpu-mem-util",
+      "0.90",
+      "--extra-llm-kwargs",
+      "{\"max_num_seqs\":512}",
+      "--out",
+      "/home/luofan/buildup/pb_8b_b16_s6_fusions.json"
+    ],
+    "gpu": "7",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "time": "2026-11-03 10:25:04",
+    "vllm": "0.32.0",
+    "load_s": 33.27541503403336,
+    "quantization_resolved": "promix",
+    "dtype_resolved": "torch.float16",
+    "enforce_eager": false
+  },
+  "cases": {
+    "isl128_osl1024_b16": {
+      "isl": 128,
+      "osl": 1024,
+      "batch": 16,
+      "ttft_s": 0.06033205194398761,
+      "full_s": 8.085294204996899,
+      "tpot_ms": 7.844537784020441,
+      "gen_tok_per_s": 2026.395030854203,
+      "total_tok_per_s": 2279.6944097109786,
+      "ttft_runs_s": [
+        0.06376782688312232,
+        0.06033205194398761,
+        0.06020117993466556
+      ],
+      "full_runs_s": [
+        8.084826229140162,
+        8.085294204996899,
+        8.089159308001399
+      ]
+    }
+  },
+  "prefill_ttft": {
+    "L2048_b16": {
+      "median_s": 0.8125842351000756,
+      "runs_s": [
+        0.8125842351000756,
+        0.811974162934348,
+        0.813978886930272
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 86.30078125,
+    "max_memory_allocated_gib": 84.71931505203247
+  }
+}
