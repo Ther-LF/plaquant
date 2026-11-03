@@ -153,6 +153,75 @@ QUANTIZERS = dict(arcquant=quantize_arcquant, sharq=quantize_sharq,
                   micromix=quantize_micromix)
 
 
+# --------------------------------------------------------------------------
+# lm-eval phase (rd-mmlu E1): MMLU 5-shot / 0-shot suites on the SAME
+# as-shipped quantized model, scored in the rd_metrics convention.
+# Self-contained (no promix import) so it runs inside each peer's venv.
+# --------------------------------------------------------------------------
+ZS_ACC_ONLY = {"winogrande", "lambada_openai"}
+MMLU_GROUPS = ("mmlu", "mmlu_humanities", "mmlu_other",
+               "mmlu_social_sciences", "mmlu_stem")
+
+
+def run_lmeval(model, tokenizer, tasks, num_fewshot, batch_size, limit=None):
+    """HFLM run with the rd_metrics GPU-pinning convention (model forced
+    resident on cuda; peer kernels are CUDA-only)."""
+    from lm_eval.models.huggingface import HFLM
+    from lm_eval import evaluator as lm_evaluator
+    import datasets as hf_datasets
+    hf_datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+
+    model.eval()
+    model.to("cuda")
+    lm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=batch_size)
+    lm._device = torch.device("cuda")
+    try:
+        lm.model.to("cuda")
+    except Exception:
+        pass
+    res = lm_evaluator.simple_evaluate(
+        lm, tasks=list(tasks), num_fewshot=num_fewshot,
+        batch_size=batch_size, limit=limit)
+
+    out = {}
+    if any(t == "mmlu" for t in tasks):
+        mm = {"groups": {}, "subtasks": {}}
+        for k, v in res["results"].items():
+            if k == "mmlu" or k.startswith("mmlu_"):
+                acc = v.get("acc,none")
+                (mm["groups"] if k in MMLU_GROUPS else mm["subtasks"])[k] = acc
+        subs = [a for a in mm["subtasks"].values() if a is not None]
+        mm["macro_avg"] = (sum(subs) / len(subs)) if subs else None
+        ns = res.get("n-samples") or {}
+        wsum = wtot = 0.0
+        for k, a in mm["subtasks"].items():
+            n = (ns.get(k) or {}).get("effective") or \
+                (ns.get(k) or {}).get("original")
+            if a is not None and n:
+                wsum += a * n
+                wtot += n
+        mm["micro_avg"] = (wsum / wtot) if wtot else None
+        out["mmlu"] = mm
+    zs_tasks = [t for t in tasks if t != "mmlu"]
+    if zs_tasks:
+        zs, preferred = {}, []
+        for t in zs_tasks:
+            m = res["results"].get(t, {})
+            acc, accn = m.get("acc,none"), m.get("acc_norm,none")
+            zs[t] = dict(acc=acc, acc_norm=accn)
+            p = acc if (t in ZS_ACC_ONLY or accn is None) else accn
+            if p is not None:
+                preferred.append(p)
+        zs["average"] = (sum(preferred) / len(preferred)) if preferred else None
+        out["zeroshot"] = zs
+    try:
+        import importlib.metadata as md
+        out["lm_eval_version"] = md.version("lm_eval")
+    except Exception:
+        out["lm_eval_version"] = None
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--peer", required=True, choices=sorted(QUANTIZERS))
@@ -162,7 +231,15 @@ def main():
                     help="peer quant_type, or FP16 for the bridge run")
     ap.add_argument("--act_sort_metric", default="max")
     ap.add_argument("--kv_cache", action="store_true")
-    ap.add_argument("--datasets", default="wikitext,c4")
+    ap.add_argument("--datasets", default="wikitext,c4",
+                    help="PPL streams; pass 'none' to skip PPL")
+    ap.add_argument("--lmeval_tasks", default=None,
+                    help="comma list for the lm-eval phase, e.g. 'mmlu' or "
+                         "'piqa,arc_easy,...' (rd-mmlu E1)")
+    ap.add_argument("--num_fewshot", type=int, default=5)
+    ap.add_argument("--lmeval_batch", type=int, default=16)
+    ap.add_argument("--limit", type=int, default=None,
+                    help="lm-eval per-task doc limit (smoke only)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -178,7 +255,7 @@ def main():
     print(f"[rd_newacc] peer={args.peer} quant={args.quant} "
           f"model={args.model}", flush=True)
 
-    want = args.datasets.split(",")
+    want = [d for d in args.datasets.split(",") if d and d != "none"]
     streams = {}
     if "wikitext" in want:
         t = time.time()
@@ -212,6 +289,20 @@ def main():
         results[name] = float(ppl)
         print(f"[rd_newacc] {name} PPL = {ppl:.4f} ({time.time()-t:.0f}s)",
               flush=True)
+        with open(args.out, "w") as f:
+            json.dump(results, f, indent=2)
+
+    if args.lmeval_tasks:
+        tasks = [t for t in args.lmeval_tasks.split(",") if t]
+        t = time.time()
+        lme = run_lmeval(model, tok, tasks, args.num_fewshot,
+                         args.lmeval_batch, limit=args.limit)
+        results["lmeval"] = dict(tasks=tasks, num_fewshot=args.num_fewshot,
+                                 limit=args.limit, **lme)
+        mm = (lme.get("mmlu") or {}).get("groups", {}).get("mmlu")
+        print(f"[rd_newacc] lmeval tasks={tasks} fewshot={args.num_fewshot} "
+              f"mmlu={mm} zs_avg={(lme.get('zeroshot') or {}).get('average')} "
+              f"({time.time()-t:.0f}s)", flush=True)
         with open(args.out, "w") as f:
             json.dump(results, f, indent=2)
 
