@@ -88,6 +88,11 @@ naive_gemm() {
     python -m promix.eval.gemm_h2h_torchfp4 --models 3B,8B --ms 16 \
       --out $OUT/h2h_naive_m16.json > $OUT/h2h_naive_m16.log 2>&1
   fi
+  # prefill chunk M: engines run max_num_batched_tokens=16384 (log-verified)
+  if [ ! -f $OUT/h2h_naive_m16384.json ]; then
+    python -m promix.eval.gemm_h2h_torchfp4 --models 3B,8B --ms 16384 \
+      --out $OUT/h2h_naive_m16384.json > $OUT/h2h_naive_m16384.log 2>&1
+  fi
 }
 
 case ${1:-all} in

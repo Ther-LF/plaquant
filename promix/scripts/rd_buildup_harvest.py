@@ -86,10 +86,10 @@ def naive_table(d):
     serving_naive = serving_s2 + n_layers * n_steps * sum_shapes(mix2 - fused),
     i.e. replace every fused-GEMM call in the step-2 engine by the 2-launch
     torch-native rendering, all else equal. Decode: 1 step/token at M=batch;
-    prefill b128xL2048: 262144 tokens / 8192-token chunks = 32 chunked-prefill
-    steps at M=8192 (vLLM max_num_batched_tokens=8192)."""
+    prefill b128xL2048: 262144 tokens / 16384-token chunks = 16 chunked-prefill
+    steps at M=16384 (vLLM max_num_batched_tokens=16384, log-verified)."""
     rows = []
-    for name in ("h2h_naive", "h2h_naive_m16"):
+    for name in ("h2h_naive", "h2h_naive_m16", "h2h_naive_m16384"):
         r = j(d, name)
         if r is None:
             print(f"{name}: PENDING")
@@ -107,12 +107,12 @@ def naive_table(d):
     print("== analytic naive serving deltas (add to the s2 row) ==")
     for m in ("3B", "8B"):
         for M, tag in ((128, "decode b128 TPOT"), (16, "decode b16 TPOT"),
-                       (8192, "prefill b128 L2048 (x32 chunks)")):
+                       (16384, "prefill b128 L2048 (x16 chunks)")):
             sel = [r for r in rows if r["model"] == m and r["M"] == M]
             if not sel:
                 continue
             delta = sum(r["torchmixed2_ms"] - r["fused_ms"] for r in sel)
-            mult = NL[m] * (32 if M == 8192 else 1)
+            mult = NL[m] * (16 if M == 16384 else 1)
             print(f"  {m} {tag}: +{delta*mult:.2f} ms "
                   f"(per-layer-set delta {delta*1e3:.1f} us x {mult})")
 
