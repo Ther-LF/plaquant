@@ -81,10 +81,10 @@ ONLY delta is `--kv4`. KV b/v includes block-scale overhead
 |---|---|---|---|---|---|
 | 1B wiki | 14.1694 | **14.4137** | +0.244 | 15.3382 | +1.169 |
 | 1B C4 | 19.7110 | **19.9846** | +0.274 | 21.0719 | +1.361 |
-| 3B wiki | 8.2180 | **TBD** | | TBD | |
-| 3B C4 | 11.2549 | **TBD** | | TBD | |
-| 8B wiki | 6.5642 | **TBD** | | TBD | |
-| 8B C4 | 9.5639 | **TBD** | | TBD | |
+| 3B wiki | 8.2180 | **8.2948** | +0.077 | 8.4536 | +0.236 |
+| 3B C4 | 11.2549 | **11.3904** | +0.135 | 11.6044 | +0.349 |
+| 8B wiki | 6.5642 | **6.6167** | +0.052 | 6.7084 | +0.144 |
+| 8B C4 | 9.5639 | **9.6384** | +0.075 | 9.7804 | +0.217 |
 
 KV bits per value: option (a) = 5.44 b/v at head_dim 128 (3B/8B), 6.38 b/v
 at head_dim 64 (1B); option (b) = 4.50 b/v everywhere; the unaligned intent
@@ -92,7 +92,23 @@ at head_dim 64 (1B); option (b) = 4.50 b/v everywhere; the unaligned intent
 
 ### Reading
 
-TBD after 3B/8B land.
+- **KV4 cost is small and shrinks with model size** (option a): wiki
+  +0.244 / +0.077 / +0.052 for 1B / 3B / 8B, both datasets moving
+  together — well above the ~±0.005 harness noise floor, so these are
+  real but modest costs.
+- **The per-head MXFP8 high segment is doing real work**: dropping it
+  (option b) multiplies the KV4 cost by ~5x on 1B (+1.17 vs +0.24),
+  ~3x on 3B (+0.24 vs +0.08), ~2.8x on 8B (+0.14 vs +0.05). Option (a)
+  is confirmed as the right default; (b) stays available as the
+  budget-matched ablation (`--kv_high zero` / `kv_fp_high: "zero"`).
+- **ProMix W4A4KV4 beats every same-protocol peer on every size — even
+  at the budget-matched pure-NVFP4 KV point** (wiki 1B/3B/8B):
+  ProMix KV4-a **14.41 / 8.29 / 6.62**, ProMix KV4-b 15.34 / 8.45 /
+  6.71, vs ResQ 15.98 / 8.71 / 7.06, SpinQuant-learned 16.14 / 9.25 /
+  (7.88 Hadamard), Atom 18.40 / 9.70 / —, QuaRot 22.11 / 10.72 / 8.65.
+  The previous main-table comparison (our FP16-KV W4A4 vs their KV4)
+  undersold the peers by our KV4 delta, i.e. by ≤0.24 wiki — the
+  ordering does not change anywhere.
 
 ## Fairness note (why this row exists)
 
@@ -131,4 +147,5 @@ PROMIX_ACT_MSE_STEPS_UP=2 CUDA_VISIBLE_DEVICES=3 python promix/scripts/rd_acctun
 # ablation: --kv_high zero
 ```
 
-Raw JSONs/logs: `/home/luofan/kv4/*.{json,log}` (remote ICT90).
+Raw JSONs: `docs/rd_kv4_data/*.json` (committed); logs:
+`/home/luofan/kv4/*.log` (remote ICT90).

@@ -19,12 +19,16 @@
 | **ProMix W4A4 — SHIPPED(r=1/8)** | **4.97** | **14.563** | **8.296** | **6.599** |
 | ProMix W4A4 r=1/16 | 4.73 | — | **8.361** | — |
 | ProMix W4A4 r=0(纯 NVFP4,**同 bit**) | **4.50** | — | 8.859 | — |
+| **ProMix W4A4KV4(rd-kv4,KV=NVFP4+per-head 32ch MXFP8 高段)²** | 4.97 | **14.41** | **8.29** | **6.62** |
+| ProMix W4A4KV4(KV=纯 NVFP4 4.5 b/v,**KV 预算对齐**)² | 4.97 | 15.34 | 8.45 | 6.71 |
 | *(round-13 同协议实测)* QuaRot W4A4KV4(GPTQ W4+per-token A4+asym KV4) | ≈4.0 | 22.11 | 10.72¹ | 8.65 |
 | *(round-13 同协议实测)* ResQ W4A4KV4(INT4+1/8 INT8,hf=0.125) | ≈4.5 | 15.98 | 8.71 | 7.06 |
 | *(round-13 同协议实测)* Atom W4A4KV4(128 INT8 keeper+g128+GPTQ+INT4 KV) | ≈4.2 | 18.40 | 9.699 | *(8B running)* |
 | *(round-14 同协议实测)* SpinQuant W4A4KV4(Hadamard,**非学习**) | ≈4.0 | 18.623 | 10.092 | 7.882 |
 | *(round-14 同协议实测)* SpinQuant W4A4KV4(**学习旋转** Cayley-SGD) | ≈4.0 | **16.143** | **9.246** | *(未训,用 Had 7.882)* |
 | *(论文口径,待同协议复测)* QServe W4A8KV4 | 4/8 | — | — | — |
+
+> ² **ProMix KV4 行(2026-11-03,rd-kv4,`docs/rd_kv4_fix.md`)**:fake-quant 同协议,acctune 最终配方(锚点 14.17/8.22/6.56)+ KV 量化;KV4 代价 wiki +0.24/+0.08/+0.05(1B/3B/8B)。混合 KV = per-head NVFP4 主段 + 32ch MXFP8 高段(5.4 b/v @head_dim 128,1B head_dim 64 为 6.4 b/v);"KV 预算对齐"行 = 纯 NVFP4 KV(4.5 b/v,与 peer 的 INT4+scale ≈同预算)。**两行都赢所有 peer 的 W4A4KV4**——此前主表用我们的 FP16-KV 行对比 peer 的 KV4 行,低估了 peer ≤0.24 wiki;补上这两行后口径对齐,排序不变。
 
 > **round-13 W4A4 主对比组填充(QuaRot + ResQ,同协议实测)**。协议 = `docs/baselines_on_hardware.md` 的 wikitext-2 PPL(bf16、`add_special_tokens=False`、`"\n\n".join`、非重叠 2048 chunk=141、288,627 token、token-pooled exp(mean NLL))。**harness bridge 验证**:同一纯-torch full-forward evaluator 在未量化 bf16 上复现committed 基线 **1B 13.1650 / 3B 7.8199 / 8B 6.1382**(= 13.16/7.82/6.14,逐位吻合)→ 任何 Δ 为真·量化差异。跑的是官方开源实现(QuaRot `spcl/QuaRot` fake_quant、ResQ `project-resq` fake_quant)在 SM120 上的 fake-quant 精度模式(torch 2.7.1+cu128,transformers 4.45.2/4.48.1,fast_hadamard 用 pure-torch FWHT shim 替代——数值 maxerr 1e-14 vs 显式 Hadamard 矩阵)。
 > - **关键修复**:(a) Llama-3.2-1B/3B `tie_word_embeddings=True`,旋转前必须 untie+clone lm_head(否则 PPL=8e5 全崩);8B 本就 untied。(b) QuaRot fake_quant 的 o_proj online partial-Hadamard else 分支对 24-head(3B,`get_hadK(24)→K=12`)不做 K-因子分解而崩;用 canonical `matmul_hadU_cuda` 统一实现替换(对 32-head 1B/8B 逐位等价)。¹故 3B QuaRot 带此 24-head 分解修复(1B/8B 走原版 K=1 路径)。
@@ -58,7 +62,7 @@
 | 3B | 8.2678 / 11.319 | **8.2180 / 11.255** | −0.050 / −0.065 |
 | 8B | 6.5882 / 9.636 | **6.5642 / 9.564** | −0.024 / −0.072 |
 
-- 杠杆判决:ring512+measured 基座 PROMOTE(通用);act-MSE 上向加宽 d3u2 PROMOTE(−0.032,旧"7步饱和"是只向下搜的 artifact);GPTQ 校准样本 1024/512/512(1B/3B/8B);weight-MSE depth7 仅 3B/8B;ring-var 选环 REJECT(被 ring512+measured 支配);act_order REJECT;KV4 机械阻塞(per-head 高段 16ch < MXFP8 block 32,待修)。
+- 杠杆判决:ring512+measured 基座 PROMOTE(通用);act-MSE 上向加宽 d3u2 PROMOTE(−0.032,旧"7步饱和"是只向下搜的 artifact);GPTQ 校准样本 1024/512/512(1B/3B/8B);weight-MSE depth7 仅 3B/8B;ring-var 选环 REJECT(被 ring512+measured 支配);act_order REJECT;KV4 机械阻塞(per-head 高段 16ch < MXFP8 block 32)——**已修复(rd-kv4,2026-11-03)**:per-head 高段向上对齐到 32(`kv_fp_high: up`)+ ActQuantizer FP 分支支持 groupsize;W4A4KV4 实测 wiki/C4 1B 14.41/19.98、3B 8.29/11.39、8B 6.62/9.64(Δ ≤+0.24),见 `docs/rd_kv4_fix.md`。
 - 跨模型发现:最优 stack 模型相关 → 每模型一份配方,公共核心 = ring512+measured+up2+GPTQ≥512。
 - 全部 gate 逐位复现(bridges 13.1569/7.8148/6.1368;旧锚 14.4717/8.2678;ring512 8.2328)。
 - **对比最强对手(新锚点)**:3B 8.218 vs ARCQuant 8.54 / SharQ 8.39 / NVFP4 8.63;1B 14.17 vs 其 15.2+ —— 精度领先进一步拉大。

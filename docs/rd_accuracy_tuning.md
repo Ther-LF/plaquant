@@ -135,7 +135,7 @@ Model-dependence in the stack: w7 helps 3B (−0.008 on r512) and 8B, but HURTS
 8.2312), hurts 1B (+0.061), and is a wash on 8B (wiki −0.002 / C4 +0.010).
 w7 is weight-repack-only (zero forward cost).
 
-### Lever 6 — KV4 re-measure → **BLOCKED (mechanical)**
+### Lever 6 — KV4 re-measure → **BLOCKED (mechanical)** *(fixed post-campaign: see docs/rd_kv4_fix.md)*
 
 `MXFP8 quantization requires K (16) divisible by block_size (32)`: with
 k_groupsize = head_dim = 128 and high_fraction 1/8, the per-head KV high
@@ -143,6 +143,11 @@ segment is 16 channels < the MXFP8 block of 32. The current KV-quant path
 cannot express the kv4 configs under this harness; needs a dedicated fix
 (e.g. per-head high segment ≥32 or NVFP4-only KV), out of campaign scope.
 The W4A4KV4 row is NOT updated.
+
+*Post-campaign resolution (rd-kv4, 2026-11-03): fixed on `feat/rd-kv4` by
+rounding the per-head KV high segment up to 32 (`kv_fp_high: up`) +
+per-head FP groupsize support in ActQuantizer; W4A4KV4 measured on the
+final recipes above — see `docs/rd_kv4_fix.md` for the table.*
 
 ## Stacking table (ring512+measured substrate; winners bold)
 
