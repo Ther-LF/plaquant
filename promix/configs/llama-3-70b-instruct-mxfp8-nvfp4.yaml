@@ -1,0 +1,59 @@
+# ProMix Quantization Config: Meta-Llama-3-70B-Instruct W4A4 mixed MXFP8 (high) + NVFP4 (main)
+#
+# 70B Llama (local copy, /home/luofan/latches/models/Meta-Llama-3-70B-Instruct):
+# hidden_size=8192 (high=1024 % 32 OK; main=7168 % 16 OK); intermediate_size=28672
+# (down_proj high=3584 % 32 OK; main=25088 % 16 OK); 64 attention heads x 128
+# head_dim = 8192 (head_dim == hidden//heads holds); 8 KV heads (GQA, same 8 as
+# Llama-3-8B); untied embeddings. down_proj online Hadamard: 28672 = 28 x 1024
+# -> had28 (already present in promix/quantize/hadamard_data.json).
+#
+# Calibration/eval protocol mirrors the committed rd campaign configs
+# (llama-2-13b-mxfp8-nvfp4.yaml): GPTQ nsamples=128, seqlen 2048, seed 0;
+# eval max_length 2048. batch_size 4 keeps the layer-offload eval inps/outs
+# buffers ~10-17 GB on the 96 GB GPU.
+
+model:
+  name: "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct"
+  type: "llama"
+
+quantize:
+  w_bits: "nvfp4"
+  a_bits: "nvfp4"
+  high_bits: "mxfp8"
+  low_bits: 2
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: 16
+  v_bits: 16
+  k_asym: true
+  v_asym: true
+  k_groupsize: 128
+  v_groupsize: 128
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  o_proj_pca: "per_head"
+
+paths:
+  basis: "./rotation/U-wikitext-512-Meta-Llama-3-70B-Instruct.bin"
+  rotation: "./rotation/R-high-0.125-low-0.0-sparse-0.0-Meta-Llama-3-70B-Instruct.bin"
+  output_dir: "/tmp/promix_ptq_70b_mxfp8_nvfp4"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 128
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 4
+  num_fewshot: 0
+  max_length: 2048
