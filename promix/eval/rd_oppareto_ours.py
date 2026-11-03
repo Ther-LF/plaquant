@@ -45,15 +45,17 @@ R_GRID = [0.0, 1 / 32, 1 / 16, 1 / 12, 1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2,
 
 
 def snap_khigh(K, r):
-    """K_high for nominal r: multiple of 32 (MXFP8 block), K_low >= RING.
-    r=0 -> 0 (single-phase pure-NVFP4); r=1 -> K-RING (all-but-one-ring,
-    K_low==0 unsupported)."""
+    """K_high for nominal r: snapped to RING=64 (the rd-allocation ring unit —
+    production allocations are whole rings, and measured: K_high%64==32 cells
+    run 15-40% slower through the phase-2 MXFP8 segment, a half-ring alignment
+    the shipping allocator never emits). r=0 -> 0 (single-phase pure-NVFP4);
+    r=1 -> K-RING (all-but-one-ring, K_low==0 unsupported)."""
     if r == 0.0:
         return 0
     if r == 1.0:
         return K - RING
-    kh = int(round(r * K / 32)) * 32
-    return max(32, min(kh, K - RING))
+    kh = int(round(r * K / RING)) * RING
+    return max(RING, min(kh, K - RING))
 
 
 def median_ms(fn, iters=50, warmup=15):
