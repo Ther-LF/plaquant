@@ -54,7 +54,7 @@
 ## 5. 待收尾(进行中)
 
 - ✅ ring512 → serving 已落地:served 1B 14.267/3B 8.282/8B 6.628(`vllm_ring512_export.md`;fiveway ProMix 行已更新)
-- KV4 16ch 修复 + W4A4KV4 公平行 — `feat/rd-kv4` 跑中
+- ✅ KV4 修复+公平行落地:W4A4KV4(round-up 修复)1B 14.414/3B 8.295/8B 6.617(KV4 代价 +0.05..+0.24,随规模缩;**双变体均赢全部 peer KV4 行**,budget-matched 纯FP4-KV 变体也赢;`rd_kv4_fix.md`)
 
 ## 总定位
 
