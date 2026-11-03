@@ -25,6 +25,8 @@
 | 悬崖 = outlier 集中;平滑 S 坡,膝 ~1/96 | top-1/32 环 = 42% ΔD(≈13× 均匀);1/256→1/32 恢复 13→86% | `rd_accpuzzle_report.md`;谱图 `rd_deltaD_spectrum.html` |
 | loss 加权:诊断性(修 8B mispick 73%,不翻正;3B 反伤) | 8B +0.019→+0.005;3B +0.0066 | `rd_lossweight_report.md` |
 | down_proj 全 FP4 实测最优(叙事防御) | 强塞等预算 +0.056 C4(=78% 分配收益);白送 +35% 预算=噪声 | `rd_down_fp4_control.md` |
+| **组件累计消融(build-up 9 行精度梯 + 6 步性能梯)** | 精度梯:RTN纯FP4 8.99 → +U **13.54(旋转单独反伤+4.55!)** → +ring512 13.49 → **+分区 9.97(−3.53 大头)** → +GPTQ 8.90 → +两级scale 8.60 → +actMSE 8.42 → +分配 **8.218(=发货锚点逐位)** → +decodeW4A16 7.95;**协同性发现:GPTQ 离开旋转+分区基底是灾难(35.39)——组件互相依赖,不可加**;性能梯:融合是最大 kernel 杠杆,GEMV/marlin 管 b16(−22/−26%),pack 融合管 prefill(−15/−12%) | `rd_buildup_ablation.md` |
+| **3-seed 误差棒** | 3B 8.2158±0.0020 / 8B 6.5668±0.0026;三方 gate 排序三种子全稳(gap≥0.07 vs std~0.002-0.01) | 同上 |
 
 ## 3. kernel / 硬件 claims
 
