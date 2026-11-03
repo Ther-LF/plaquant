@@ -352,7 +352,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 | 0.09375 | 4.85 | 8.375 | 0.0034 | 11.79/19.07 | 13151 | 6711 | 3389 |
 | 0.125 | 4.97 | 8.370 | 0.0029 | 11.29/18.14 | 13834 | 6931 | 3159 |
 | 0.1875 | 5.20 | 8.332 | 0.0039 | 11.72/18.67 | 13434 | 6851 | 3447 |
-| 0.25 | 5.44 | 8.283 | 0.0051 | 14.12/22.88 | 10942 | 5623 | 3833 |
+| 0.25 | 5.44 | 8.283 | 0.0051 | 11.45/18.42 | 13617 | 6865 | 3305 |
 
 **Single-point rivals (same cells):**
 
@@ -383,10 +383,10 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 **Curve findings (the bracket, measured honestly):**
 
-1. **The serving cost of the accuracy knob is nearly FLAT for r <= 3/16**:
-   3B decode TPOT b256 stays 18.1-19.1 ms from r=1/32 to 3/16 (within the
-   +-4% cross-lane noise; sweep points ran on different idle GPUs of the same
-   model — see caveat below) while PPL moves 8.50 -> 8.33; 8B 24.9-25.5 ms
+1. **The serving cost of the accuracy knob is nearly FLAT across the whole
+   swept range**: 3B decode TPOT b256 stays 18.1-19.1 ms from r=1/32 all the
+   way to 1/4 (r=1/4: 18.42 ms, +1.0-1.6 % over r=1/8 on a same-GPU anchored
+   re-measure — rd-r14) while PPL moves 8.50 -> 8.28; 8B 24.9-25.5 ms
    across 1/16 -> 1/4 while PPL moves 6.71 -> 6.59. The dual-format kernel
    makes the precision budget essentially free to serve in this range.
 2. **Bracket side A (vs NVFP4)**: EVERY ProMix point beats NVFP4 accuracy by
@@ -402,11 +402,23 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
    honest headline is therefore NOT "FP8 accuracy, faster"; it is "FP8-class
    serving throughput at ~4.6-5.4 bits/weight, with a continuously tunable
    accuracy knob that dominates the NVFP4 point from both sides".
-4. **3B r=1/4 anomaly**: decode TPOT jumps to 22.9 ms (b256) — the only
-   swept point whose decode falls below BF16; 8B r=1/4 shows no such step
-   (25.5 vs BF16 29.5). Not root-caused this campaign (candidate: 3B
-   Kh=768 tile-quantization in the MXFP8 phase + marlin-hi crossovers);
-   flagged as an open item.
+4. **3B r=1/4 anomaly — RESOLVED (measurement artifact, rd-r14,
+   `docs/rd_r14_anomaly.md`)**: the campaign's original r=1/4 point (decode
+   TPOT b256 22.9 ms, the only swept point below BF16) was GPU-6 cross-tenant
+   interference, not a kernel effect. Evidence: within that one session the
+   raw JSON showed 1024:128 b256 at 52.1 ms (+78 %) while b16-b128 of the
+   same case were CLEAN, run-to-run spread up to 42 % with the fastest run
+   matching the r=1/8 control, and the engine mis-attributed ~12 GiB of
+   external memory to "weights". Re-measured on two clean idle GPUs (4 and 5,
+   same-GPU BF16 anchor matching the campaign within 3 %, r=1/8 control
+   within 1.2 %, fwd+rev config order): r=1/4 decode b128/b256 =
+   11.45-11.53 / 18.42-18.49 ms — within 0.2-1.8 % of r=1/8. A graph-replay
+   per-shape GEMM probe at the r=1/4 splits (Kh=768/2048) confirms the
+   (N,K)-keyed route windows stay per-M optimal and the kernel-level cost of
+   doubling the MXFP8 segment is ~8 us per layer-set at M=256 (~+1.5 %/step),
+   exactly the measured serve delta. The table above carries the corrected
+   values (raw: `docs/rd_r14_data/`; the contaminated originals are preserved
+   in `docs/vllm_final_data/contaminated_gpu6_r0.25/`).
 5. **Gates**: every swept checkpoint passes T2 vs its own exporter reference
    (|dPPL| 0.003-0.010 << 0.1). The r-grid is the uniform n/32 family — the
    finest representable uniform split (see section intro); per-layer ring
@@ -414,7 +426,9 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 **Lane caveat**: sweep serve points ran in parallel on different (idle,
 same-model) GPUs; the five-way core table above is the anchored comparison.
-Cross-point deltas below ~4% should not be over-read.
+Cross-point deltas below ~4% should not be over-read. The 3B r=1/4 point is
+the exception: its lane (GPU 6) turned out NOT to be idle — it was re-measured
+on clean anchored lanes and corrected (rd-r14, finding 4 above).
 <!-- END RSWEEP -->
 
 ## 5. Extensions — every other vLLM quant method runnable on this GPU
