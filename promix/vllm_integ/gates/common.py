@@ -76,8 +76,9 @@ def expected_merged_buffers(state, prefix, cd, device="cuda"):
                else torch.empty((0,), dtype=torch.uint8, device=device))
     out = dict(W_lo_packed=W_lo, physSFB_lo=phys_lo, W_hi_bytes=W_hi,
                physSFB_hi=phys_hi, g=float(gs[0]), N=N, K_low=K_low, K_high=K_high)
-    if kind == "o_proj":
-        key = members[0] + ".column_order"
-        if key in state:
-            out["column_order"] = state[key].to(device, torch.long)
+    # column_order lives at the MERGED module name (one per group; for the
+    # unmerged o_proj/down_proj that equals the member name).
+    key = prefix + ".column_order"
+    if key in state:
+        out["column_order"] = state[key].to(device, torch.long)
     return out

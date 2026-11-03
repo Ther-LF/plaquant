@@ -75,14 +75,19 @@ def act_mse_cflags():
       PROMIX_ACT_MSE=0        -> off (reproduces pre-round-3 baseline)
       PROMIX_ACT_MSE_FAST=0   -> round-3 true-division search (bit-identical anchor)
       PROMIX_ACT_MSE_STEPS=N  -> N lower E4M3 grid steps (default 3)
+      PROMIX_ACT_MSE_STEPS_UP=N -> N HIGHER E4M3 grid steps above the ceil base
+                                 (rd-acctune lever 4 "up2"; default 0 =
+                                 byte-identical to the shipped search)
     Must stay coupled with promix.quantize.quant_utils (the fake-quant twin reads
     the same env), so the real kernel and the PPL twin pick the same scales."""
     if os.environ.get("PROMIX_ACT_MSE", "1") == "0":
         return []
     fast = 0 if os.environ.get("PROMIX_ACT_MSE_FAST", "1") == "0" else 1
     steps = int(os.environ.get("PROMIX_ACT_MSE_STEPS", "3"))
+    steps_up = int(os.environ.get("PROMIX_ACT_MSE_STEPS_UP", "0"))
     return ["-DPROMIX_ACT_MSE=1", f"-DPROMIX_ACT_MSE_FAST={fast}",
-            f"-DPROMIX_ACT_MSE_STEPS={steps}"]
+            f"-DPROMIX_ACT_MSE_STEPS={steps}",
+            f"-DPROMIX_ACT_MSE_STEPS_UP={steps_up}"]
 
 
 def load_kernels():

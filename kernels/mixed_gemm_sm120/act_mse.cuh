@@ -30,12 +30,25 @@
 //
 //   PROMIX_ACT_MSE_STEPS (default 3): number of LOWER E4M3 grid steps tried
 //     below the ceil base scale (round-2 showed depth saturates at 3).
+//
+//   PROMIX_ACT_MSE_STEPS_UP (default 0 = byte-identical to the shipped search):
+//     number of HIGHER E4M3 grid steps tried ABOVE the ceil base scale
+//     (rd-acctune lever 4, "up2" — the promoted recipe uses 2). Candidates are
+//     evaluated AFTER the lower steps, restarting from the base byte, exactly
+//     mirroring the torch twin's candidate order [base, lowers..., uppers...]
+//     with first-wins strict-< ties (quant_utils._next_higher_grid +
+//     _mse_best_scale_act_fast). Byte-increment == next-higher positive E4M3
+//     grid value (byte order == value order); 0x7E (448) is the max normal,
+//     0x7F is NaN — the walk stops at 0x7E like the torch grid runs out.
 #pragma once
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
 #ifndef PROMIX_ACT_MSE_STEPS
 #define PROMIX_ACT_MSE_STEPS 3
+#endif
+#ifndef PROMIX_ACT_MSE_STEPS_UP
+#define PROMIX_ACT_MSE_STEPS_UP 0
 #endif
 #ifndef PROMIX_ACT_MSE_FAST
 #define PROMIX_ACT_MSE_FAST 1
@@ -116,6 +129,25 @@ __device__ __forceinline__ void promix_act_mse_select(
     }
     if (err < best_err) { best_err = err; best_sc = csc; best_b = cb; }
   }
+#if PROMIX_ACT_MSE_STEPS_UP > 0
+  cb = sfb;   // uppers restart from the ceil base byte (torch twin order)
+#pragma unroll
+  for (int s = 0; s < PROMIX_ACT_MSE_STEPS_UP; ++s) {
+    if (cb >= (unsigned char)0x7E) break;   // 448 = max normal E4M3; 0x7F = NaN
+    cb = (unsigned char)(cb + 1);
+    float csc = promix_e4m3_to_float(cb);
+    float cinv = 1.0f / csc;
+    float err = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+      float xs = fminf(fmaxf(xf[j] * cinv, -6.0f), 6.0f);
+      float g  = promix_fp4_nearest_val(fabsf(xs));
+      float dq = (xs < 0.0f ? -g : g) * csc;
+      float e  = dq - xf[j]; err += e * e;
+    }
+    if (err < best_err) { best_err = err; best_sc = csc; best_b = cb; }
+  }
+#endif
   scale = best_sc; sfb = best_b;
 #else
   // --- exact path: reproduces the round-3 true-division search bit-for-bit ---
@@ -128,6 +160,7 @@ __device__ __forceinline__ void promix_act_mse_select(
     float e  = dq - xf[j]; best_err += e * e;
   }
   unsigned char cb = sfb;
+  const unsigned char base_b = sfb;
   for (int s = 0; s < PROMIX_ACT_MSE_STEPS && cb > 1; ++s) {
     cb = (unsigned char)(cb - 1);
     float csc = promix_e4m3_to_float(cb); if (!(csc > 0.0f)) break;
@@ -141,5 +174,23 @@ __device__ __forceinline__ void promix_act_mse_select(
     }
     if (err < best_err) { best_err = err; scale = csc; sfb = cb; }
   }
+#if PROMIX_ACT_MSE_STEPS_UP > 0
+  cb = base_b;   // uppers restart from the ceil base byte (torch twin order)
+  for (int s = 0; s < PROMIX_ACT_MSE_STEPS_UP && cb < (unsigned char)0x7E; ++s) {
+    cb = (unsigned char)(cb + 1);
+    float csc = promix_e4m3_to_float(cb);
+    float err = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+      float xs = fminf(fmaxf(xf[j] / csc, -6.0f), 6.0f);
+      float g  = promix_fp4_nearest_val_exact(fabsf(xs));
+      float dq = (xs < 0.0f ? -1.0f : 1.0f) * g * csc;
+      float e  = dq - xf[j]; err += e * e;
+    }
+    if (err < best_err) { best_err = err; scale = csc; sfb = cb; }
+  }
+#else
+  (void)base_b;
+#endif
 #endif
 }

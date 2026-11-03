@@ -54,6 +54,15 @@ logger = init_logger(__name__)
 
 KINDS = ("qkv_proj", "o_proj", "gate_up_proj", "down_proj")
 
+
+def _column_order_loader(param, loaded_weight, *args, **kwargs):
+    """Full-copy loader for the shard-less (K,) column_order on merged modules
+    (qkv_proj / gate_up_proj): the merged layers' weight_loader_v2 expects
+    output-dim shards and would mis-handle an input-dim-only tensor."""
+    assert param.data.shape == loaded_weight.shape, \
+        (param.data.shape, loaded_weight.shape)
+    param.data.copy_(loaded_weight)
+
 # Escape hatch: PROMIX_EAGER_APPLY=1 bypasses the custom op and calls the
 # kernels directly from apply() (Phase-1 behavior; requires enforce_eager).
 _EAGER_APPLY = os.environ.get("PROMIX_EAGER_APPLY", "0") == "1"
@@ -73,18 +82,29 @@ class PromixConfig(QuantizationConfig):
 
     def __init__(self, k_high: dict, hadamard_down_proj: bool = True,
                  fold_had_scale: bool = True, o_proj_reorder: bool = True,
-                 had_mode: str = "fp16", full_cfg: dict | None = None):
+                 had_mode: str = "fp16", reordered_prefixes=None,
+                 full_cfg: dict | None = None):
         super().__init__()
         # {"layers.{i}.self_attn.qkv_proj": K_high, ...} (vLLM merged prefixes)
         self.k_high = {str(k): int(v) for k, v in k_high.items()}
         self.hadamard_down_proj = bool(hadamard_down_proj)
         self.fold_had_scale = bool(fold_had_scale)
         self.o_proj_reorder = bool(o_proj_reorder)
+        # vllm-ring512: explicit per-prefix runtime-gather list (ring-substrate
+        # measured allocation reorders qkv/gate_up/down inputs too, not just
+        # o_proj). None = legacy checkpoint -> o_proj-only reorder behavior.
+        self.reordered = (None if reordered_prefixes is None
+                          else {str(p) for p in reordered_prefixes})
         self.had_mode = had_mode
         self.full_cfg = full_cfg or {}
         if self.had_mode != "fp16":
             raise NotImplementedError(
                 f"promix plugin phase 1 implements had_mode=fp16 only, got {had_mode}")
+
+    def prefix_reordered(self, key: str, kind: str) -> bool:
+        if self.reordered is not None:
+            return key in self.reordered
+        return kind == "o_proj" and self.o_proj_reorder
 
     @classmethod
     def get_name(cls) -> str:
@@ -110,6 +130,8 @@ class PromixConfig(QuantizationConfig):
             fold_had_scale=cls.get_from_keys_or(config, ["fold_had_scale"], True),
             o_proj_reorder=cls.get_from_keys_or(config, ["o_proj_reorder"], True),
             had_mode=cls.get_from_keys_or(config, ["had_mode"], "fp16"),
+            reordered_prefixes=cls.get_from_keys_or(
+                config, ["reordered_prefixes"], None),
             full_cfg=config,
         )
 
@@ -136,6 +158,7 @@ class PromixLinearMethod(LinearMethodBase):
         self.kind = key.split(".")[-1]
         assert self.kind in KINDS, self.kind
         self.k_high = cfg.k_high[key]
+        self.reordered = cfg.prefix_reordered(key, self.kind)
 
     def create_weights(self, layer, input_size_per_partition,
                        output_partition_sizes, input_size, output_size,
@@ -169,10 +192,20 @@ class PromixLinearMethod(LinearMethodBase):
         layer.register_parameter("weight_global_scale", PerTensorScaleParameter(
             data=torch.empty(len(output_partition_sizes), dtype=torch.float32),
             weight_loader=weight_loader))
-        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
+        if self.reordered:
+            # column_order is an input-dim (K,) tensor shared by all merged-
+            # group members; the exporter writes it ONCE at the merged module
+            # name, so it direct-matches params_dict (no stacked-shard remap).
+            # Merged modules' weight_loader_v2 would mis-handle a shard-less
+            # (K,) load -> use a plain full-copy loader for qkv/gate_up; the
+            # unmerged o_proj/down_proj keep the layer loader (proven path).
+            if self.kind in ("qkv_proj", "gate_up_proj"):
+                order_loader = _column_order_loader
+            else:
+                order_loader = weight_loader
             layer.register_parameter("column_order", BasevLLMParameter(
                 data=torch.empty(K, dtype=torch.int32),
-                weight_loader=weight_loader))
+                weight_loader=order_loader))
 
     def process_weights_after_loading(self, layer):
         from promix.quantize.mixed_linear import MixedQuantLinear
@@ -197,7 +230,8 @@ class PromixLinearMethod(LinearMethodBase):
         # disables.
         cd_bias = load_cd_bias()  # None when PROMIX_CAST_FOLD=0
         vrq = None
-        if self.kind in ("qkv_proj", "gate_up_proj"):
+        if self.kind in ("qkv_proj", "gate_up_proj") and not self.reordered:
+            # norm->pack fusion producer can't express the ring-reorder gather
             vrq = load_norm_pack()   # None when PROMIX_NORM_FUSE=0
         hpk, hpk28 = (None, None)
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
@@ -309,7 +343,7 @@ class PromixLinearMethod(LinearMethodBase):
                 logger.warning("promix %s: marlin prepack failed (%r) — "
                                "W4A4 GEMM route kept", self.key, e)
 
-        if self.kind == "o_proj" and self.cfg.o_proj_reorder:
+        if self.reordered:
             layer.promix_col_order = layer.column_order.data.to(dev, torch.long)
             # vllm-perf r3 lever 3: int32 copy for the gather-folded qpfm pack
             # (PROMIX_GATHER_PACK=0 keeps the separate torch gather everywhere).
@@ -333,25 +367,30 @@ class PromixLinearMethod(LinearMethodBase):
     def _apply_eager(self, layer, x):
         """The Phase-1 eager apply body (runs inside the custom op)."""
         mql = layer.promix_mql
+        reordered = getattr(layer, "promix_col_order", None) is not None
         if self.kind == "down_proj" and self.cfg.hadamard_down_proj:
             # vllm-perf r2 lever 2: on the GEMM route, run the fused
             # Hadamard+quant/pack producer (one kernel, no fp16 [M,K] HBM
             # round-trip). GEMV routes (decode small M) consume an fp16
             # activation, so they keep the torch Hadamard. M is static per
             # captured CUDA graph (r1), so this branch is capture-safe.
+            # vllm-ring512: a reordered down_proj needs Hadamard -> gather ->
+            # pack, which the fused producer can't express — torch Hadamard
+            # then the gather below.
             M = x.numel() // x.shape[-1]
-            if mql.can_had_pack() and not mql.fp16_route(M):
+            if not reordered and mql.can_had_pack() and not mql.fp16_route(M):
                 return mql.forward_had_pack(x)
             from promix.quantize.hadamard import matmul_hadU_cuda
             x_dtype = x.dtype
             x = matmul_hadU_cuda(x, layer.promix_had_K, layer.promix_had_Kfac,
                                  fold_scale=self.cfg.fold_had_scale).to(x_dtype)
-        elif self.kind == "o_proj" and self.cfg.o_proj_reorder:
-            # vllm-perf r3 lever 3: on the GEMM route, fold the static column
+        if reordered:
+            # vllm-perf r3 lever 3 (generalized by vllm-ring512 to every
+            # reordered prefix): on the GEMM route, fold the static column
             # reorder into the qpfm pack's load (one kernel, no fp16 [M,K]
-            # gather round trip). GEMV routes consume an fp16 activation, so
-            # they keep the torch gather. M is static per captured CUDA graph
-            # (r1), so this branch is capture-safe.
+            # gather round trip). GEMV/marlin routes consume an fp16
+            # activation, so they keep the torch gather. M is static per
+            # captured CUDA graph (r1), so this branch is capture-safe.
             M = x.numel() // x.shape[-1]
             if (getattr(layer, "promix_col_order_i32", None) is not None
                     and mql.can_gather_pack() and not mql.fp16_route(M)):
