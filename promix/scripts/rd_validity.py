@@ -307,6 +307,10 @@ def main():
     ap.add_argument("--target_mean_fp8", type=float, default=0.125)
     ap.add_argument("--collect_tokens", type=int, default=4096)
     ap.add_argument("--calib_samples", type=int, default=16)
+    ap.add_argument("--calib_seed", type=int, default=None,
+                    help="E6 error bars: override the calibration seed "
+                         "(set_seed + calib loader + GPTQ). Wiki eval is the "
+                         "full test set (seed-independent).")
     ap.add_argument("--out", default="/home/luofan/RD_VALIDITY.json")
     args = ap.parse_args()
 
@@ -316,6 +320,8 @@ def main():
         assert os.path.exists(p), f"missing artifact: {p}"
 
     ptqmod.init_distributed_for_ptq_main_if_needed()
+    if args.calib_seed is not None:
+        config["calibration"]["seed"] = args.calib_seed
     transformers.set_seed(config["calibration"].get("seed", 0))
 
     print(f"START rd_validity r1_off={args.r1_off} target={args.target_mean_fp8} "
@@ -323,6 +329,7 @@ def main():
           flush=True)
 
     results = {"meta": dict(r1_off=args.r1_off, target=args.target_mean_fp8,
+                            calib_seed=config["calibration"].get("seed", 0),
                             model=config["model"]["name"],
                             basis=os.path.basename(config["paths"]["basis"]),
                             act_mse=qu.ACT_MSE_SCALE_SEARCH,

@@ -63,11 +63,13 @@ def per_linear_uniform_chosen(stats, metric):
     return ch
 
 
-def eval_c4_ppl(model, config):
+def eval_c4_ppl(model, config, eval_seed=None):
     model.to(DEV)
     model.seqlen = config["eval"]["max_length"]
     tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
-    c4 = get_c4(nsamples=256, seed=config["calibration"].get("seed", 0),
+    if eval_seed is None:
+        eval_seed = config["calibration"].get("seed", 0)
+    c4 = get_c4(nsamples=256, seed=eval_seed,
                 seqlen=model.seqlen, tokenizer=tok, eval_mode=True)
     return float(evaluate_ppl(model, c4, DEV,
                               batch_size=config["eval"]["batch_size"]))
@@ -96,6 +98,12 @@ def main():
                     help="override calibration.nsamples for GPTQ (lever 3)")
     ap.add_argument("--percdamp", type=float, default=None)
     ap.add_argument("--act_order", action="store_true")
+    ap.add_argument("--calib_seed", type=int, default=None,
+                    help="E6 error bars: override the CALIBRATION seed "
+                         "(set_seed + calib sampling + GPTQ loader + alloc "
+                         "collect). Eval sets stay at the config seed (wiki "
+                         "eval is the full test set; C4 eval windows pinned "
+                         "to the original seed) so only calibration varies.")
     ap.add_argument("--c4", action="store_true", help="also eval C4 PPL")
     ap.add_argument("--bridge", action="store_true",
                     help="also run the bf16 bridge (protocol gate)")
@@ -120,11 +128,15 @@ def main():
         assert os.path.exists(p), f"missing artifact: {p}"
 
     ptqmod.init_distributed_for_ptq_main_if_needed()
+    eval_seed = config["calibration"].get("seed", 0)
+    if args.calib_seed is not None:
+        config["calibration"]["seed"] = args.calib_seed
     transformers.set_seed(config["calibration"].get("seed", 0))
 
     S = args.ring_size
     ring_r1 = args.substrate == "ring"
     meta = dict(point=args.point, model=config["model"]["name"],
+                calib_seed=config["calibration"].get("seed", 0),
                 basis=os.path.basename(config["paths"]["basis"]),
                 substrate=args.substrate, ring_size=S, alloc=args.alloc,
                 collect_tokens=args.collect_tokens,
@@ -201,7 +213,7 @@ def main():
 
     if args.c4:
         t0 = time.time()
-        ppl_c4 = eval_c4_ppl(model, config)
+        ppl_c4 = eval_c4_ppl(model, config, eval_seed=eval_seed)
         print(f"RESULT {args.point} c4={ppl_c4:.4f} "
               f"({time.time()-t0:.0f}s)", flush=True)
         results["c4"] = ppl_c4
