@@ -19,6 +19,7 @@ ROWS_3B = [
     ("3b_r8_measured", "8. + measured-dD allocation"),
     ("3b_c1_norot_full", "C1 control: no-rotation + full weight/act stack"),
     ("3b_c2_norot_gw", "C2 control: no-rotation + GPTQ + wscale (no actMSE)"),
+    ("3b_c3_norot_g", "C3 control: no-rotation + GPTQ only (plain scales)"),
 ]
 PERF_STEPS = [
     ("s2_fused_r0", "2. single-launch fused GEMM (levers off)"),

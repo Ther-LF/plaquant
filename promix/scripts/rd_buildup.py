@@ -106,6 +106,10 @@ ROWS = {
     # (hypothesis: MSE-optimal act scales CLIP the unrotated outliers).
     "norot_gw": dict(substrate="none", hf=0.0, weights="gptq",
                      alloc="pure", env="wmse"),
+    # CONTROL 3: no-rotation + GPTQ only (plain scales) — completes the
+    # attribution chain norot_rtn -> +GPTQ -> +wscale -> +actMSE.
+    "norot_g": dict(substrate="none", hf=0.0, weights="gptq",
+                    alloc="pure", env="off"),
 }
 
 
