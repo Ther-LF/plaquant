@@ -58,3 +58,11 @@
 ## money 图
 
 一条 ProMix 曲线(精度 × 性能,扫 B)+ ARCQuant/MicroMix/SharQ 作为点 → 曲线压点 / 支配。精度轴现在可画(统一 regime),性能轴已有同强栈 serving 终表 + **实测 r-sweep 曲线**(`docs/vllm_final_fiveway.md` §4:3B 6 点 / 8B 4 点,每点 PPL+吞吐+gate;全曲线精度压 NVFP4、吞吐 0.85-0.93,serving 代价对 r 近乎平坦 —— "曲线压点"现在两条轴都是实测)。
+
+## down_proj 叙事防御(2026-11-03,显式对照已钉死)
+
+**潜在质疑**:"down_proj 用在线 Hadamard+全FP4,不符合 PCA 分区叙事。"
+**回应框架(两种变换、一个率失真原则)**:变换的目的是让"该花高精度的地方"被实测 ΔD 看见 —— hidden 流 PCA 可行 → **集中** outlier → 分区捕获(top-1/32 环=42% ΔD);intermediate 流 PCA 不可行 → Hadamard **摊平** outlier → ΔD 荒漠(<1%)→ 全 FP4 即最优。分配器按同一准则裁决两者。
+**显式对照(3B,`docs/rd_down_fp4_control.md`)**:强塞 down_proj 1/8 FP8(等预算、挑其最高 ΔD 环)→ wiki +0.008 / **C4 +0.056(= 整个分配收益的 78%)更差**;白送 +35% 预算强塞 → 符号不一致(噪声),买不到。
+**论文句**:"Forcing high precision onto the Hadamard-flattened down_proj buys no accuracy even with extra budget and costs accuracy at matched budget — all-FP4 down_proj is measured-optimal, not a simplification."
+**顺带的精细论点(反打 ARCQuant/DualQuant 的 anti-rotation)**:Hadamard 摊开对"要分区的流"有害(所以那里用 PCA 集中),对"统一 FP4 的流"恰好正确(摊平后 FP4 够用)—— 旋转好坏取决于下游是分区还是统一量化。
