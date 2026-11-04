@@ -95,8 +95,8 @@ ring512 uniform 14.8557 / ring512 measured 14.2392 (+ sel_rings 72/576).
 | point | wikitext | C4 | notes |
 |---|---|---|---|
 | bf16 bridge | **5.3159** | **9.2036** | 803 s, layer-offload eval; Meta-Llama-3-70B-**Instruct** |
-| ring512 uniform-1/8 | — | — | |
-| ring512 measured-1/8 | — | — | |
+| ring512 uniform-1/8 | **6.0738** | **9.8980** | avg_fp8 0.1250 exactly |
+| ring512 measured-1/8 | **5.9732** | **9.8917** | 1360/10880 rings; gain vs uniform wiki −0.101 / C4 −0.006 |
 | dense uniform-1/8 (committed-ladder substrate) | — | — | stretch |
 | dense measured-1/8 | — | — | stretch |
 | vLLM NVFP4 W4A4 | **5.9279** | **9.7461** | llm-compressor quantize (GPUs 1-2, device_map=balanced) + vLLM prompt_logprobs; scripts: `/home/luofan/rdscale/{quantize_70b_nvfp4,ppl_70b_nvfp4}.py` |
