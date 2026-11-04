@@ -11,6 +11,8 @@
 | vs 新 W4A4 对手(我们协议实测) | ARCQuant 8.54/6.81;SharQ 8.39/6.68;MicroMix 9.05/7.39;CoQuant 9.56(其 wa_cov 主张未复现) | `rd_newpeers_accuracy.md` |
 | vs 老 W4A4 对手(同协议) | QuaRot 22.1/10.7/8.65;SpinQuant(学习)16.14/9.25;Atom 18.4/9.70;ResQ 15.98/8.71/7.06 | `scoreboard.md` 主对比组 + `/home/luofan/baselines/peers/` |
 | 多指标:C4 同号、0-shot 噪声内(不 claim) | 1B C4 −0.129、3B −0.072;0-shot ±1.4-3.3pp | `rd_metrics_report.md` |
+| **MMLU 5-shot**(E1) | 3B:ProMix **54.12** > SharQ 53.42 > ARCQuant 52.64 ≈ NVFP4 52.63(bf16 56.11)→ 量化组明显第一;8B:ProMix 62.85 ≈ SharQ 62.87(平,±0.4 噪声)> ARC/NVFP4 ~62.2;跨 harness 桥已验(+0.17-0.36pp) | `rd_mmlu_report.md` |
+| 新配方 0-shot(E1,诚实) | 1B/3B 较旧锚点 −0.4pp(任务噪声内)、8B +0.33 → **下游 headline 是 MMLU 不是 0-shot**(如实写) | 同上 |
 | 跨族(Qwen3-8B) | uniform gap +0.242(比 Llama-8B 的 +7.4% 健康);分配 break-even 落在 scaling 趋势上 | `rd_qwen_report.md` |
 | 校准鲁棒(wiki↔C4 2×2) | 交叉格 ≤+0.12(~1%),排名不变;分配增益四格全活;我们的 ΔD 环节最鲁棒;U 子空间重叠 0.66-0.69、环选择 81.4%(随机 12.5%) | `rd_calib_robustness.md` |
 

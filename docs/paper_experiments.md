@@ -52,7 +52,7 @@
 
 | ID | 实验 | GPU 车道 | 预估 |
 |---|---|---|---|
-| E1 | MMLU 5-shot + 新配方 0-shot(ProMix/ARCQuant/SharQ/NVFP4/BF16 × 3B/8B) | 4 | 1 天 |
+| E1 | MMLU 5-shot + 新配方 0-shot ✅ `rd_mmlu_report.md`(3B ProMix MMLU 第一 54.12;8B 平 SharQ;0-shot 1B/3B 噪声内、8B +0.33)| 4 | 完成 |
 | E2 | 32B/70B 规模扩展(可行性→精度→serving-带注) | 0-2 | 2-3 天(含下载)|
 | E4 | 算子 Pareto 终版复测(延迟 vs r 全曲线 + 对手点) | 6 | 半天 |
 | E5 | 组件累计消融(精度 build-up + 性能 build-up) ✅ `docs/rd_buildup_ablation.md` | 5(精度)/7(性能) | 完成 |
