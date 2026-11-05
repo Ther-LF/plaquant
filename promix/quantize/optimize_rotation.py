@@ -33,7 +33,7 @@ from promix.quantize.hadamard import random_orthogonal_matrix, get_hadK, matmul_
 from promix.quantize.fuse_norm import fuse_layer_norms
 from promix.quantize.rotation import fuse_basis_to_model
 from promix.quantize.quant_utils import add_actquant, find_qlayers, ActQuantWrapper
-from promix.utils import DEV, cleanup_memory
+from promix.utils import DEV, cleanup_memory, config_head_dim
 from promix.eval.data import get_wikitext2
 
 
@@ -179,7 +179,7 @@ def optimize_rotation(
     cleanup_memory()
 
     num_heads_model = model.config.num_attention_heads
-    head_dim_model = model.config.hidden_size // num_heads_model
+    head_dim_model = config_head_dim(model.config)
 
     # Detect the global o_proj PCA basis emitted by `o_proj_pca: full_global`
     # in basis.py. When present, replace the per-head `value` PCA on o_proj
@@ -267,7 +267,7 @@ def optimize_rotation(
     # Model dimensions
     model_dim = model.config.hidden_size
     num_heads = model.config.num_attention_heads
-    head_dim = model_dim // num_heads
+    head_dim = config_head_dim(model.config)
     high_length_hidden = int(high_fraction * model_dim)
     low_length_hidden = int(low_fraction * model_dim)
     high_length_head = int(high_fraction * head_dim)

@@ -1,0 +1,55 @@
+# ProMix FP per-head (NVFP4+MXFP8), Qwen3-32B — rd-qwenmid ladder point (8B..70B).
+# Qwen3-32B: hidden_size=5120 (high=640 % 32 OK; main=4480 % 16 OK);
+# intermediate_size=25600 = 100 x 256 (down_proj online Hadamard = had100,
+# Paley II q=49=7^2); 64 attention heads x head_dim 128 = 8192 != hidden 5120
+# — this is the explicit-head_dim architecture (config.head_dim=128 while
+# hidden//heads=80), supported via the rd-qwenmid head_dim threading
+# (promix.utils.config_head_dim). o_proj: in_features 8192, per-head high =
+# int(0.125*128)=16 -> o_proj high segment 64*16=1024 % 32 OK. 8 KV heads;
+# qk-norm present; tie_word_embeddings=false.
+# Ring512 substrate: 5120 % 512 = 0, 25600 % 512 = 0 (50 rings).
+model:
+  name: "/home/luofan/latches/models/Qwen3-32B"
+  type: "qwen3"
+
+quantize:
+  w_bits: "nvfp4"
+  a_bits: "nvfp4"
+  high_bits: "mxfp8"
+  low_bits: 2
+  high_fraction: 0.125
+  low_fraction: 0.0
+  a_asym: true
+  w_asym: false
+  k_bits: 16
+  v_bits: 16
+  k_asym: true
+  v_asym: true
+  k_groupsize: 128
+  v_groupsize: 128
+  w_groupsize: -1
+  w_clip: true
+  percdamp: 0.01
+  act_order: false
+  sparse_fraction: 0.0
+  down_proj_blocksize: 256
+  rotate_mode: "resq"
+  rotation_granularity: "full_shared"
+  o_proj_pca: "per_head"
+
+paths:
+  basis: "./rotation/U-wikitext-512-Qwen3-32B.bin"
+  rotation: "./rotation/R-high-0.125-low-0.0-sparse-0.0-Qwen3-32B.bin"
+  output_dir: "/tmp/promix_fp_perhead_qwen3_32b"
+
+calibration:
+  dataset: "wikitext"
+  nsamples: 128
+  seqlen: 2048
+  seed: 0
+
+eval:
+  tasks: []
+  batch_size: 4
+  num_fewshot: 0
+  max_length: 2048

@@ -29,7 +29,7 @@ def get_hadK(n, transpose=False):
     if is_pow2(n):
         return None, 1
 
-    for K in [172, 156, 140, 108, 60, 52, 44, 40, 36, 28, 20, 12]:
+    for K in [172, 156, 140, 108, 100, 68, 60, 52, 44, 40, 36, 28, 20, 12]:
         if n % K == 0 and is_pow2(n // K):
             hadK = _get_hadamard_matrix(K)
             return (hadK.T if transpose else hadK), K

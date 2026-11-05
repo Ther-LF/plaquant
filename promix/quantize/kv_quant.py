@@ -16,7 +16,7 @@ from promix.quantize.quant_utils import (
     ActQuantizer, AsymSTEQuantize, STEQuantize, _quant_enabled, get_minq_maxq,
     kv_fp_high_length,
 )
-from promix.utils import HadamardTransform
+from promix.utils import HadamardTransform, config_head_dim
 
 
 class WeightQuantizer(nn.Module):
@@ -229,7 +229,7 @@ class QKRotationWrapper(nn.Module):
         self.config = config
         num_heads = config.num_attention_heads
         model_dim = config.hidden_size
-        head_dim = model_dim // num_heads
+        head_dim = config_head_dim(config)
         self.num_kv_groups = num_heads // config.num_key_value_heads
         self.func = func
         self.k_quantizer = ActQuantizer()
@@ -349,7 +349,7 @@ def setup_k_quant(model, config, basis_path, rotation_path):
     if not _quant_enabled(k_bits):
         return
 
-    head_dim = model.config.hidden_size // model.config.num_attention_heads
+    head_dim = config_head_dim(model.config)
     high_fraction = qcfg['high_fraction']
     low_fraction = qcfg.get('low_fraction', 0.0)
     if isinstance(k_bits, str):

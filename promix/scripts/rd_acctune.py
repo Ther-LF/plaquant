@@ -115,6 +115,11 @@ def main():
                          "'up' rounds int(head_dim*hf) UP to 32 (option a); "
                          "'zero' drops the KV high segment -> pure-NVFP4 KV "
                          "(option b ablation)")
+    ap.add_argument("--budget_frac", type=float, default=0.125,
+                    help="FP8 ring budget as a fraction of total rings for "
+                         "--alloc measured (rd-qwenmid accuracy curve: 5%% "
+                         "grid 0.05..1.00). Default 0.125 = the shipped "
+                         "1/8 budget, byte-identical to prior acctune runs.")
     ap.add_argument("--bridge", action="store_true",
                     help="also run the bf16 bridge (protocol gate)")
     ap.add_argument("--out", required=True)
@@ -160,6 +165,7 @@ def main():
                 calib_seed=config["calibration"].get("seed", 0),
                 basis=os.path.basename(config["paths"]["basis"]),
                 substrate=args.substrate, ring_size=S, alloc=args.alloc,
+                budget_frac=args.budget_frac,
                 collect_tokens=args.collect_tokens,
                 gptq_nsamples=config["calibration"].get("nsamples", 128),
                 percdamp=config["quantize"].get("percdamp", 0.01),
@@ -206,7 +212,7 @@ def main():
         cleanup_memory()
         total_rings = sum(stats[n]["nr"] for n in stats)
         if args.alloc == "measured":
-            budget = int(round(0.125 * total_rings))
+            budget = int(round(args.budget_frac * total_rings))
             chosen = rv.measured_alloc(stats, budget, total_rings)
         elif args.alloc == "var_uniform":
             chosen = per_linear_uniform_chosen(stats, "ring_var")

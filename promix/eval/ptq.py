@@ -13,7 +13,7 @@ import torch
 import transformers
 import yaml
 
-from promix.utils import DEV, cleanup_memory
+from promix.utils import DEV, cleanup_memory, config_head_dim
 from promix.models.loader import load_model, install_column_order_hooks
 from promix.quantize.fuse_norm import fuse_layer_norms
 from promix.quantize.rotation import fuse_basis_to_model, rearrange_columns
@@ -91,11 +91,19 @@ def configure_quantizers(model, config):
     model_dim = model.config.hidden_size
     intermediate_size = getattr(model.config, 'intermediate_size', None)
     num_heads = model.config.num_attention_heads
-    head_dim = model_dim // num_heads
+    head_dim = config_head_dim(model.config)
     high_fraction = qcfg['high_fraction']
     low_fraction = qcfg.get('low_fraction', 0.0)
     high_bits_length = int(high_fraction * model_dim)
     low_bits_length = int(low_fraction * model_dim)
+    # o_proj lives in head space (in_features = heads*head_dim, which equals
+    # hidden only when head_dim == hidden//heads; Qwen3-32B: 8192 vs 5120).
+    # Its per-head split is int(hf*head_dim) per head (matching basis.py's R2
+    # ordering and rotation._rearrange_o_proj), so the total reordered high
+    # segment is heads * int(hf*head_dim) — identical to int(hf*hidden) on
+    # every hidden==heads*head_dim model.
+    o_high_bits_length = num_heads * int(high_fraction * head_dim)
+    o_low_bits_length = num_heads * int(low_fraction * head_dim)
     # When the basis bundle was built with global hidden-dim PCA on o_proj
     # input, the per-head group concept is gone for o_proj. The o_proj
     # quantizer must use groupsize=-1 with hidden-dim-derived high/low
@@ -183,8 +191,8 @@ def configure_quantizers(model, config):
                 # unnecessary. Requires the activation reorder to happen
                 # BEFORE quantization (see ActQuantWrapper.reorder_before_quant).
                 layer_groupsize = -1
-                layer_high_length = high_bits_length
-                layer_low_length = low_bits_length
+                layer_high_length = o_high_bits_length
+                layer_low_length = o_low_bits_length
                 qlayers[name].reorder_before_quant = True
             else:
                 layer_groupsize = head_dim

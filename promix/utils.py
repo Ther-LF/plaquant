@@ -9,6 +9,21 @@ from fast_hadamard_transform import hadamard_transform
 DEV = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
+def config_head_dim(config):
+    """True per-head dim of the attention projections.
+
+    Prefers an explicit ``config.head_dim`` (Qwen3 defines it independently of
+    the residual width — e.g. Qwen3-32B: head_dim=128 while hidden//heads =
+    5120//64 = 80) and falls back to ``hidden_size // num_attention_heads``
+    (every Llama, where the two always coincide). All rotation/basis/ptq sites
+    that reshape q/k/v/o per head MUST use this, never hidden//heads: the
+    per-head weight blocks are head_dim-sized (q/k/v out_features =
+    heads*head_dim, o_proj in_features = heads*head_dim), not
+    (hidden//heads)-sized."""
+    hd = getattr(config, "head_dim", None)
+    return hd if hd else config.hidden_size // config.num_attention_heads
+
+
 class HadamardTransform(torch.autograd.Function):
     @staticmethod
     def forward(ctx, u, scale=1.0):

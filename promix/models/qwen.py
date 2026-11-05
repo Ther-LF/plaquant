@@ -18,18 +18,23 @@ Qwen3 vs Llama architecture diffs that matter for ProMix/ResQ rotation:
   supporting Qwen2.5 additionally requires rotating v_proj.bias by R2 in
   rotation._apply_had_to_linear (output path currently rotates weight only).
 - explicit config.head_dim: Qwen3 defines head_dim independently of
-  hidden_size // num_attention_heads. For Qwen3-8B they coincide (128); the
-  plugin asserts this because rotation.py / ptq.py derive head_dim as
-  hidden_size // num_heads throughout.
+  hidden_size // num_attention_heads. For Qwen3-8B/14B they coincide (128);
+  for Qwen3-32B they diverge (128 vs 5120//64 = 80) — supported since the
+  rd-qwenmid head_dim threading (promix.utils.config_head_dim is used by
+  basis/rotation/ptq/kv_quant instead of hidden//heads).
 - tie_word_embeddings=False for 8B+ (loader's untie handling is a no-op).
-- intermediate_size=12288 = 12 x 1024 -> down_proj online Hadamard uses had12
-  (Paley I, q=11; added to hadamard_data.json).
+- intermediate_size down_proj online Hadamard decompositions:
+  8B 12288 = 12 x 1024 -> had12 (Paley I, q=11);
+  14B 17408 = 68 x 256 -> had68 (Paley I, q=67);
+  32B 25600 = 100 x 256 -> had100 (Paley II, q=49 = 7^2).
+  All verified H @ H.T = K*I with +-1 entries (hadamard_data.json).
 """
 
 from typing import Dict, List
 import torch.nn as nn
 
 from .base import ModelPlugin
+from promix.utils import config_head_dim
 
 
 class Qwen3Plugin(ModelPlugin):
@@ -68,12 +73,10 @@ class Qwen3Plugin(ModelPlugin):
         return model.config.num_attention_heads
 
     def get_head_dim(self, model) -> int:
-        implied = model.config.hidden_size // model.config.num_attention_heads
-        explicit = getattr(model.config, "head_dim", implied)
-        assert explicit == implied, (
-            f"Qwen3 config.head_dim={explicit} != hidden//heads={implied}; "
-            "rotation.py/ptq.py derive head_dim as hidden//heads, so this "
-            "model size is NOT supported without generalizing those sites "
-            "(e.g. Qwen3-4B: 2560/32=80 vs head_dim=128)."
-        )
-        return explicit
+        # Qwen3 defines config.head_dim independently of hidden_size //
+        # num_attention_heads (e.g. Qwen3-32B: 128 vs 5120//64 = 80). All
+        # rotation/basis/ptq sites use promix.utils.config_head_dim, which
+        # prefers the explicit value — so divergent models are supported
+        # (rd-qwenmid head_dim threading; previously this plugin asserted
+        # equality and e.g. Qwen3-4B/32B were blocked).
+        return config_head_dim(model.config)

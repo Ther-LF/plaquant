@@ -21,6 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
 
 from promix.quantize.fuse_norm import fuse_layer_norms
+from promix.utils import config_head_dim
 
 
 def get_calibration_data(tokenizer, nsamples, seqlen, seed, calib_dataset="wikitext"):
@@ -182,7 +183,7 @@ def compute_basis(
     # Extract model dimensions
     hidden_dim = model.config.hidden_size
     num_attention_heads = model.config.num_attention_heads
-    head_dim = hidden_dim // num_attention_heads
+    head_dim = config_head_dim(model.config)
     kv_heads = model.config.num_key_value_heads
     layers = model.model.layers
     nlayers = len(layers)

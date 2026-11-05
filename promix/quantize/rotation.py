@@ -9,7 +9,7 @@ Handles the full_shared rotation granularity:
 import torch
 from tqdm import tqdm
 
-from promix.utils import cleanup_memory
+from promix.utils import cleanup_memory, config_head_dim
 from promix.quantize.hadamard import matmul_hadU_cuda, get_hadK
 
 # Uniform 64-ring block-diagonal R1 substrate (spec §3). Implemented in a
@@ -177,9 +177,15 @@ def rearrange_columns(model, high_fraction, low_fraction=0.0, o_proj_pca="per_he
     """
     if o_proj_pca == "full_global":
         return
-    head_dim = model.config.hidden_size // model.config.num_attention_heads
-    high_bits_length = int(high_fraction * model.config.hidden_size)
-    low_bits_length = int(low_fraction * model.config.hidden_size)
+    head_dim = config_head_dim(model.config)
+    # Per-head lengths MUST be derived from head_dim, not from the residual
+    # width: int(hf*hidden)//heads == int(hf*head_dim) only when hidden ==
+    # heads*head_dim. Qwen3-32B (head_dim 128, hidden//heads 80) breaks that
+    # identity; basis.py / the R2 ordering put int(hf*head_dim) high coords at
+    # the tail of EACH head, so the reorder must move exactly that many.
+    num_heads = model.config.num_attention_heads
+    high_bits_length = num_heads * int(high_fraction * head_dim)
+    low_bits_length = num_heads * int(low_fraction * head_dim)
 
     for layer in tqdm(model.model.layers, desc="Rearranging o_proj"):
         _rearrange_o_proj(layer, high_bits_length, low_bits_length, head_dim)
@@ -235,7 +241,7 @@ def fuse_basis_to_model(model, basis_path, rotation_path, high_fraction, low_fra
     config = model.config
     num_heads = config.num_attention_heads
     model_dim = config.hidden_size
-    head_dim = model_dim // num_heads
+    head_dim = config_head_dim(config)
 
     # Load basis and rotation
     U_cpk = torch.load(basis_path, weights_only=False)

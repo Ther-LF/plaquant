@@ -4,6 +4,7 @@ from typing import Dict, List
 import torch.nn as nn
 
 from .base import ModelPlugin
+from promix.utils import config_head_dim
 
 
 class LlamaPlugin(ModelPlugin):
@@ -42,4 +43,4 @@ class LlamaPlugin(ModelPlugin):
         return model.config.num_attention_heads
 
     def get_head_dim(self, model) -> int:
-        return model.config.hidden_size // model.config.num_attention_heads
+        return config_head_dim(model.config)
