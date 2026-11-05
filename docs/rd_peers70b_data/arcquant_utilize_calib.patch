@@ -1,0 +1,29 @@
+--- utilize.py.orig	2026-11-05 07:38:43.917511398 +0000
++++ utilize.py	2026-11-05 07:38:43.933510993 +0000
+@@ -144,7 +144,7 @@
+             attn_block.q_proj.weight.data,
+             attn_block.k_proj.weight.data,
+             attn_block.v_proj.weight.data
+-        ], dim=0).to(device=device, non_blocking=True)
++        ], dim=0)  # rd-peers70b: keep on CPU (unused by stat_tensor; 88GB OOM at 70B)
+         
+         for proj_name, proj_module in [('q_proj', attn_block.q_proj), ('k_proj', attn_block.k_proj), ('v_proj', attn_block.v_proj)]:
+             name = f'layers.{layer_idx}.self_attn.{proj_name}'
+@@ -190,7 +190,7 @@
+                 gate_up_weight_combined = torch.cat([
+                     expert.w1.weight.data, 
+                     expert.w3.weight.data
+-                ], dim=0).to(device=device, non_blocking=True)
++                ], dim=0)  # rd-peers70b: keep on CPU (unused by stat_tensor; 88GB OOM at 70B)
+                 
+                 for proj_name, proj_module in [('w1', expert.w1), ('w3', expert.w3)]:
+                     name = f'layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.{proj_name}'
+@@ -222,7 +222,7 @@
+             gate_up_weight_combined = torch.cat([
+                 mlp_block.gate_proj.weight.data, 
+                 mlp_block.up_proj.weight.data
+-            ], dim=0).to(device=device, non_blocking=True)
++            ], dim=0)  # rd-peers70b: keep on CPU (unused by stat_tensor; 88GB OOM at 70B)
+             
+             for proj_name, proj_module in [('gate_proj', mlp_block.gate_proj), ('up_proj', mlp_block.up_proj)]:
+                 name = f'layers.{layer_idx}.mlp.{proj_name}'
