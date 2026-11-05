@@ -181,6 +181,9 @@ def main():
                          "none = bf16 bridge only")
     ap.add_argument("--collect_tokens", type=int, default=4096)
     ap.add_argument("--calib_samples", type=int, default=16)
+    # rd-densesweep: budget knob + stats cache (see rd_acctune.py)
+    ap.add_argument("--budget_frac", type=float, default=0.125)
+    ap.add_argument("--stats_cache", default=None)
     ap.add_argument("--gptq_nsamples", type=int, default=None)
     ap.add_argument("--percdamp", type=float, default=None)
     ap.add_argument("--act_order", action="store_true")
@@ -210,6 +213,7 @@ def main():
     meta = dict(point=args.point, model=config["model"]["name"],
                 basis=os.path.basename(config["paths"]["basis"]),
                 substrate=args.substrate, ring_size=S, alloc=args.alloc,
+                budget_frac=args.budget_frac,
                 collect_tokens=args.collect_tokens,
                 gptq_nsamples=config["calibration"].get("nsamples", 128),
                 percdamp=config["quantize"].get("percdamp", 0.01),
@@ -243,25 +247,36 @@ def main():
     # --- allocation ----------------------------------------------------------
     chosen = None
     if args.alloc == "measured":
-        tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
-        calib = get_wikitext2(nsamples=args.calib_samples,
-                              seed=config["calibration"].get("seed", 0),
-                              seqlen=2048, tokenizer=tok, eval_mode=False)
         t0 = time.time()
-        cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
-                               ring_size=S)
-        stats = collect_stats_offload(cmodel, calib,
-                                      max_tokens=args.collect_tokens, ring=S)
-        del cmodel
-        cleanup_memory()
+        if args.stats_cache and os.path.exists(args.stats_cache):
+            stats = torch.load(args.stats_cache, weights_only=False)
+            print(f"STATS_CACHE loaded {args.stats_cache}", flush=True)
+        else:
+            tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
+            calib = get_wikitext2(nsamples=args.calib_samples,
+                                  seed=config["calibration"].get("seed", 0),
+                                  seqlen=2048, tokenizer=tok, eval_mode=False)
+            cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
+                                   ring_size=S)
+            stats = collect_stats_offload(cmodel, calib,
+                                          max_tokens=args.collect_tokens, ring=S)
+            del cmodel
+            cleanup_memory()
+            if args.stats_cache:
+                tmp = args.stats_cache + f".tmp{os.getpid()}"
+                torch.save(stats, tmp)
+                os.replace(tmp, args.stats_cache)
+                print(f"STATS_CACHE saved {args.stats_cache}", flush=True)
         total_rings = sum(stats[n]["nr"] for n in stats)
-        budget = int(round(0.125 * total_rings))
-        chosen = rv.measured_alloc(stats, budget, total_rings)
+        budget = int(round(args.budget_frac * total_rings))
+        chosen = rv.clamp_chosen(
+            rv.measured_alloc(stats, budget, total_rings), stats)
         nsel = sum(len(v) for v in chosen.values())
         print(f"ALLOC total_rings={total_rings} sel={nsel} "
               f"(frac={nsel/total_rings:.4f}) ({time.time()-t0:.0f}s)",
               flush=True)
-        results["alloc_meta"] = dict(total_rings=total_rings, sel_rings=nsel)
+        results["alloc_meta"] = dict(total_rings=total_rings, sel_rings=nsel,
+                                     budget_frac=args.budget_frac)
         save()
 
     # --- build + eval --------------------------------------------------------

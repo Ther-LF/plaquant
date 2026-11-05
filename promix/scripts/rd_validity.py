@@ -204,6 +204,26 @@ def measured_alloc(stats, budget_rings, total_rings):
     return chosen
 
 
+def clamp_chosen(chosen, stats):
+    """rd-densesweep: keep >=1 NVFP4 (low) ring per Linear so K_low is never 0.
+    A fully-FP8 Linear crashes the two-level NVFP4 weight quantizer (empty
+    `amax` reduce) and the fused kernel rejects K_low==0 (pack_weight_mixed /
+    plugin assert). At high budgets the global deltaD threshold can fill a
+    small Linear completely; we drop its lowest-deltaD FP8 ring(s) back to
+    NVFP4, so budget_frac=1.0 realizes "all-but-one-ring MXFP8" (honest
+    near-pure-FP8 endpoint; pure MXFP8 has no fused-kernel path). Identity
+    at the shipped 1/8 budget (no Linear is full there). Mirrors
+    rd_sweep._clamp_chosen."""
+    for name, S in chosen.items():
+        nr = stats[name]["nr"]
+        if len(S) >= nr:
+            dd = stats[name]["deltaD"]
+            drop = len(S) - (nr - 1)
+            for r in sorted(S, key=lambda r: float(dd[r]))[:drop]:
+                S.discard(r)
+    return chosen
+
+
 # ---------------------------------------------------------------------------
 # Apply an allocation to a freshly-built base model (reorder + weight-permute +
 # GPTQ-edriven tag + activation override), run GPTQ, configure, KV, return model.

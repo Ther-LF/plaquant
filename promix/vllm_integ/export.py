@@ -353,6 +353,12 @@ def main():
     ap.add_argument("--resolve-paths", action="store_true",
                     help="apply rd_ron.resolve_paths (local model dirs + "
                          "per-head basis/rotation artifacts, acctune protocol)")
+    # rd-densesweep: sweep-r override. rd_ron.resolve_paths forces
+    # high_fraction=0.125 (the artifact protocol); this flag re-applies the
+    # sweep budget AFTER resolution so the measured ring allocation gets the
+    # intended budget while the basis/rotation artifacts stay the shipped
+    # 0.125 substrate (the rotation is a fixed substrate, not budget-keyed).
+    ap.add_argument("--high_fraction", type=float, default=None)
     args = ap.parse_args()
 
     config = load_config(args.config)
@@ -362,6 +368,8 @@ def main():
         sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
         import rd_ron
         config = rd_ron.resolve_paths(config)
+    if args.high_fraction is not None:
+        config["quantize"]["high_fraction"] = args.high_fraction
     if args.gptq_nsamples is not None:
         config["calibration"]["nsamples"] = args.gptq_nsamples
     if args.percdamp is not None:
@@ -400,7 +408,8 @@ def main():
             cleanup_memory()
             total_rings = sum(stats[n]["nr"] for n in stats)
             budget = int(round(HIGH_FRACTION * total_rings))
-            chosen = rv.measured_alloc(stats, budget, total_rings)
+            chosen = rv.clamp_chosen(
+                rv.measured_alloc(stats, budget, total_rings), stats)
             nsel = sum(len(v) for v in chosen.values())
             print(f"ALLOC total_rings={total_rings} sel={nsel} "
                   f"(frac={nsel/total_rings:.4f})", flush=True)
