@@ -168,7 +168,7 @@ densesweep's GPUs (explicitly out of scope). The NVFP4-70B number alone already 
 | bf16 bridge | 73.33 | 65.28 | rd_metrics / rd_mmlu |
 | ProMix uniform-1/8 | 72.69 | 62.85 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
 | ProMix measured-1/8 | 72.36 | — | rd_metrics |
-| SharQ | _(running)_ | 62.87 | rd_mmlu (MMLU) |
+| SharQ | **71.89** | 62.87 | **measured** / rd_mmlu |
 | ARCQuant | **71.47** | 62.19 | **measured** / rd_mmlu |
 | vLLM-NVFP4 | **71.48** | 62.34 | measured / rd_mmlu |
 | MicroMix ‡ | **70.63** | **59.12** (60.53 macro) | measured |
