@@ -127,11 +127,33 @@ Prerequisite: the Qwen3-14B PCA basis + initial rotation
 progress. Numbers will be appended here as the campaign (queued behind the
 box's densesweep/accmatrix jobs on the shared GPUs) completes.
 
-### Results (appended as they land)
+### Basis-generation fix (transformers >= 5.x)
 
-_pending basis + campaign_
+Computing the Qwen3-14B PCA basis surfaced a second, independent bug in
+`basis.py` (not a rotation/closure issue). `compute_basis` runs a manual
+layer-by-layer forward and feeds each layer's output back as the next layer's
+input; it took `layer(...)[0]`, assuming the transformers <= 4.51 tuple
+`(hidden, ...)` return. transformers >= 5.x decoder layers return a **bare
+Tensor**, so `[0]` sliced the batch dimension -> 2D hidden -> the next layer
+reshaped q to `[seq, num_heads, head_dim].transpose(1,2)`, putting num_heads on
+the RoPE axis and crashing `apply_rotary_pos_emb` (size 40 = Qwen3-14B num_heads
+vs head_dim 128). Fixed by unwrapping defensively (commit `5d1dd73`); verified
+the isolated 14B-dims layer forward keeps `[1, seq, hidden]`. This unblocks
+basis generation for Qwen3 (and any model) under the box's transformers 5.17.
+
+### Accuracy / baseline results (appended as they land)
+
+The Qwen3-14B PCA basis is recomputing (CPU-bound FP32 covariance, ~340 s/layer
+x 40 layers ~= 3.8 h on the shared box). A chained, detached campaign
+(`/home/luofan/qwen14b_campaign.sh`, GPU-pinned, `nice`) waits for the basis,
+then runs the bf16 bridge + shipped r=0.125 point, then the 5% budget grid
+(0.05..1.00, 20 points), each writing `/home/luofan/qwenmid_work/14b_r<R>.json`
+(logs under `.../logs/`). Collate those JSONs here once they land. (Numbers are
+intentionally not reported until the runs complete and are verified.)
 
 ## 4. Commits
 
 - `bbcf057` rd-qwenmid: per-head Hadamard group-count fix (out->in features) — validated bit-exact here.
 - `4f16081` rd-qwenmid: merge origin/feat/rd-alloc; resolve rd_acctune.py clamp_chosen/budget_frac conflict keeping both sides.
+- `a20c93a` rd-qwenmid: this closure-resolution doc.
+- `5d1dd73` rd-qwenmid: basis.py layer-output unwrap fix for transformers >=5.x (unblocks 14B basis).
