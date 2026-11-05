@@ -172,7 +172,14 @@ densesweep's GPUs (explicitly out of scope). The NVFP4-70B number alone already 
 | ARCQuant | **71.47** | 62.19 | **measured** / rd_mmlu |
 | vLLM-NVFP4 | **71.48** | 62.34 | measured / rd_mmlu |
 | MicroMix ‡ | **70.63** | **59.12** (60.53 macro) | measured |
-| CoQuant a_cov | _(running)_ | **59.81** (61.0 macro) | measured |
+| CoQuant a_cov | _(in flight)_ ¶ | **59.81** (61.0 macro) | measured |
+
+¶ CoQuant 8B 0-shot is the one cell still running at write time (its wiki gate 7.3510 already
+reproduced = committed a_cov 8B; the 0-shot eval is crawling on the densesweep-saturated box,
+~2 h ETA). It lands to `/home/luofan/accmatrix/coq_8b_zs.json`; harvest with
+`docker exec luofan-plaquant python3 /home/luofan/accmatrix/harvest_all.py` (helper committed
+alongside the runner scripts) and join the AVG6 here. Every other 0-shot/MMLU cell in this
+section is measured and committed.
 
 ---
 
