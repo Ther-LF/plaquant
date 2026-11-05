@@ -37,7 +37,9 @@
 | 方法 | 指标 | 尺寸 | 负责 | 状态 | 结果路径(落地后填) |
 |---|---|---|---|---|---|
 | **精度矩阵 BOPs join**(理论+门后真实) | 全方法 | — | accmatrix | ✅ | `docs/rd_accuracy_matrix.md`(已验证;SharQ 70B 赢精度但 ~2× 真实BOPs)|
-| NVFP4/ARCQuant/SharQ/MicroMix/CoQuant | **0-shot(实测)** | 3B/8B | accmatrix | ⬜ 未启动 | 待派 |
+| NVFP4/ARC/SharQ/MicroMix/CoQuant | **0-shot(实测)** | 3B/8B | accmatrix | ✅(CoQuant-8B 1 格在跑)| `docs/rd_accuracy_matrix.md`(已验证)|
+| MicroMix/CoQuant | **MMLU(实测)** | 3B/8B | accmatrix | ✅ | 同上 |
+| NVFP4 | **0-shot+MMLU @70B(TP1)** | 70B | accmatrix | ✅ | 同上(0-shot 77.94 / MMLU 78.99)|
 | MicroMix/CoQuant | **MMLU** | 3B/8B | accmatrix | 🔄 | 同上 |
 | **FP-Quant/QuTLASS** | 全4指标 | 3B/8B | accmatrix | 🔄 | 同上 |
 | ProMix | **0-shot+MMLU 多比例**(5点)| 3B/8B | accmatrix | 🔄 | 同上 |
@@ -82,3 +84,4 @@
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
 - 2026-11-05 opus协调收割:densesweep 自维持(8 GPU 满载,逐点 auto-commit);accmatrix BOPs join 落地(`git cat-file -e` PASS);实测 0-shot/MMLU/FP-Quant/old-four 未启动,待派;qwenmid 闭合未收敛(cos 0.9937)。_khigh_for 非bug(acc 点即 fakequant 参考,不走 kernel 路由)。
 - 2026-11-05 qwenmid 闭合收割:14B cos 0.99999994 / 32B cos 1.0,argmax 全对;0.9937 是 fuse_layer_norms 均值中心化在随机小模型上的表象,真模型近似无损(1B 与 ResQ 逐位吻合)。两 bug 修复(basis.py tf5.x tuple、argparse 重复)。PPL 曲线 campaign 跑中(非伪造,JSON 待落)。
+- 2026-11-05 accmatrix 实测收割(含 -f 误删→从 /tmp/accmatrix-push 恢复 57515e5):0-shot 3B/8B 全 peer + MMLU(MicroMix/CoQuant)+ 70B-NVFP4(单卡TP1,0-shot77.94/MMLU78.99)。排序 SharQ≥NVFP4≈ARC>MicroMix>CoQuant,全在 ProMix 下,与 PPL 一致。未做:ProMix-70B 0-shot(需多卡驻留,densesweep 占满)、FP-Quant、ProMix 多比例0shot/MMLU、old-four C4/0shot/MMLU、CoQuant-8B-0shot(跑中)。
