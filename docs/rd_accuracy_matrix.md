@@ -141,6 +141,26 @@ the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext 
 | MicroMix ‡ | **65.14** | **49.79** (51.19 macro) | measured |
 | CoQuant a_cov | _(running)_ | _(running)_ | measured |
 
+### Meta-Llama-3-70B — removing the "70B 0-shot infeasible" limitation
+
+The packed **NVFP4-70B** checkpoint (`Meta-Llama-3-70B-Instruct-NVFP4`, 39.86 GiB) **fits a
+single 96 GB RTX PRO 6000**, so its 0-shot ran directly through the lm-eval vLLM backend
+(TP=1, `gpu_memory_utilization=0.85`, KV cache 119 k tokens) — no multi-GPU device_map needed.
+This is the first measured 70B downstream-metric cell in this campaign.
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| vLLM-NVFP4 70B | **77.94** | _(running)_ | **measured** (vLLM TP=1, one 96 GB card) |
+| ProMix 70B | _(not run — box saturated)_ | _(not run)_ | — |
+
+Per-task NVFP4-70B 0-shot: piqa 82.21 / arc_e 83.84 / arc_c 65.36 / hellaswag 82.67 /
+winogrande 76.64 / lambada 76.93 (monotonic with scale: 3B 66.16 → 8B 71.48 → 70B 77.94).
+**ProMix-70B 0-shot/MMLU not run**: it needs the 140 GB fake-quant pipeline resident across
+multiple GPUs (device_map / TP), and the 8× box was saturated by the concurrent `densesweep`
+70B accuracy+serving campaign for the whole window — launching it would have contended
+densesweep's GPUs (explicitly out of scope). The NVFP4-70B number alone already lifts the
+"70B 0-shot infeasible" limitation for the FP4 field.
+
 ### Llama-3-8B
 
 | method | 0-shot 6-task avg | MMLU 5-shot | source |
