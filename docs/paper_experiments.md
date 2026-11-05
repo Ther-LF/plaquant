@@ -52,10 +52,10 @@
 
 | ID | 实验 | GPU 车道 | 预估 |
 |---|---|---|---|
-| E1 | MMLU 5-shot + 新配方 0-shot ✅ `rd_mmlu_report.md`(3B ProMix MMLU 第一 54.12;8B 平 SharQ;0-shot 1B/3B 噪声内、8B +0.33)| 4 | 完成 |
-| E2 | 32B/70B 规模扩展(可行性→精度→serving-带注) | 0-2 | 2-3 天(含下载)|
-| E4 | 算子 Pareto 终版复测(延迟 vs r 全曲线 + 对手点) | 6 | 半天 |
+| E1 | ✅ `rd_mmlu_report.md`(3B ProMix MMLU 第一 54.12;8B 平 SharQ;0-shot 1B/3B 噪声内、8B +0.33)| 4 | 完成 |
+| E2 | 32B/70B ✅ `rd_scale_report.md`(70B 全矩阵;32B arch no-go;领先 70B 翻转+0.045 诚实;单卡量化70B 完胜双卡BF16 3.4-4.2×/GPU;ring512 分配增益 70B 回归) | 0-2 | 完成 |
+| E4 | ✅ `rd_operator_pareto.md` | 6 | 完成 |
 | E5 | 组件累计消融(精度 build-up + 性能 build-up) ✅ `docs/rd_buildup_ablation.md` | 5(精度)/7(性能) | 完成 |
 | E6 | 3-seed 误差棒(headline 点) ✅ 同上 | 搭 E5 车道 | 完成 |
 | E3 | 8B r-sweep 补密 | 低优,E2 后 | — |
-| (KV4) | 🔄 进行中 | 3 | — |
+| (KV4) | ✅ `rd_kv4_fix.md` | 3 | 完成 |

@@ -14,6 +14,10 @@
 | **MMLU 5-shot**(E1) | 3B:ProMix **54.12** > SharQ 53.42 > ARCQuant 52.64 ≈ NVFP4 52.63(bf16 56.11)→ 量化组明显第一;8B:ProMix 62.85 ≈ SharQ 62.87(平,±0.4 噪声)> ARC/NVFP4 ~62.2;跨 harness 桥已验(+0.17-0.36pp) | `rd_mmlu_report.md` |
 | 新配方 0-shot(E1,诚实) | 1B/3B 较旧锚点 −0.4pp(任务噪声内)、8B +0.33 → **下游 headline 是 MMLU 不是 0-shot**(如实写) | 同上 |
 | 跨族(Qwen3-8B) | uniform gap +0.242(比 Llama-8B 的 +7.4% 健康);分配 break-even 落在 scaling 趋势上 | `rd_qwen_report.md` |
+| **70B 规模点(E2,诚实)** | bf16 5.316;NVFP4 5.928;ProMix 最好(ring512+measured)5.973 → **70B 上领先翻转(+0.045 wiki/+0.109 C4@+0.47bit)**;领先随规模单调缩:1B −1.09→3B −0.33→8B −0.27→70B +0.045;tuned 配方只救 C4(9.855) | `rd_scale_report.md` |
+| 70B 分配 scaling(两基座) | dense:+0.023 break-even(**衰减律确认**);ring512:**非单调,wiki 增益回归 −0.101**(C4~0,如实两面)且环代价在 70B 免费 | 同上 |
+| **70B 部署效率(serving 金句)** | 量化 70B 单卡 完胜 BF16 双卡(TTFT 1.9-2.1×、decode 1.68-1.73×)= **每GPU 效率 ~3.4-4.2×**,且是 96GB 单卡跑 70B 的唯一方式 | 同上 |
+| Qwen3-32B no-go(文档化) | head_dim≠hidden/heads + 无 had100;解锁=head_dim 重构+had100,deferred | 同上 |
 | 校准鲁棒(wiki↔C4 2×2) | 交叉格 ≤+0.12(~1%),排名不变;分配增益四格全活;我们的 ΔD 环节最鲁棒;U 子空间重叠 0.66-0.69、环选择 81.4%(随机 12.5%) | `rd_calib_robustness.md` |
 
 ## 2. 分配算法 claims
