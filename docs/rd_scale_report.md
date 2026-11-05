@@ -48,8 +48,8 @@ hidden//heads ✓; GQA 8 KV heads (same as Llama-3-8B, supported) ✓;
 intermediate 28672 = 28×1024 → had28 already in hadamard_data.json ✓;
 untied embeddings ✓. Ring512 substrate: 8192 % 512 = 0 ✓.
 
-NOTE: the only 70B on disk is the **Instruct** model. All six 70B points below
-(bridge, NVFP4, 4 ProMix points) are measured on the SAME model, so every
+NOTE: the only 70B on disk is the **Instruct** model. All seven 70B points below
+(bridge, NVFP4, 5 ProMix points) are measured on the SAME model, so every
 comparison is internally fair; absolute PPLs are not comparable to a base-model
 70B (instruct models have higher wiki PPL).
 
@@ -118,7 +118,7 @@ within noise) / C4 9.8549 (−0.037, a real but small C4 gain) — ProMix's best
 70B cells remain +0.045 wiki (standard) / +0.109 C4 (tuned) behind NVFP4.
 The acctune levers were tuned on 1B/3B/8B and transfer only on C4 here.
 
-## 4. Scaling-trend verdict (allocation gain, uniform − measured, wiki)
+## 4. Scaling-trend verdict (allocation gain, measured − uniform, wiki)
 
 | substrate | 1B | 3B | 8B | 13B | **70B** |
 |---|---|---|---|---|---|
