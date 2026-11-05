@@ -138,7 +138,7 @@ the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext 
 | SharQ | **66.64** | 53.42 | **measured** / rd_mmlu |
 | ARCQuant | **66.14** | 52.64 | **measured** / rd_mmlu |
 | vLLM-NVFP4 | **66.16** | 52.63 | **measured** / rd_mmlu |
-| MicroMix ‡ | **65.14** | _(running)_ | measured |
+| MicroMix ‡ | **65.14** | **49.79** (51.19 macro) | measured |
 | CoQuant a_cov | _(running)_ | _(running)_ | measured |
 
 ### Llama-3-8B
