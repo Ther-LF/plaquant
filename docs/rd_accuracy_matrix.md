@@ -112,6 +112,50 @@ which raises ProMix's bits/BOPs) lets ProMix match 5.769 — i.e. whether ProMix
 
 ---
 
+## Measured downstream metrics — 0-shot 6-task avg + MMLU 5-shot (rd-accmatrix round)
+
+This fills the cells the newpeers/mmlu campaigns left empty: **0-shot 6-task average**
+(piqa / arc_easy / arc_challenge / hellaswag / winogrande / lambada_openai; acc_norm for
+piqa/arc/hellaswag, acc for winogrande/lambada; lm-eval **0.4.5**, same GPU-pinning
+convention as `rd_metrics_report.md`) and **MMLU 5-shot** (57-subtask group aggregate =
+micro acc, `num_fewshot=5`). Peer builds are the **same as-shipped quantized models** as
+the PPL rows: ARCQuant / SharQ / MicroMix via `rd_newacc_peer.py --lmeval_tasks`; CoQuant
+(a_cov control = ResQ criterion) via its own shipped `ptq.py` (reproduces its committed
+wiki PPL in-run as the trust gate); vLLM-NVFP4 via the lm-eval vLLM backend. Cited numbers
+(ProMix / ARCQuant / SharQ / NVFP4 MMLU, ProMix 0-shot) are from `rd_mmlu_report.md` /
+`rd_metrics_report.md`; **bold** cells are measured this round (raw JSON in
+`docs/rd_accmatrix_data/`). Runner: `promix/scripts/rd_accmatrix_run.sh` (+ `_coquant.sh`).
+"‡" = ProMix MMLU is the acctune shipping-recipe build (the only ProMix MMLU runs);
+the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext (matrix order).
+
+### Llama-3.2-3B
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| bf16 bridge | 68.11 | 56.11 | rd_metrics / rd_mmlu |
+| ProMix measured-1/8 | 66.77 | 54.12 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
+| ProMix uniform-1/8 | 66.89 | — | rd_metrics |
+| SharQ | _(running)_ | 53.42 | rd_mmlu (MMLU) |
+| ARCQuant | _(running)_ | 52.64 | rd_mmlu (MMLU) |
+| vLLM-NVFP4 | **66.16** | 52.63 | **measured** / rd_mmlu |
+| MicroMix ‡ | _(running)_ | _(running)_ | measured |
+| CoQuant a_cov | _(running)_ | _(running)_ | measured |
+
+### Llama-3-8B
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| bf16 bridge | 73.33 | 65.28 | rd_metrics / rd_mmlu |
+| ProMix uniform-1/8 | 72.69 | 62.85 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
+| ProMix measured-1/8 | 72.36 | — | rd_metrics |
+| SharQ | _(running)_ | 62.87 | rd_mmlu (MMLU) |
+| ARCQuant | _(running)_ | 62.19 | rd_mmlu (MMLU) |
+| vLLM-NVFP4 | _(running)_ | 62.34 | measured / rd_mmlu |
+| MicroMix ‡ | _(running)_ | _(running)_ | measured |
+| CoQuant a_cov | _(running)_ | _(running)_ | measured |
+
+---
+
 ## Reading the matrix as a cost table
 
 1. **On paper, the whole W4A4 field clusters at theo rel-BOPs ≈ 0.06–0.09** (the "it's just
@@ -141,9 +185,9 @@ datapaths ProMix is the accuracy-per-BOP frontier."** Mirror of the two-bar theo
 
 ## Scope / honesty notes
 
-- **Metric = wikitext + C4 PPL.** lm-eval zero-shot and MMLU phases were out of scope for the
-  peer campaign (`rd_newpeers_accuracy.md`: "zero-shot phases were skipped (PPL scope)"); those
-  cells are therefore not populated here rather than estimated. ProMix MMLU/0-shot at the ratio
+- **Metrics.** wikitext + C4 PPL in the cost tables above; the **0-shot 6-task avg + MMLU
+  5-shot** cells (out of scope for the original newpeers/mmlu campaigns) are now measured and
+  joined in the "Measured downstream metrics" section. ProMix MMLU/0-shot at the ratio
   subset live in `docs/rd_mmlu_report.md` where measured.
 - **KV mismatch:** INT rows (CoQuant/Atom/SpinQuant/QuaRot) are KV4 and INT-format, i.e. not
   format-matched to the NVFP4 KV16 group; they are shown for field completeness, not as a
