@@ -171,7 +171,7 @@ densesweep's GPUs (explicitly out of scope). The NVFP4-70B number alone already 
 | SharQ | _(running)_ | 62.87 | rd_mmlu (MMLU) |
 | ARCQuant | _(running)_ | 62.19 | rd_mmlu (MMLU) |
 | vLLM-NVFP4 | **71.48** | 62.34 | measured / rd_mmlu |
-| MicroMix ‡ | _(running)_ | _(running)_ | measured |
+| MicroMix ‡ | **70.63** | _(running)_ | measured |
 | CoQuant a_cov | _(running)_ | _(running)_ | measured |
 
 ---
