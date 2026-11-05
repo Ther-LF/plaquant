@@ -353,6 +353,12 @@ def main():
     ap.add_argument("--resolve-paths", action="store_true",
                     help="apply rd_ron.resolve_paths (local model dirs + "
                          "per-head basis/rotation artifacts, acctune protocol)")
+    # rd-densesweep: sweep-r override. rd_ron.resolve_paths forces
+    # high_fraction=0.125 (the artifact protocol); this flag re-applies the
+    # sweep budget AFTER resolution so the measured ring allocation gets the
+    # intended budget while the basis/rotation artifacts stay the shipped
+    # 0.125 substrate (the rotation is a fixed substrate, not budget-keyed).
+    ap.add_argument("--high_fraction", type=float, default=None)
     args = ap.parse_args()
 
     config = load_config(args.config)
@@ -362,6 +368,8 @@ def main():
         sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
         import rd_ron
         config = rd_ron.resolve_paths(config)
+    if args.high_fraction is not None:
+        config["quantize"]["high_fraction"] = args.high_fraction
     if args.gptq_nsamples is not None:
         config["calibration"]["nsamples"] = args.gptq_nsamples
     if args.percdamp is not None:
@@ -370,6 +378,7 @@ def main():
     # per-wrapper configured high_bits_length still takes precedence.
     global HIGH_FRACTION
     HIGH_FRACTION = float(config["quantize"]["high_fraction"])
+    budget_frac = HIGH_FRACTION
     init_distributed_for_ptq_main_if_needed()
     transformers.set_seed(config["calibration"].get("seed", 0))
 
@@ -381,6 +390,15 @@ def main():
         # allocation via the proven rd_validity machinery (the same build that
         # produced the docs/rd_accuracy_tuning.md anchors). GPTQ always runs
         # inside rv.build_eval.
+        # rd-densesweep: the sweep budget drives ONLY the measured ring
+        # allocation (mirrors rd_acctune --budget_frac). The config
+        # high_fraction must stay at the proven 1/8 protocol here: it shapes
+        # the substrate/uniform splits of the NON-alloc Linears (o_proj is
+        # excluded from ring allocation), whose per-head split is only
+        # block-aligned at 1/8 — a raw swept fraction crashes the build
+        # (non-16/32-aligned K_low) or silently changes the protocol.
+        config["quantize"]["high_fraction"] = 0.125
+        HIGH_FRACTION = 0.125
         sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
         import rd_validity as rv
         ring_r1 = args.substrate == "ring"
@@ -399,8 +417,9 @@ def main():
             del cmodel
             cleanup_memory()
             total_rings = sum(stats[n]["nr"] for n in stats)
-            budget = int(round(HIGH_FRACTION * total_rings))
-            chosen = rv.measured_alloc(stats, budget, total_rings)
+            budget = int(round(budget_frac * total_rings))
+            chosen = rv.clamp_chosen(
+                rv.measured_alloc(stats, budget, total_rings), stats)
             nsel = sum(len(v) for v in chosen.values())
             print(f"ALLOC total_rings={total_rings} sel={nsel} "
                   f"(frac={nsel/total_rings:.4f})", flush=True)
@@ -410,7 +429,7 @@ def main():
         model = prepare_ptq_model(config, DEV, run_gptq=args.gptq)
     provenance = {
         "substrate": args.substrate, "ring_size": args.ring_size,
-        "alloc": args.alloc,
+        "alloc": args.alloc, "budget_frac": budget_frac,
         "gptq_nsamples": config["calibration"].get("nsamples"),
         "percdamp": config["quantize"].get("percdamp"),
         "weight_mse_steps": int(qu._MSE_STEPS),

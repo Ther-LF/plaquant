@@ -106,6 +106,11 @@ All ProMix points: avg_fp8 = 0.1250 exactly (778240/6225920 channels), GPTQ
 frozen-scale protocol, o_proj held at uniform 1/8. Raw JSONs in
 `docs/rd_scale_data/`.
 
+**70B peer rows (rd-peers70b follow-up):** ARCQuant and SharQ were later
+measured on the SAME model in the SAME protocol — SharQ 5.7693/9.6590 (best
+measured W4A4 point at 70B), ARCQuant 6.1834/10.0487 (falls behind plain
+NVFP4). Extended table + method notes: `docs/rd_peers70b.md`.
+
 **Headline (honest):** at 70B the ProMix accuracy lead over vLLM-NVFP4 does
 NOT hold under the standard recipe: best standard point (ring512+measured)
 trails NVFP4 by **+0.045 wiki / +0.146 C4** while spending 0.47 more bits/wt.

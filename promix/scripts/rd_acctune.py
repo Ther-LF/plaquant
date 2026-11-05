@@ -91,6 +91,18 @@ def main():
                          "selection; none = bf16 bridge only")
     ap.add_argument("--collect_tokens", type=int, default=4096)
     ap.add_argument("--calib_samples", type=int, default=16)
+    # rd-densesweep: budget knob for the measured allocation (default = the
+    # shipped 1/8; any other value sweeps the accuracy/bits curve). High
+    # budgets are clamped to >=1 NVFP4 ring per Linear (rv.clamp_chosen).
+    ap.add_argument("--budget_frac", type=float, default=0.125,
+                    help="FP8 ring budget as a fraction of total rings for "
+                         "--alloc measured (rd-qwenmid accuracy curve: 5%% "
+                         "grid 0.05..1.00). Default 0.125 = the shipped "
+                         "1/8 budget, byte-identical to prior acctune runs.")
+    ap.add_argument("--stats_cache", default=None,
+                    help="optional path to cache the collected ring stats "
+                         "(identical across budget_frac points of one model/"
+                         "substrate — saves the collect pass per point)")
     ap.add_argument("--basis_nsamples", type=int, default=None,
                     help="override PCA basis to U-wikitext-<N>-<short>.bin "
                          "(lever 3; keep the shipped R)")
@@ -115,11 +127,6 @@ def main():
                          "'up' rounds int(head_dim*hf) UP to 32 (option a); "
                          "'zero' drops the KV high segment -> pure-NVFP4 KV "
                          "(option b ablation)")
-    ap.add_argument("--budget_frac", type=float, default=0.125,
-                    help="FP8 ring budget as a fraction of total rings for "
-                         "--alloc measured (rd-qwenmid accuracy curve: 5%% "
-                         "grid 0.05..1.00). Default 0.125 = the shipped "
-                         "1/8 budget, byte-identical to prior acctune runs.")
     ap.add_argument("--bridge", action="store_true",
                     help="also run the bf16 bridge (protocol gate)")
     ap.add_argument("--out", required=True)
@@ -199,21 +206,31 @@ def main():
     # --- allocation ----------------------------------------------------------
     chosen = None
     if args.alloc != "uniform":
-        tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
-        calib = get_wikitext2(nsamples=args.calib_samples,
-                              seed=config["calibration"].get("seed", 0),
-                              seqlen=2048, tokenizer=tok, eval_mode=False)
-        cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
-                               ring_size=S)
-        cmodel.to(DEV)
-        stats = rv.collect_stats(cmodel, calib,
-                                 max_tokens=args.collect_tokens, ring=S)
-        del cmodel
-        cleanup_memory()
+        if args.stats_cache and os.path.exists(args.stats_cache):
+            stats = torch.load(args.stats_cache, weights_only=False)
+            print(f"STATS_CACHE loaded {args.stats_cache}", flush=True)
+        else:
+            tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
+            calib = get_wikitext2(nsamples=args.calib_samples,
+                                  seed=config["calibration"].get("seed", 0),
+                                  seqlen=2048, tokenizer=tok, eval_mode=False)
+            cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
+                                   ring_size=S)
+            cmodel.to(DEV)
+            stats = rv.collect_stats(cmodel, calib,
+                                     max_tokens=args.collect_tokens, ring=S)
+            del cmodel
+            cleanup_memory()
+            if args.stats_cache:
+                tmp = args.stats_cache + f".tmp{os.getpid()}"
+                torch.save(stats, tmp)
+                os.replace(tmp, args.stats_cache)
+                print(f"STATS_CACHE saved {args.stats_cache}", flush=True)
         total_rings = sum(stats[n]["nr"] for n in stats)
         if args.alloc == "measured":
             budget = int(round(args.budget_frac * total_rings))
-            chosen = rv.measured_alloc(stats, budget, total_rings)
+            chosen = rv.clamp_chosen(
+                rv.measured_alloc(stats, budget, total_rings), stats)
         elif args.alloc == "var_uniform":
             chosen = per_linear_uniform_chosen(stats, "ring_var")
         elif args.alloc == "dd_uniform":
