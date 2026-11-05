@@ -25,4 +25,21 @@ for r in $GRID; do echo "acc 8b $r"   >> $Q; done
 Q70=$WORK/queue70b.txt; : > $Q70
 for r in $GRID; do echo "acc 70b $r" >> $Q70; done
 
-wc -l $Q $Q70
+# Extended serving protocol (user-approved additions): ShareGPT real-
+# distribution point + long-context/big-batch fixed-length grid, per method,
+# 3B + 8B (the five-way sizes). ProMix rides the shipped r=1/8 checkpoint +
+# two persistent ratio checkpoints (r=1/16, r=1/4) — per-method comparison
+# points, not a 20-pt re-sweep. sharq/fpquant are 3B-only peers (guarded:
+# skipped with a note if their checkpoints/wrappers are absent).
+QE=$WORK/queue_ext.txt; : > $QE
+for s in 3b 8b; do
+  for m in bf fp8 gptq awq nv pm pmr0.0625 pmr0.25; do echo "sgpt $s $m" >> $QE; done
+done
+echo "sgpt 3b fpquant" >> $QE
+for s in 3b 8b; do
+  for m in pm bf fp8 gptq awq nv pmr0.0625 pmr0.25; do echo "ext $s $m" >> $QE; done
+done
+echo "ext 3b sharq" >> $QE
+echo "ext 3b fpquant" >> $QE
+
+wc -l $Q $Q70 $QE
