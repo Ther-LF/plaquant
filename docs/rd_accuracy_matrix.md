@@ -139,7 +139,7 @@ the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext 
 | ARCQuant | **66.14** | 52.64 | **measured** / rd_mmlu |
 | vLLM-NVFP4 | **66.16** | 52.63 | **measured** / rd_mmlu |
 | MicroMix ‡ | **65.14** | **49.79** (51.19 macro) | measured |
-| CoQuant a_cov | **64.24** | _(running)_ | measured |
+| CoQuant a_cov | **64.24** | **50.26** (51.71 macro) | measured |
 
 ### Meta-Llama-3-70B — removing the "70B 0-shot infeasible" limitation
 
