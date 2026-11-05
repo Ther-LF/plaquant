@@ -13,15 +13,24 @@ GPU=${CUDA_VISIBLE_DEVICES:-x}
 LOG=$WORK/logs/runner_gpu${GPU}.log
 echo "[runner gpu$GPU] start $(date) queue=$Q" >> $LOG
 
+FAILS=0
 while true; do
   JOB=$(flock $Q.lock bash -c "head -n1 '$Q'; sed -i '1d' '$Q'")
   [ -z "$JOB" ] && break
   echo "[runner gpu$GPU] START $JOB $(date)" >> $LOG
   if bash $HERE/point.sh $JOB >> $LOG 2>&1; then
     echo "[runner gpu$GPU] OK    $JOB $(date)" >> $LOG
+    FAILS=0
   else
     echo "[runner gpu$GPU] FAIL  $JOB $(date)" >> $LOG
     echo "gpu$GPU $JOB $(date)" >> $WORK/failed.txt
+    FAILS=$((FAILS + 1))
+    # systematic-failure brake: don't burn the shared queue on a broken lane
+    if [ $FAILS -ge 3 ]; then
+      echo "[runner gpu$GPU] 3 consecutive failures — lane ABORT $(date)" >> $LOG
+      exit 1
+    fi
+    sleep 30
   fi
 done
 echo "[runner gpu$GPU] queue drained $(date)" >> $LOG

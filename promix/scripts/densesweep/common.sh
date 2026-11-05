@@ -16,6 +16,11 @@ mkdir -p $WORK/logs $WORK/ckpt $BENCH
 export HF_HOME=/home/luofan/hf_cache PYTHONUNBUFFERED=1
 export TORCH_CUDA_ARCH_LIST=12.0a
 export PROMIX_ACT_MSE_STEPS_UP=2
+# per-lane distributed rendezvous (host network: the default port 29500
+# collides across concurrent lanes — every driver calls
+# init_distributed_for_ptq_main_if_needed, which respects preset env)
+export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
+export MASTER_PORT=${MASTER_PORT:-$((29550 + ${CUDA_VISIBLE_DEVICES:-0}))}
 
 size_knobs() {       # $1 = size -> sets CFG_SERVE CFG_ACC GPTQ_N PD WMSE LOADDEV
   PD=""; WMSE=""; LOADDEV=""
