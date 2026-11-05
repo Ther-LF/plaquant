@@ -43,7 +43,7 @@
 | ProMix / NVFP4(+peers) | **0-shot+MMLU @70B(TP)** | 70B | accmatrix | 🔄 | 同上 |
 | 老四样 | **C4+0-shot+MMLU** | 3B/8B | accmatrix | 🔄(低优)| 同上 |
 | ProMix | **MMLU** | 1B/13B | accmatrix | 🔄 | 同上 |
-| ARCQuant/SharQ | wiki+C4 | **70B** | peers-70b | 🔄 | `docs/rd_peers70b.md`(待验证)|
+| ARCQuant/SharQ | wiki+C4 | **70B** | peers-70b | ✅ | `docs/rd_peers70b.md`(已验证:SharQ 5.769/9.659、ARCQuant 6.183/10.049)|
 | ProMix 精度曲线 | wiki+C4 | **1B/3B/8B/70B @ 20点(5%)** | densesweep | 🔄 | `docs/rd_accuracy_curve.csv`(待验证)|
 | Qwen 14B/32B | 全4指标 + 曲线 | 14B/32B | qwenmid | 🔄(先验架构)| `docs/rd_qwen_midsize.md`(待验证)|
 
@@ -77,3 +77,4 @@
 
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
+- 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
