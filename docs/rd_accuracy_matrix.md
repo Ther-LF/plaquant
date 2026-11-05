@@ -150,7 +150,7 @@ the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext 
 | ProMix measured-1/8 | 72.36 | — | rd_metrics |
 | SharQ | _(running)_ | 62.87 | rd_mmlu (MMLU) |
 | ARCQuant | _(running)_ | 62.19 | rd_mmlu (MMLU) |
-| vLLM-NVFP4 | _(running)_ | 62.34 | measured / rd_mmlu |
+| vLLM-NVFP4 | **71.48** | 62.34 | measured / rd_mmlu |
 | MicroMix ‡ | _(running)_ | _(running)_ | measured |
 | CoQuant a_cov | _(running)_ | _(running)_ | measured |
 
