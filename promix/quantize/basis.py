@@ -347,12 +347,18 @@ def compute_basis(
             hooks.append(layer.self_attn.o_proj.register_forward_hook(hook_fn_oproj))
 
         for j in range(nbatches):
-            outs[j] = layer(
+            _layer_out = layer(
                 inps[j],
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
-            )[0]
+            )
+            # transformers >=5.x decoder layers return a bare Tensor; <=4.51
+            # returned a (hidden, ...) tuple. Indexing [0] on a Tensor slices
+            # the batch dim -> 2D hidden -> the next layer reshapes q to
+            # [seq, num_heads, head_dim].transpose giving head-dim = num_heads
+            # and RoPE fails (size num_heads vs head_dim). Unwrap defensively.
+            outs[j] = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
 
             input_qkv = hook_state["input_qkv"]
             input_up = hook_state["input_up"]
