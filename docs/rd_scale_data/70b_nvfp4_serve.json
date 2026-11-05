@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "tag": "70b_nvfp4_serve",
+    "model": "/home/luofan/baselines/quant/Meta-Llama-3-70B-Instruct-NVFP4",
+    "argv": [
+      "scripts/bench_vllm.py",
+      "--model",
+      "/home/luofan/baselines/quant/Meta-Llama-3-70B-Instruct-NVFP4",
+      "--tag",
+      "70b_nvfp4_serve",
+      "--skip-ppl",
+      "--max-model-len",
+      "8192",
+      "--prefill-lens",
+      "2048,4096,8064",
+      "--out",
+      "/home/luofan/rdscale/70b_nvfp4_serve.json"
+    ],
+    "gpu": "2",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "capability": [
+      12,
+      0
+    ],
+    "time": "2026-11-03 10:54:31",
+    "vllm": "0.32.0",
+    "load_s": 212.6759644311387,
+    "quantization_resolved": "compressed-tensors",
+    "dtype_resolved": "torch.bfloat16",
+    "max_model_len": 8192,
+    "hf_config_quant": {
+      "config_groups": {
+        "group_0": {
+          "format": "nvfp4-pack-quantized",
+          "input_activations": {
+            "actorder": null,
+            "block_structure": null,
+            "dynamic": "local",
+            "group_size": 16,
+            "num_bits": 4,
+            "observer": "static_minmax",
+            "observer_kwargs": {},
+            "scale_dtype": "torch.float8_e4m3fn",
+            "strategy": "tensor_group",
+            "symmetric": true,
+            "type": "float",
+            "zp_dtype": null
+          },
+          "output_activations": null,
+          "targets": [
+            "Linear"
+          ],
+          "weights": {
+            "actorder": null,
+            "block_structure": null,
+            "dynamic": false,
+            "group_size": 16,
+            "num_bits": 4,
+            "observer": "memoryless_minmax",
+            "observer_kwargs": {},
+            "scale_dtype": "torch.float8_e4m3fn",
+            "strategy": "tensor_group",
+            "symmetric": true,
+            "type": "float",
+            "zp_dtype": null
+          }
+        }
+      },
+      "format": "nvfp4-pack-quantized",
+      "global_compression_ratio": null,
+      "ignore": [
+        "lm_head"
+      ],
+      "kv_cache_scheme": null,
+      "quant_method": "compressed-tensors",
+      "quantization_status": "compressed",
+      "sparsity_config": {},
+      "transform_config": {},
+      "version": "0.19.0",
+      "total_num_heads": 64,
+      "total_num_kv_heads": 8
+    }
+  },
+  "ttft": {
+    "L2048_b1": {
+      "median_s": 0.25285303103737533,
+      "runs_s": [
+        0.2552467230707407,
+        0.25285303103737533,
+        0.25198887498117983,
+        0.2524554939009249,
+        0.2536522289738059
+      ]
+    },
+    "L2048_b8": {
+      "median_s": 1.9958029170520604,
+      "runs_s": [
+        1.993610128061846,
+        1.9942639621440321,
+        1.9958029170520604,
+        2.00015887292102,
+        2.002552491147071
+      ]
+    },
+    "L4096_b1": {
+      "median_s": 0.5348590419162065,
+      "runs_s": [
+        0.5354599182028323,
+        0.5348590419162065,
+        0.53368751402013,
+        0.5369944479316473,
+        0.5340436620172113
+      ]
+    },
+    "L4096_b8": {
+      "median_s": 4.317867130972445,
+      "runs_s": [
+        4.293451658915728,
+        4.301166326040402,
+        4.319913768209517,
+        4.317867130972445,
+        4.327206451911479
+      ]
+    },
+    "L8064_b1": {
+      "median_s": 1.2535522060934454,
+      "runs_s": [
+        1.2424771809019148,
+        1.2463896290864795,
+        1.2535522060934454,
+        1.2655129011254758,
+        1.2855264770332724
+      ]
+    },
+    "L8064_b8": {
+      "median_s": 10.662785043939948,
+      "runs_s": [
+        10.457691337913275,
+        10.622074804035947,
+        10.73968896898441,
+        10.717341939918697,
+        10.662785043939948
+      ]
+    }
+  },
+  "decode": {
+    "b1": {
+      "median_s": 3.927598285023123,
+      "tok_per_s": 32.58989099982419,
+      "runs_s": [
+        3.9276954950764775,
+        3.9270171981770545,
+        3.9269184190779924,
+        3.927598285023123,
+        3.9276439130771905
+      ]
+    },
+    "b8": {
+      "median_s": 3.9633454990107566,
+      "tok_per_s": 258.367583713201,
+      "runs_s": [
+        3.96317823510617,
+        3.963753815041855,
+        3.9622039881069213,
+        3.9636017489247024,
+        3.9633454990107566
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 0.0,
+    "max_memory_allocated_gib": 0.0,
+    "total_gib": 94.97052001953125,
+    "nvidia_smi_compute_apps": [
+      "576894, 77242 MiB",
+      "580553, 550 MiB",
+      "580954, 81888 MiB",
+      "579450, 84680 MiB",
+      "578595, 37688 MiB",
+      "579083, 5292 MiB"
+    ]
+  },
+  "weight_bytes": 42726752685
+}
