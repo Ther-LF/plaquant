@@ -135,7 +135,7 @@ the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext 
 | bf16 bridge | 68.11 | 56.11 | rd_metrics / rd_mmlu |
 | ProMix measured-1/8 | 66.77 | 54.12 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
 | ProMix uniform-1/8 | 66.89 | — | rd_metrics |
-| SharQ | _(running)_ | 53.42 | rd_mmlu (MMLU) |
+| SharQ | **66.64** | 53.42 | **measured** / rd_mmlu |
 | ARCQuant | **66.14** | 52.64 | **measured** / rd_mmlu |
 | vLLM-NVFP4 | **66.16** | 52.63 | **measured** / rd_mmlu |
 | MicroMix ‡ | _(running)_ | _(running)_ | measured |
