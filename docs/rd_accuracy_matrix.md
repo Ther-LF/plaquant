@@ -150,7 +150,7 @@ This is the first measured 70B downstream-metric cell in this campaign.
 
 | method | 0-shot 6-task avg | MMLU 5-shot | source |
 |---|---|---|---|
-| vLLM-NVFP4 70B | **77.94** | _(running)_ | **measured** (vLLM TP=1, one 96 GB card) |
+| vLLM-NVFP4 70B | **77.94** | **78.99** | **measured** (vLLM TP=1, one 96 GB card) |
 | ProMix 70B | _(not run — box saturated)_ | _(not run)_ | — |
 
 Per-task NVFP4-70B 0-shot: piqa 82.21 / arc_e 83.84 / arc_c 65.36 / hellaswag 82.67 /
