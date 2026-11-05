@@ -46,7 +46,8 @@
 | ProMix | **MMLU** | 1B/13B | accmatrix | 🔄 | 同上 |
 | ARCQuant/SharQ | wiki+C4 | **70B** | peers-70b | ✅ | `docs/rd_peers70b.md`(已验证:SharQ 5.769/9.659、ARCQuant 6.183/10.049)|
 | ProMix 精度曲线 | wiki+C4 | **1B/3B/8B/70B @ 20点(5%)** | densesweep | 🔄 自维持 | 1B 0.05-0.40 已落(wiki 15.07→13.91 单调);70B 曲线跑中(~12h);3B/8B 尾在跑 |
-| Qwen 14B/32B | 全4指标 + 曲线 | 14B/32B | qwenmid | 🔄(先验架构)| `docs/rd_qwen_midsize.md`(待验证)|
+| Qwen 14B/32B 旋转闭合+架构解锁 | — | 14B/32B | qwenmid | ✅ | `docs/rd_qwen_midsize.md`(已验证:14B/32B 均 GO,cos 1.0,had68/had100 验正交)|
+| Qwen 14B/32B PPL+曲线 | wiki+C4 多比例 | 14B/32B | qwenmid | 🔄 | 14B basis 重算中(~3.6h)→ chained campaign 跑 bf16+20点;JSON `/home/luofan/qwenmid_work/` 待收 |
 
 ---
 
@@ -80,3 +81,4 @@
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
 - 2026-11-05 opus协调收割:densesweep 自维持(8 GPU 满载,逐点 auto-commit);accmatrix BOPs join 落地(`git cat-file -e` PASS);实测 0-shot/MMLU/FP-Quant/old-four 未启动,待派;qwenmid 闭合未收敛(cos 0.9937)。_khigh_for 非bug(acc 点即 fakequant 参考,不走 kernel 路由)。
+- 2026-11-05 qwenmid 闭合收割:14B cos 0.99999994 / 32B cos 1.0,argmax 全对;0.9937 是 fuse_layer_norms 均值中心化在随机小模型上的表象,真模型近似无损(1B 与 ResQ 逐位吻合)。两 bug 修复(basis.py tf5.x tuple、argparse 重复)。PPL 曲线 campaign 跑中(非伪造,JSON 待落)。
