@@ -350,6 +350,14 @@ backend) and produced correct-looking throughput; no method errored at engine
 init. The 8B FP8-W8A8 kv8 row needed a re-run after a transient
 free-memory race between chained engines (not a method failure).
 
+
+> **NOTE on the `conc256 1024/512` column:** this is OUR vLLM run under the
+> *protocol* QServe used (ISL/OSL 1024/512, 256 concurrent requests) — it is a
+> same-stack vLLM number, NOT a comparison against the QServe system (which runs
+> on TRT-LLM, a different stack). Any cross-paper comparison to QServe lives only
+> in the separate relative-speedup table (each method vs its OWN stack's FP16),
+> with the different-stack/hardware caveats stated there.
+
 ## 4. ProMix r-sweep — the tunable accuracy/throughput curve (uniform n/32 grid)
 
 The converged kernel serves ANY high-fraction r (dual-format split per
@@ -363,7 +371,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 <!-- BEGIN RSWEEP -->
 ### ProMix r-sweep curve (3B; gate = |dPPL| vs own exporter reference, all PASS <= 0.1)
 
-| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | QServe c256 tok/s | prefill L2048 b128 ms |
+| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | conc256 1024/512 tok/s | prefill L2048 b128 ms |
 |---|---|---|---|---|---|---|---|
 | 0.03125 | 4.62 | 8.502 | 0.0103 | 11.68/18.93 | 13244 | 6732 | 3360 |
 | 0.0625 | 4.73 | 8.421 | 0.0086 | 11.36/18.28 | 13732 | 6990 | 3132 |
@@ -374,7 +382,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 **Single-point rivals (same cells):**
 
-| method | PPL | decode TPOT b256 | gen tok/s b256 | QServe c256 | prefill L2048 b128 ms |
+| method | PPL | decode TPOT b256 | gen tok/s b256 | conc256 (ISL/OSL 1024/512) | prefill L2048 b128 ms |
 |---|---|---|---|---|---|
 | BF16 | 7.820 | 19.70 | 12621 | 6119 | 5591 |
 | FP8 W8A8 | 7.880 | 18.23 | 13769 | 6936 | 3388 |
@@ -383,7 +391,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 ### ProMix r-sweep curve (8B; gate = |dPPL| vs own exporter reference, all PASS <= 0.1)
 
-| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | QServe c256 tok/s | prefill L2048 b128 ms |
+| r | bits/wt | PPL (abs protocol) | gate dPPL | decode TPOT ms b128/b256 | gen tok/s b256 | conc256 1024/512 tok/s | prefill L2048 b128 ms |
 |---|---|---|---|---|---|---|---|
 | 0.03125 | 4.62 | 6.817 | 0.0019 | 15.62/24.51 | 10156 | 5026 | 6868 |
 | 0.0625 | 4.73 | 6.714 | 0.0039 | 16.06/24.99 | 9956 | 4970 | 6529 |
@@ -392,7 +400,7 @@ serving branch. Points: 3B r in {1/32, 1/16, 3/32, 1/8, 3/16, 1/4};
 
 **Single-point rivals (same cells):**
 
-| method | PPL | decode TPOT b256 | gen tok/s b256 | QServe c256 | prefill L2048 b128 ms |
+| method | PPL | decode TPOT b256 | gen tok/s b256 | conc256 (ISL/OSL 1024/512) | prefill L2048 b128 ms |
 |---|---|---|---|---|---|
 | BF16 | 6.140 | 29.50 | 8302 | 3864 | 12269 |
 | FP8 W8A8 | 6.191 | 25.64 | 9691 | 4743 | 7335 |
