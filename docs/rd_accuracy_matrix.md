@@ -112,6 +112,77 @@ which raises ProMix's bits/BOPs) lets ProMix match 5.769 — i.e. whether ProMix
 
 ---
 
+## Measured downstream metrics — 0-shot 6-task avg + MMLU 5-shot (rd-accmatrix round)
+
+This fills the cells the newpeers/mmlu campaigns left empty: **0-shot 6-task average**
+(piqa / arc_easy / arc_challenge / hellaswag / winogrande / lambada_openai; acc_norm for
+piqa/arc/hellaswag, acc for winogrande/lambada; lm-eval **0.4.5**, same GPU-pinning
+convention as `rd_metrics_report.md`) and **MMLU 5-shot** (57-subtask group aggregate =
+micro acc, `num_fewshot=5`). Peer builds are the **same as-shipped quantized models** as
+the PPL rows: ARCQuant / SharQ / MicroMix via `rd_newacc_peer.py --lmeval_tasks`; CoQuant
+(a_cov control = ResQ criterion) via its own shipped `ptq.py` (reproduces its committed
+wiki PPL in-run as the trust gate); vLLM-NVFP4 via the lm-eval vLLM backend. Cited numbers
+(ProMix / ARCQuant / SharQ / NVFP4 MMLU, ProMix 0-shot) are from `rd_mmlu_report.md` /
+`rd_metrics_report.md`; **bold** cells are measured this round (raw JSON in
+`docs/rd_accmatrix_data/`). Runner: `promix/scripts/rd_accmatrix_run.sh` (+ `_coquant.sh`).
+"‡" = ProMix MMLU is the acctune shipping-recipe build (the only ProMix MMLU runs);
+the measured-1/8 / uniform-1/8 anchors had no MMLU run. Rows sorted by wikitext (matrix order).
+
+### Llama-3.2-3B
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| bf16 bridge | 68.11 | 56.11 | rd_metrics / rd_mmlu |
+| ProMix measured-1/8 | 66.77 | 54.12 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
+| ProMix uniform-1/8 | 66.89 | — | rd_metrics |
+| SharQ | **66.64** | 53.42 | **measured** / rd_mmlu |
+| ARCQuant | **66.14** | 52.64 | **measured** / rd_mmlu |
+| vLLM-NVFP4 | **66.16** | 52.63 | **measured** / rd_mmlu |
+| MicroMix ‡ | **65.14** | **49.79** (51.19 macro) | measured |
+| CoQuant a_cov | **64.24** | **50.26** (51.71 macro) | measured |
+
+### Meta-Llama-3-70B — removing the "70B 0-shot infeasible" limitation
+
+The packed **NVFP4-70B** checkpoint (`Meta-Llama-3-70B-Instruct-NVFP4`, 39.86 GiB) **fits a
+single 96 GB RTX PRO 6000**, so its 0-shot ran directly through the lm-eval vLLM backend
+(TP=1, `gpu_memory_utilization=0.85`, KV cache 119 k tokens) — no multi-GPU device_map needed.
+This is the first measured 70B downstream-metric cell in this campaign.
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| vLLM-NVFP4 70B | **77.94** | **78.99** | **measured** (vLLM TP=1, one 96 GB card) |
+| ProMix 70B | _(not run — box saturated)_ | _(not run)_ | — |
+
+Per-task NVFP4-70B 0-shot: piqa 82.21 / arc_e 83.84 / arc_c 65.36 / hellaswag 82.67 /
+winogrande 76.64 / lambada 76.93 (monotonic with scale: 3B 66.16 → 8B 71.48 → 70B 77.94).
+**ProMix-70B 0-shot/MMLU not run**: it needs the 140 GB fake-quant pipeline resident across
+multiple GPUs (device_map / TP), and the 8× box was saturated by the concurrent `densesweep`
+70B accuracy+serving campaign for the whole window — launching it would have contended
+densesweep's GPUs (explicitly out of scope). The NVFP4-70B number alone already lifts the
+"70B 0-shot infeasible" limitation for the FP4 field.
+
+### Llama-3-8B
+
+| method | 0-shot 6-task avg | MMLU 5-shot | source |
+|---|---|---|---|
+| bf16 bridge | 73.33 | 65.28 | rd_metrics / rd_mmlu |
+| ProMix uniform-1/8 | 72.69 | 62.85 ‡ | rd_metrics / rd_mmlu (‡ new recipe) |
+| ProMix measured-1/8 | 72.36 | — | rd_metrics |
+| SharQ | **71.89** | 62.87 | **measured** / rd_mmlu |
+| ARCQuant | **71.47** | 62.19 | **measured** / rd_mmlu |
+| vLLM-NVFP4 | **71.48** | 62.34 | measured / rd_mmlu |
+| MicroMix ‡ | **70.63** | **59.12** (60.53 macro) | measured |
+| CoQuant a_cov | _(in flight)_ ¶ | **59.81** (61.0 macro) | measured |
+
+¶ CoQuant 8B 0-shot is the one cell still running at write time (its wiki gate 7.3510 already
+reproduced = committed a_cov 8B; the 0-shot eval is crawling on the densesweep-saturated box,
+~2 h ETA). It lands to `/home/luofan/accmatrix/coq_8b_zs.json`; harvest with
+`docker exec luofan-plaquant python3 /home/luofan/accmatrix/harvest_all.py` (helper committed
+alongside the runner scripts) and join the AVG6 here. Every other 0-shot/MMLU cell in this
+section is measured and committed.
+
+---
+
 ## Reading the matrix as a cost table
 
 1. **On paper, the whole W4A4 field clusters at theo rel-BOPs ≈ 0.06–0.09** (the "it's just
@@ -141,9 +212,9 @@ datapaths ProMix is the accuracy-per-BOP frontier."** Mirror of the two-bar theo
 
 ## Scope / honesty notes
 
-- **Metric = wikitext + C4 PPL.** lm-eval zero-shot and MMLU phases were out of scope for the
-  peer campaign (`rd_newpeers_accuracy.md`: "zero-shot phases were skipped (PPL scope)"); those
-  cells are therefore not populated here rather than estimated. ProMix MMLU/0-shot at the ratio
+- **Metrics.** wikitext + C4 PPL in the cost tables above; the **0-shot 6-task avg + MMLU
+  5-shot** cells (out of scope for the original newpeers/mmlu campaigns) are now measured and
+  joined in the "Measured downstream metrics" section. ProMix MMLU/0-shot at the ratio
   subset live in `docs/rd_mmlu_report.md` where measured.
 - **KV mismatch:** INT rows (CoQuant/Atom/SpinQuant/QuaRot) are KV4 and INT-format, i.e. not
   format-matched to the NVFP4 KV16 group; they are shown for field completeness, not as a
