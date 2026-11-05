@@ -36,7 +36,8 @@
 
 | 方法 | 指标 | 尺寸 | 负责 | 状态 | 结果路径(落地后填) |
 |---|---|---|---|---|---|
-| NVFP4/ARCQuant/SharQ/MicroMix/CoQuant | **0-shot** | 3B/8B | accmatrix | 🔄 | `docs/rd_accuracy_matrix.md`(待验证)|
+| **精度矩阵 BOPs join**(理论+门后真实) | 全方法 | — | accmatrix | ✅ | `docs/rd_accuracy_matrix.md`(已验证;SharQ 70B 赢精度但 ~2× 真实BOPs)|
+| NVFP4/ARCQuant/SharQ/MicroMix/CoQuant | **0-shot(实测)** | 3B/8B | accmatrix | ⬜ 未启动 | 待派 |
 | MicroMix/CoQuant | **MMLU** | 3B/8B | accmatrix | 🔄 | 同上 |
 | **FP-Quant/QuTLASS** | 全4指标 | 3B/8B | accmatrix | 🔄 | 同上 |
 | ProMix | **0-shot+MMLU 多比例**(5点)| 3B/8B | accmatrix | 🔄 | 同上 |
@@ -44,7 +45,7 @@
 | 老四样 | **C4+0-shot+MMLU** | 3B/8B | accmatrix | 🔄(低优)| 同上 |
 | ProMix | **MMLU** | 1B/13B | accmatrix | 🔄 | 同上 |
 | ARCQuant/SharQ | wiki+C4 | **70B** | peers-70b | ✅ | `docs/rd_peers70b.md`(已验证:SharQ 5.769/9.659、ARCQuant 6.183/10.049)|
-| ProMix 精度曲线 | wiki+C4 | **1B/3B/8B/70B @ 20点(5%)** | densesweep | 🔄 | `docs/rd_accuracy_curve.csv`(待验证)|
+| ProMix 精度曲线 | wiki+C4 | **1B/3B/8B/70B @ 20点(5%)** | densesweep | 🔄 自维持 | 1B 0.05-0.40 已落(wiki 15.07→13.91 单调);70B 曲线跑中(~12h);3B/8B 尾在跑 |
 | Qwen 14B/32B | 全4指标 + 曲线 | 14B/32B | qwenmid | 🔄(先验架构)| `docs/rd_qwen_midsize.md`(待验证)|
 
 ---
@@ -78,3 +79,4 @@
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
+- 2026-11-05 opus协调收割:densesweep 自维持(8 GPU 满载,逐点 auto-commit);accmatrix BOPs join 落地(`git cat-file -e` PASS);实测 0-shot/MMLU/FP-Quant/old-four 未启动,待派;qwenmid 闭合未收敛(cos 0.9937)。_khigh_for 非bug(acc 点即 fakequant 参考,不走 kernel 路由)。
