@@ -142,7 +142,13 @@ def _apply_had_to_linear(module, had_dim, output, R2, per_head):
         temp = W_.reshape(-1, init_shape[-1] // had_dim, had_dim)
         if per_head:
             num_kv_heads = hadK.shape[0]
-            num_kv_groups = init_shape[0] // (had_dim * num_kv_heads)
+            # Head blocks live on the INPUT side (in_features = q_heads *
+            # had_dim). Deriving the group count from init_shape[0]
+            # (out_features) only worked because out == in == hidden on
+            # Llama; on explicit-head_dim models (Qwen3-32B o_proj:
+            # out 5120, in 8192) it under-counts and leaves head blocks
+            # unrotated (caught by the rd-qwenmid tiny closure test).
+            num_kv_groups = (init_shape[-1] // had_dim) // num_kv_heads
             for i in range(num_kv_heads):
                 for j in range(num_kv_groups):
                     idx = j + num_kv_groups * i
