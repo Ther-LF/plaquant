@@ -2,7 +2,7 @@
 
 **Branch:** `feat/rd-scale` (off `feat/rd-alloc`) · **Hardware:** RTX PRO 6000
 Blackwell (SM120, 96 GB), host ICT90, container `luofan-plaquant`, GPU lane 0-2
-· **Dates:** 2026-11-03/05 · **Status:** COMPLETE (one tuned-recipe cell noted)
+· **Dates:** 2026-11-03/05 · **Status:** COMPLETE
 
 **Mission.** The paper's accuracy ladder (1B/3B/8B/13B) tops out at 13B. E2 adds
 a ≥32B point: feasibility → {bf16 bridge, uniform-1/8, measured-1/8, vLLM-NVFP4}
@@ -100,7 +100,7 @@ allocation). Raw: `docs/rd_scale_data/gate_1b_ring512_{uniform,measured}.json`.
 | ProMix dense measured-1/8 | 4.97 | 6.0975 | 9.9660 | +0.782 |
 | ProMix ring512 uniform-1/8 | 4.97 | 6.0738 | 9.8980 | +0.758 |
 | ProMix ring512 measured-1/8 | 4.97 | **5.9732** | **9.8917** | +0.657 (+12.4%) |
-| ProMix ring512 measured + up2 + GPTQ512 (shipped tuned recipe) | 4.97 | *(running, fill on landing)* | *(…)* | |
+| ProMix ring512 measured + up2 + GPTQ512 (shipped tuned recipe) | 4.97 | 5.9829 | **9.8549** | +0.667 |
 
 All ProMix points: avg_fp8 = 0.1250 exactly (778240/6225920 channels), GPTQ
 frozen-scale protocol, o_proj held at uniform 1/8. Raw JSONs in
@@ -113,7 +113,10 @@ Compare the smaller models (wiki, ProMix shipped vs NVFP4): 1B 14.56 vs 15.65
 (**−1.09**), 3B 8.30 vs 8.63 (**−0.33**), 8B 6.60 vs 6.87 (**−0.27**), 70B
 5.97 vs 5.93 (**+0.045**). The lead shrinks monotonically with scale and flips
 sign at 70B. The tuned-recipe cell (up2 + GPTQ 512, the acctune-promoted
-common core) tests how much of the gap the shipped recipe recovers.
+common core) does NOT recover it: wiki 5.9829 (+0.010 vs standard measured,
+within noise) / C4 9.8549 (−0.037, a real but small C4 gain) — ProMix's best
+70B cells remain +0.045 wiki (standard) / +0.109 C4 (tuned) behind NVFP4.
+The acctune levers were tuned on 1B/3B/8B and transfer only on C4 here.
 
 ## 4. Scaling-trend verdict (allocation gain, uniform − measured, wiki)
 
