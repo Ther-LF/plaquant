@@ -85,3 +85,6 @@
 - 2026-11-05 opus协调收割:densesweep 自维持(8 GPU 满载,逐点 auto-commit);accmatrix BOPs join 落地(`git cat-file -e` PASS);实测 0-shot/MMLU/FP-Quant/old-four 未启动,待派;qwenmid 闭合未收敛(cos 0.9937)。_khigh_for 非bug(acc 点即 fakequant 参考,不走 kernel 路由)。
 - 2026-11-05 qwenmid 闭合收割:14B cos 0.99999994 / 32B cos 1.0,argmax 全对;0.9937 是 fuse_layer_norms 均值中心化在随机小模型上的表象,真模型近似无损(1B 与 ResQ 逐位吻合)。两 bug 修复(basis.py tf5.x tuple、argparse 重复)。PPL 曲线 campaign 跑中(非伪造,JSON 待落)。
 - 2026-11-05 accmatrix 实测收割(含 -f 误删→从 /tmp/accmatrix-push 恢复 57515e5):0-shot 3B/8B 全 peer + MMLU(MicroMix/CoQuant)+ 70B-NVFP4(单卡TP1,0-shot77.94/MMLU78.99)。排序 SharQ≥NVFP4≈ARC>MicroMix>CoQuant,全在 ProMix 下,与 PPL 一致。未做:ProMix-70B 0-shot(需多卡驻留,densesweep 占满)、FP-Quant、ProMix 多比例0shot/MMLU、old-four C4/0shot/MMLU、CoQuant-8B-0shot(跑中)。
+
+## Sanity-gate 验证日志(跑完≠对)
+- 2026-11-06 精度曲线 gate:**3B 20pt ✅**(严格单调、全>bf16、最大跳 0.002)、**8B 14pt ✅**(严格单调)。**1B ⚠️**:r0.75→0.80 非单调(13.681→13.703,+0.021,疑跨-lane 噪声)→ 已派同卡复测,复测前不标 ✅。70B 9/20 未齐,待补齐再 gate。
