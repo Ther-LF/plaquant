@@ -1,0 +1,76 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>ProMix 实验清单(穷举)</title>
+<style>
+body{margin:0;background:#f7f8fa;color:#1a1a2e;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1180px;margin:22px auto;padding:0 18px}h1{font-size:21px}
+h2{font-size:16px;margin-top:26px;border-bottom:2px solid #e6e8ee;padding-bottom:5px}
+table{border-collapse:collapse;width:100%;font-size:12px;margin-top:8px}
+th,td{border:1px solid #e6e8ee;padding:4px 7px;text-align:center}th{background:#f0f2f6;position:sticky;top:0}
+td.m{text-align:left;font-weight:600;white-space:nowrap}.win{color:#16a34a}
+.sub{color:#6b7280;font-size:12px}.lgd{font-size:12px;margin:8px 0;color:#374151}
+.sz{background:#eef2ff}
+caption{text-align:left;font-size:13px;color:#374151;margin-bottom:4px}
+</style></head><body><div class="wrap">
+<h1>ProMix 实验清单(穷举:每项=条件+结果,未跑=待run)</h1>
+<p class="sub">RTX Pro 6000 (SM120),vLLM 0.32。精度协议:wikitext-2 bf16-bridge 复现 / add_special_tokens=False / 2048 非重叠 chunk / token-pooled。2026-11-08。<span style="color:#b45309">待run</span>=未跑;<span style="color:#6b7280">引论文</span>=只引原论文数(协议不同);N/A=架构/硬件不可行。</p>
+
+<h2>一、精度(方法 × 模型 × 指标)—— 条件:我们协议实测</h2>
+<div class="lgd">每模型 4 列:<b>wiki PPL | C4 PPL | 0-shot avg(%) | MMLU 5-shot(%)</b>。ProMix=发货配方(ring512+measured,r=1/8,4.97bit)。</div>
+<table>
+<tr><th rowspan="2">方法(bit)</th><th colspan="4" class="sz">1B</th><th colspan="4" class="sz">3B</th><th colspan="4" class="sz">8B</th><th colspan="4" class="sz">13B</th><th colspan="4" class="sz">70B</th></tr>
+<tr><th>wiki</th><th>C4</th><th>0sh</th><th>MMLU</th><th>wiki</th><th>C4</th><th>0sh</th><th>MMLU</th><th>wiki</th><th>C4</th><th>0sh</th><th>MMLU</th><th>wiki</th><th>C4</th><th>0sh</th><th>MMLU</th><th>wiki</th><th>C4</th><th>0sh</th><th>MMLU</th></tr>
+<tr><td class="m">bf16</td><td>13.16</td><td>18.52</td><td>59.3</td><td style="color:#b45309">待run</td><td>7.82</td><td>10.43</td><td>68.1</td><td>56.1</td><td>6.14</td><td>8.89</td><td>73.3</td><td>65.3</td><td>4.89</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>5.32</td><td>9.2</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m win">ProMix(4.97)</td><td>14.17</td><td>19.71</td><td>57.0</td><td style="color:#b45309">待run</td><td>8.27</td><td>11.32</td><td>66.8</td><td>54.1</td><td>6.56</td><td>9.56</td><td>73.0</td><td>62.9</td><td>5.03</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>5.97</td><td>9.89</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">SharQ(4.5)</td><td>14.79</td><td>20.96</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.39</td><td>11.29</td><td>66.6</td><td>53.4</td><td>6.68</td><td>9.58</td><td>71.9</td><td>62.9</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>5.77</td><td>9.66</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">NVFP4(4.5)</td><td>15.65</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.63</td><td style="color:#b45309">待run</td><td>66.2</td><td>52.6</td><td>6.87</td><td style="color:#b45309">待run</td><td>71.5</td><td>62.3</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>5.93</td><td>9.75</td><td>77.9</td><td>78.9</td></tr><tr><td class="m">ARCQuant(5.1)</td><td>15.22</td><td>20.79</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.54</td><td>11.55</td><td>66.1</td><td>52.6</td><td>6.81</td><td>9.79</td><td>71.5</td><td>62.2</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>6.18</td><td>10.05</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">MicroMix(5.2)</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>9.05</td><td>12.28</td><td>65.1</td><td>49.8</td><td>7.39</td><td>10.56</td><td>70.6</td><td>59.1</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">CoQuant(4.5)</td><td>16.64</td><td>23.32</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>9.56</td><td>13.25</td><td>64.2</td><td>50.3</td><td>7.69</td><td>11.18</td><td style="color:#b45309">待run</td><td>59.8</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">ResQ(4.5 INT)</td><td>15.98</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.71</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>7.06</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#6b7280">引论文</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">SpinQuant-L(4.0)</td><td>16.14</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>9.25</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>7.88</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#6b7280">引论文</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">Atom(4.2 INT)</td><td>18.4</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>9.7</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">QuaRot(4.0 INT)</td><td>22.11</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>10.72</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.65</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#6b7280">引论文</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">GPTQ-W4A16</td><td>14.22</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>8.2</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>6.52</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">AWQ-W4A16</td><td>14.53</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>~8.35</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>6.59</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">FP8-W8A8</td><td>13.3</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>7.88</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td>6.19</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td class="m">Qwen14B/32B</td><td colspan="20" style="text-align:left;color:#b45309">架构✅闭合✅,PPL 待run(head-dim bug 修复中)</td></tr>
+</table>
+
+<h2>二、serving 吞吐(方法 × 模型 × 负载)—— 条件:ISL/OSL, batch=256</h2>
+<div class="lgd"><b>prefill 吞吐</b>=ISL1024/OSL128(compute-bound,融合kernel主场);<b>decode 吞吐</b>=ISL128/OSL1024(memory-bound);单位 total/gen tok·s⁻¹,batch256。</div>
+<table>
+<tr><th>模型</th><th>方法</th><th>prefill 吞吐(tok/s)↑</th><th>decode 吞吐(tok/s)↑</th></tr>
+<tr><td>3B</td><td class="m">BF16</td><td>33696</td><td>12621</td></tr><tr><td>3B</td><td class="m">FP8</td><td>44910</td><td>13769</td></tr><tr><td>3B</td><td class="m">GPTQ-Marlin</td><td>31184</td><td>12477</td></tr><tr><td>3B</td><td class="m">AWQ-Marlin</td><td>31497</td><td>12393</td></tr><tr><td>3B</td><td class="m">NVFP4</td><td>55227</td><td>15286</td></tr><tr><td>3B</td><td class="m win">ProMix(r=1/8)</td><td>44514</td><td>13418</td></tr><tr><td>3B</td><td class="m">SharQ</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr><tr><td>8B</td><td class="m">BF16</td><td>16676</td><td>8302</td></tr><tr><td>8B</td><td class="m">FP8</td><td>24483</td><td>9691</td></tr><tr><td>8B</td><td class="m">GPTQ-Marlin</td><td>16018</td><td>8498</td></tr><tr><td>8B</td><td class="m">AWQ-Marlin</td><td>15527</td><td>8306</td></tr><tr><td>8B</td><td class="m">NVFP4</td><td>35994</td><td>11794</td></tr><tr><td>8B</td><td class="m win">ProMix(r=1/8)</td><td>27387</td><td>9730</td></tr><tr><td>8B</td><td class="m">SharQ</td><td style="color:#b45309">待run</td><td style="color:#b45309">待run</td></tr>
+</table>
+<div class="lgd">注:SharQ serving 在其自带 vLLM 集成单独测(fiveway §6:decode b256 慢于BF16、conc c256 4946);prefill/decode 同口径待补测标待run。batch 16/64/128/512 + 长上下文(2048/4096)+ ShareGPT 另有扩展表(部分待run)。</div>
+
+<h2>三、ProMix 可调曲线(每模型 20 点,r=0.05..1.0)—— 条件:5% 网格</h2>
+<table><tr><th>模型</th><th>精度曲线(wiki+C4)</th><th>serving 曲线</th></tr>
+<tr><td>1B</td><td class="win">✅ 20/20</td><td>🔄 6/20(待补)</td></tr>
+<tr><td>3B</td><td class="win">✅ 20/20</td><td class="win">✅ 18/20</td></tr>
+<tr><td>8B</td><td class="win">✅ 20/20</td><td>🔄 4/20(待补)</td></tr>
+<tr><td>70B</td><td>🔄 11/20(缺高比例0.75-1.0=是否反超SharQ,<span style="color:#b45309">待run</span>)</td><td><span style="color:#b45309">待run</span></td></tr>
+<tr><td>Qwen14B/32B</td><td><span style="color:#b45309">待run</span>(head-dim bug 修复中)</td><td><span style="color:#b45309">待run</span></td></tr>
+</table>
+
+<h2>四、kernel 级同台(GEMM @M=8192)—— 条件:3B/8B 真实 Linear 形状,cudaEvent 中位</h2>
+<table><tr><th>对手</th><th>ProMix 相对它(>1=更快)</th></tr>
+<tr><td class="m">fp16 cuBLAS</td><td class="win">2.32–3.06×</td></tr>
+<tr><td class="m">MicroMix(5.5b)</td><td class="win">1.40–1.85×</td></tr>
+<tr><td class="m">SharQ</td><td class="win">1.12–1.51×</td></tr>
+<tr><td class="m">vLLM-NVFP4</td><td class="win">1.00–1.53×</td></tr>
+<tr><td class="m">ARCQuant(S=512)</td><td>0.93–1.09×(平手)</td></tr></table>
+
+<h2>五、理论 BOPs(含跑不了的方法)—— 条件:(W-bit×A-bit)/256 × datapath门</h2>
+<table><tr><th>方法</th><th>W/A bit</th><th>理论 rel-BOPs</th><th>SM120通路</th><th>门后真实</th></tr>
+<tr><td class="m">FP16</td><td>16/16</td><td>256</td><td>✅</td><td>256</td></tr>
+<tr><td class="m">FP8 W8A8</td><td>8.5/8</td><td>~68</td><td>✅</td><td>~68</td></tr>
+<tr><td class="m win">ProMix(1/8)</td><td>4.97/~4.5</td><td>~22</td><td>✅</td><td>~22</td></tr>
+<tr><td class="m">NVFP4</td><td>4.5/4.5</td><td>~20</td><td>✅</td><td>~20</td></tr>
+<tr><td class="m">ARCQuant</td><td>5.1/4.5</td><td>~23</td><td>✅</td><td>~23+残差</td></tr>
+<tr><td class="m">SharQ</td><td>4.5/4.5</td><td>~20</td><td>✅</td><td>~40(双GEMM)</td></tr>
+<tr><td class="m">QuaRot/Atom(INT4)</td><td>4/4</td><td>~16</td><td>❌无INT4通路</td><td>~64(降INT8)</td></tr>
+<tr><td class="m">FGMP(NVFP4+FP8)</td><td>~4.6/4.5</td><td>~21</td><td>❌ASIC</td><td>N/A</td></tr>
+<tr><td class="m">Oltron</td><td>混</td><td>低</td><td>❌ASIC</td><td>N/A</td></tr></table>
+
+<h2>六、机制/消融(已收口)—— 条件见各报告</h2>
+<table><tr><th>实验</th><th>状态</th><th>文件</th></tr>
+<tr><td class="m">命门gate(实测MSE>方差>uniform)</td><td class="win">✅</td><td>rd_validity_report.md</td></tr>
+<tr><td class="m">ε/gain 环宽分解</td><td class="win">✅</td><td>rd_ron_report.md</td></tr>
+<tr><td class="m">增益随规模衰减机理(flip16)</td><td class="win">✅</td><td>rd_whydecay_report.md</td></tr>
+<tr><td class="m">悬崖=outlier集中(ΔD谱)</td><td class="win">✅</td><td>rd_accpuzzle_report.md</td></tr>
+<tr><td class="m">down_proj全FP4显式对照</td><td class="win">✅</td><td>rd_down_fp4_control.md</td></tr>
+<tr><td class="m">校准鲁棒 wiki↔C4 2×2</td><td class="win">✅</td><td>rd_calib_robustness.md</td></tr>
+<tr><td class="m">组件累计消融(9步精度+6步性能)</td><td class="win">✅</td><td>rd_buildup_ablation.md</td></tr>
+<tr><td class="m">3-seed 误差棒</td><td class="win">✅</td><td>rd_buildup_ablation.md</td></tr>
+<tr><td class="m">loss加权ΔD(诊断)</td><td class="win">✅</td><td>rd_lossweight_report.md</td></tr>
+<tr><td class="m">KV4公平行</td><td class="win">✅</td><td>rd_kv4_fix.md</td></tr>
+<tr><td class="m">跨族Qwen3-8B</td><td class="win">✅</td><td>rd_qwen_report.md</td></tr></table>
+
+<p class="sub">数据源见 docs/paper_evidence_index.md;本表由 results_summary 配套。</p>
+</div></body></html>
