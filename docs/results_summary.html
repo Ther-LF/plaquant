@@ -15,19 +15,20 @@ td.m{text-align:left;font-weight:600}.win{color:#16a34a;font-weight:600}.note{fo
 <p class="sub">RTX Pro 6000 (SM120),vLLM 0.32 同栈;协议见 baselines_on_hardware.md。生成于 2026-11-08(rebuttal 期,部分曲线尾未补齐,见标注)。</p>
 <div class="rb">⚠️ 进行中:70B 精度曲线 11/20(缺高比例 0.75-1.0,正是"是否反超 SharQ"的关键段);8B serving 曲线 4 点、1B 6 点(rebuttal 团队占卡,见缝插针补)。精度曲线 1B/3B/8B 已满 20 点并过 sanity-gate(单调)。</div>
 
-<h2>一、精度曲线(wikitext PPL vs 高精度比例 r)—— 曲线压单点</h2>
-<div class="card"><div id="acc"></div>
+<h2>一、精度:每模型一张 accuracy-per-bit 图(ProMix 曲线 vs related-work 单点)</h2>
+<div class="card">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+<div id="acc_1b"></div><div id="acc_3b"></div><div id="acc_8b"></div><div id="acc_70b"></div>
+</div>
 <div class="lg">
-<span><i class="sw" style="background:#2563eb"></i>ProMix 曲线</span>
-<span><i class="dot" style="background:#e07a3f"></i>NVFP4</span>
-<span><i class="dot" style="background:#dc2626"></i>SharQ</span>
-<span><i class="dot" style="background:#9333ea"></i>ARCQuant</span>
-<span><i class="dot" style="background:#0891b2"></i>FP8-W8A8</span>
-<span><i class="dot" style="background:#6b7280"></i>bf16</span>
+<span><i class="sw" style="background:#2563eb"></i>ProMix 曲线(扫 r,x=bits)</span>
+<span><i class="dot" style="background:#e07a3f"></i>NVFP4</span><span><i class="dot" style="background:#dc2626"></i>SharQ</span>
+<span><i class="dot" style="background:#9333ea"></i>ARCQuant</span><span><i class="dot" style="background:#ca8a04"></i>MicroMix</span>
+<span><i class="dot" style="background:#0d9488"></i>CoQuant</span><span><i class="dot" style="background:#0891b2"></i>FP8</span>
+<span><i class="sw" style="background:#6b7280;border-top:2px dashed #6b7280;height:0"></i>bf16(虚线)</span>
 </div>
-<div class="note">读图:ProMix 曲线(扫 r)几乎全程在 NVFP4/SharQ 单点之下(更准);右端(高比例)逼近 FP8;左端低比例未完全跨悬崖。70B 曲线只到 r0.70(5.796,距 SharQ 5.769 仅 0.027,仍在降 → 高比例可能反超,待补点)。</div>
+<div class="note">x=有效 bits/weight,y=wikitext PPL(越低越好)。ProMix 是一条曲线(r 从小到大 = bits 4.5→8.5);每个 related work 是**一个点**(落在它自己的 bits 处)。曲线在点下方/左侧 = 同 bit 更准或同精度更省。70B 曲线缺高比例端(补点中)。</div>
 </div>
-
 <h2>二、serving 曲线(3B,吞吐 vs r)+ 竞品单点</h2>
 <div class="card"><div id="serv"></div>
 <div class="lg"><span><i class="sw" style="background:#2563eb"></i>ProMix decode 吞吐(tok/s, b256)</span>
@@ -112,31 +113,37 @@ td.m{text-align:left;font-weight:600}.win{color:#16a34a;font-weight:600}.note{fo
 const D={"acc": {"1b": [[0.05, 15.074, 20.7091], [0.1, 14.4866, 20.0578], [0.15, 14.1332, 19.8368], [0.2, 14.0295, 19.6612], [0.25, 13.9924, 19.6309], [0.3, 13.9271, 19.5246], [0.35, 13.9149, 19.5453], [0.4, 13.9185, 19.5022], [0.45, 13.8731, 19.4735], [0.5, 13.8532, 19.4412], [0.55, 13.8484, 19.4317], [0.6, 13.8033, 19.3482], [0.65, 13.7627, 19.3094], [0.7, 13.7292, 19.2637], [0.75, 13.6813, 19.203], [0.8, 13.7026, 19.2368], [0.85, 13.6681, 19.2079], [0.9, 13.6453, 19.1764], [0.95, 13.6247, 19.1648], [1.0, 13.5738, 19.0532]], "3b": [[0.05, 8.8014, 12.0632], [0.1, 8.2468, 11.3071], [0.15, 8.204, 11.2455], [0.2, 8.194, 11.1994], [0.25, 8.1574, 11.1592], [0.3, 8.1481, 11.1198], [0.35, 8.1441, 11.0879], [0.4, 8.1332, 11.072], [0.45, 8.1188, 11.0412], [0.5, 8.1011, 11.0065], [0.55, 8.1027, 10.9996], [0.6, 8.0984, 10.9872], [0.65, 8.0963, 10.9778], [0.7, 8.088, 10.9636], [0.75, 8.0741, 10.9338], [0.8, 8.0533, 10.8951], [0.85, 8.0329, 10.8359], [0.9, 8.0253, 10.8117], [0.95, 8.0107, 10.7915], [1.0, 7.9889, 10.759]], "8b": [[0.05, 6.8137, 9.9428], [0.1, 6.5851, 9.6034], [0.15, 6.5651, 9.5517], [0.2, 6.5357, 9.5087], [0.25, 6.5088, 9.4766], [0.3, 6.5059, 9.4526], [0.35, 6.4826, 9.4287], [0.4, 6.4755, 9.407], [0.45, 6.457, 9.3741], [0.5, 6.4538, 9.3574], [0.55, 6.4488, 9.3321], [0.6, 6.4276, 9.2984], [0.65, 6.4107, 9.275], [0.7, 6.3883, 9.2549], [0.75, 6.3743, 9.2241], [0.8, 6.3553, 9.1921], [0.85, 6.3414, 9.1681], [0.9, 6.3396, 9.1505], [0.95, 6.3267, 9.1368], [1.0, 6.3047, 9.117]], "70b": [[0.15, 6.0602, 9.9092], [0.25, 5.9983, 9.8255], [0.3, 5.9604, 9.8009], [0.35, 5.9012, 9.7062], [0.4, 5.8836, 9.7075], [0.45, 5.8644, 9.7226], [0.5, 5.8742, 9.674], [0.55, 5.8586, 9.647], [0.6, 5.8245, 9.6571], [0.65, 5.8271, 9.6675], [0.7, 5.796, null]]}, "serv": {"1b": [{"r": 0.05, "dec_tput": 26022.7, "tpot": 9.59, "pre_ttft": 1.919}, {"r": 0.2, "dec_tput": 35133.6, "tpot": 7.09, "pre_ttft": 1.419}, {"r": 0.85, "dec_tput": 32482.7, "tpot": 7.66, "pre_ttft": 2.331}, {"r": 0.9, "dec_tput": 32261.4, "tpot": 7.71, "pre_ttft": 2.872}, {"r": 0.95, "dec_tput": 32521.6, "tpot": 7.64, "pre_ttft": 1.643}, {"r": 1.0, "dec_tput": 31889.9, "tpot": 7.79, "pre_ttft": 1.68}], "3b": [{"r": 0.0312, "dec_tput": 13244.4, "tpot": 18.93, "pre_ttft": 3.212}, {"r": 0.0625, "dec_tput": 13732.4, "tpot": 18.28, "pre_ttft": 2.927}, {"r": 0.0938, "dec_tput": 13151.1, "tpot": 19.07, "pre_ttft": 3.234}, {"r": 0.1, "dec_tput": 13464.0, "tpot": 18.63, "pre_ttft": 3.097}, {"r": 0.15, "dec_tput": 13417.9, "tpot": 18.7, "pre_ttft": 3.097}, {"r": 0.1875, "dec_tput": 13434.4, "tpot": 18.67, "pre_ttft": 3.111}, {"r": 0.2, "dec_tput": 13396.3, "tpot": 18.72, "pre_ttft": 3.153}, {"r": 0.25, "dec_tput": 13616.5, "tpot": 18.42, "pre_ttft": 3.13}, {"r": 0.4, "dec_tput": 13128.1, "tpot": 19.08, "pre_ttft": 3.414}, {"r": 0.5, "dec_tput": 13014.4, "tpot": 19.23, "pre_ttft": 3.503}, {"r": 0.65, "dec_tput": 13007.0, "tpot": 19.24, "pre_ttft": 3.591}, {"r": 0.7, "dec_tput": 12933.3, "tpot": 19.34, "pre_ttft": 3.66}, {"r": 0.75, "dec_tput": 12872.2, "tpot": 19.43, "pre_ttft": 3.696}, {"r": 0.8, "dec_tput": 12938.8, "tpot": 19.32, "pre_ttft": 3.754}, {"r": 0.85, "dec_tput": 12906.0, "tpot": 19.37, "pre_ttft": 3.803}, {"r": 0.9, "dec_tput": 12889.4, "tpot": 19.39, "pre_ttft": 3.831}, {"r": 0.95, "dec_tput": 12786.7, "tpot": 19.54, "pre_ttft": 3.906}, {"r": 1.0, "dec_tput": 12848.1, "tpot": 19.44, "pre_ttft": 3.937}], "8b": [{"r": 0.0312, "dec_tput": 10155.9, "tpot": 24.51, "pre_ttft": 5.878}, {"r": 0.0625, "dec_tput": 9956.2, "tpot": 24.99, "pre_ttft": 5.994}, {"r": 0.1, "dec_tput": 9729.8, "tpot": 25.56, "pre_ttft": 6.327}, {"r": 0.25, "dec_tput": 9721.0, "tpot": 25.54, "pre_ttft": 6.602}]}, "peers_acc": {"1b": {"NVFP4": 15.65, "ARCQuant": 15.22, "SharQ": 14.79, "bf16": 13.16}, "3b": {"NVFP4": 8.63, "ARCQuant": 8.54, "SharQ": 8.39, "FP8": 7.88, "bf16": 7.82}, "8b": {"NVFP4": 6.87, "ARCQuant": 6.81, "SharQ": 6.68, "FP8": 6.19, "bf16": 6.14}, "70b": {"NVFP4": 5.928, "ARCQuant": 6.183, "SharQ": 5.769, "bf16": 5.316}}, "peers_serv": {}, "serv_peers": {"3b": {"BF16": {"tput": 12621, "ttft": 5.591}, "FP8": {"tput": 13769, "ttft": 3.388}, "W4A16": {"tput": 12477, "ttft": 5.938}, "NVFP4": {"tput": 15286, "ttft": 2.078}}, "8b": {"BF16": {"tput": 8302, "ttft": 12.269}, "FP8": {"tput": 9691, "ttft": 7.335}, "W4A16": {"tput": 8498, "ttft": 13.445}, "NVFP4": {"tput": 11794, "ttft": 4.263}}}};
 const ns="http://www.w3.org/2000/svg";
 function el(t,a){const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);return e}
-// ---- accuracy chart ----
+// ---- per-model accuracy-per-bit small multiples ----
 (function(){
-const W=960,H=420,L=50,R=180,T=16,B=42,iw=W-L-R,ih=H-T-B;
-const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,id:"accsvg"});document.getElementById("acc").appendChild(svg);
-const colA={'1b':'#60a5fa','3b':'#2563eb','8b':'#1e3a8a','70b':'#7c3aed'};
-// x = r 0..1, y = ppl but per-model scale differs -> normalize each model to its own y via right-side? Simpler: plot all on log-ish shared? Use per-model MIN-MAX mapping to [0,1] then it's shape. Instead show 3B+8B+70B on real PPL with dual ranges messy.
-// Decision: show NORMALIZED gap-to-bf16 so all models comparable on one axis.
-const bf={'1b':13.16,'3b':7.82,'8b':6.14,'70b':5.316};
-const peers=D.peers_acc;
-let ymax=0;
-for(const m in D.acc)for(const p of D.acc[m]){const g=p[1]-bf[m];if(g>ymax)ymax=g}
-ymax=Math.ceil(ymax*10)/10;
-const X=r=>L+r*iw, Y=g=>T+(1-g/ymax)*ih;
-[0,0.5,1,1.5,2].forEach(g=>{if(g<=ymax){svg.appendChild(el("line",{x1:L,y1:Y(g),x2:L+iw,y2:Y(g),stroke:"#eef0f4"}));const t=el("text",{x:L-6,y:Y(g)+4,"text-anchor":"end",fill:"#6b7280","font-size":11});t.textContent="+"+g.toFixed(1);svg.appendChild(t)}});
-[0,0.25,0.5,0.75,1].forEach(r=>{const t=el("text",{x:X(r),y:H-24,"text-anchor":"middle",fill:"#6b7280","font-size":11});t.textContent=r;svg.appendChild(t)});
-svg.appendChild(el("text",{x:L+iw/2,y:H-6,"text-anchor":"middle",fill:"#374151","font-size":12})).textContent="高精度比例 r";
-const yl=el("text",{x:14,y:T+ih/2,"text-anchor":"middle",fill:"#374151","font-size":12,transform:`rotate(-90 14 ${T+ih/2})`});yl.textContent="ΔPPL vs bf16(越低越好)";svg.appendChild(yl);
-for(const m in D.acc){const pts=D.acc[m];let d="";pts.forEach((p,i)=>{d+=(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]-bf[m]).toFixed(1)+" "});
- svg.appendChild(el("path",{d,fill:"none",stroke:colA[m],"stroke-width":2.4}));
- const last=pts[pts.length-1];const t=el("text",{x:X(last[0])+4,y:Y(last[1]-bf[m])+3,fill:colA[m],"font-size":11,"font-weight":600});t.textContent=m.toUpperCase();svg.appendChild(t)}
-// peer single points (as gap) at their bit->approx r: NVFP4~0(4.5),SharQ~0,ARC~0.15,FP8~ big. Put at nominal r for visual: NVFP4/SharQ/ARC near left, FP8 right.
-const pcol={'NVFP4':'#e07a3f','SharQ':'#dc2626','ARCQuant':'#9333ea','FP8':'#0891b2','bf16':'#6b7280'};
-const prx={'NVFP4':0.0,'SharQ':0.0,'ARCQuant':0.15,'FP8':1.0,'bf16':1.0};
-for(const m of ['3b','8b']){const o=m==='3b'?-3:3;for(const pk in peers[m]){if(pk==='bf16')continue;const g=peers[m][pk]-bf[m];if(g>ymax)continue;
-  svg.appendChild(el("circle",{cx:X(prx[pk]||0)+o,cy:Y(g),r:4,fill:pcol[pk]||'#999',stroke:'#fff'}))}}
+function draw(div,m){
+ const el2=document.getElementById(div); if(!el2||!D.acc[m])return;
+ const W=460,H=260,L=48,R=16,T=24,B=40,iw=W-L-R,ih=H-T-B;
+ const svg=el("svg",{viewBox:`0 0 ${W} ${H}`});el2.appendChild(svg);
+ const cur=D.acc[m].map(p=>[4.5+4*p[0],p[1]]); // [bits, wiki]
+ const peers=D.PA[m]||{}; const bf=D.BF[m];
+ let xs=cur.map(p=>p[0]).concat(Object.keys(peers).map(k=>D.PB[k]));
+ let ys=cur.map(p=>p[1]).concat(Object.values(peers));
+ let xmin=Math.min(...xs)-0.1,xmax=Math.max(...xs)+0.1, ymin=Math.min(...ys,bf)*0.995,ymax=Math.max(...ys)*1.005;
+ const X=v=>L+(v-xmin)/(xmax-xmin)*iw, Y=v=>T+(1-(v-ymin)/(ymax-ymin))*ih;
+ // title
+ const tt=el("text",{x:L,y:14,fill:"#1a1a2e","font-size":13,"font-weight":700});tt.textContent=m.toUpperCase();svg.appendChild(tt);
+ // grid y
+ for(let i=0;i<=3;i++){const v=ymin+(ymax-ymin)*i/3;svg.appendChild(el("line",{x1:L,y1:Y(v),x2:L+iw,y2:Y(v),stroke:"#eef0f4"}));const t=el("text",{x:L-5,y:Y(v)+3,"text-anchor":"end",fill:"#6b7280","font-size":10});t.textContent=v.toFixed(1);svg.appendChild(t)}
+ // x ticks
+ [Math.ceil(xmin),5,6,7,8].forEach(b=>{if(b>=xmin&&b<=xmax){const t=el("text",{x:X(b),y:H-24,"text-anchor":"middle",fill:"#6b7280","font-size":10});t.textContent=b;svg.appendChild(t)}});
+ svg.appendChild(el("text",{x:L+iw/2,y:H-8,"text-anchor":"middle",fill:"#374151","font-size":11})).textContent="bits/weight";
+ // bf16 dashed
+ svg.appendChild(el("line",{x1:L,y1:Y(bf),x2:L+iw,y2:Y(bf),stroke:"#6b7280","stroke-dasharray":"4 3",opacity:.6}));
+ const bt=el("text",{x:L+2,y:Y(bf)-3,fill:"#6b7280","font-size":9});bt.textContent="bf16 "+bf;svg.appendChild(bt);
+ // ProMix curve
+ let d="";cur.forEach((p,i)=>{d+=(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)+" "});
+ svg.appendChild(el("path",{d,fill:"none",stroke:"#2563eb","stroke-width":2.2}));
+ cur.forEach(p=>svg.appendChild(el("circle",{cx:X(p[0]),cy:Y(p[1]),r:1.8,fill:"#2563eb"})));
+ // peer points
+ for(const k in peers){svg.appendChild(el("circle",{cx:X(D.PB[k]),cy:Y(peers[k]),r:4.5,fill:D.PC[k],stroke:"#fff","stroke-width":1}));
+   const t=el("text",{x:X(D.PB[k])+5,y:Y(peers[k])+3,fill:D.PC[k],"font-size":9,"font-weight":600});t.textContent=k;svg.appendChild(t)}
+}
+['1b','3b','8b','70b'].forEach(m=>draw('acc_'+m,m));
 })();
 // ---- serving chart (3B throughput vs r) ----
 (function(){
