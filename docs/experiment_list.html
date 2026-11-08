@@ -36,9 +36,9 @@ caption{text-align:left;font-size:13px;color:#374151;margin-bottom:4px}
 <div class="lgd">注:SharQ serving 在其自带 vLLM 集成单独测(fiveway §6:decode b256 慢于BF16、conc c256 4946);prefill/decode 同口径待补测标待run。batch 16/64/128/512 + 长上下文(2048/4096)+ ShareGPT 另有扩展表(部分待run)。</div>
 
 
-<div class="lgd" style="color:#b45309"><b>注:上表 ProMix 也是 r=1/8 代表点;serving 同样是整条曲线(下图,3B 18 点最全)。prefill(左)与 decode(右)分开看。</b></div>
+<div class="lgd" style="color:#b45309"><b>注:上表 ProMix 也是 r=1/8 代表点;serving 同样是整条曲线(下图,3B 18点 / 8B 4点(rebuttal占卡,补齐中))。prefill(左)与 decode(右)分开看。</b></div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
-<div id="sv_pre_3b"></div><div id="sv_dec_3b"></div></div>
+<div id="sv_pre_3b"></div><div id="sv_dec_3b"></div><div id="sv_pre_8b"></div><div id="sv_dec_8b"></div></div>
 <div class="lgd"><span style="color:#2563eb">■ ProMix曲线(扫r)</span> · 虚线=竞品单点:<span style="color:#e07a3f">NVFP4</span> <span style="color:#0891b2">FP8</span> <span style="color:#6b7280">BF16</span> <span style="color:#9333ea">GPTQ</span> <span style="color:#16a34a">AWQ</span>。x=r,y=吞吐 tok/s(越高越好)。</div>
 
 <h2>三、ProMix 可调曲线(每模型 20 点,r=0.05..1.0)—— 条件:5% 网格</h2>
@@ -133,6 +133,6 @@ function curve(div,m,key,title){
  var pc={BF16:"#6b7280",FP8:"#0891b2",NVFP4:"#e07a3f",GPTQ:"#9333ea",AWQ:"#16a34a"};
  for(var k in peers){var val=peers[k][key];if(!val)continue;var y=Y(val);svg.appendChild(el("line",{x1:L,y1:y,x2:L+iw,y2:y,stroke:pc[k],"stroke-dasharray":"3 3",opacity:.6}));svg.appendChild(el("text",{x:L+iw+3,y:y+3,fill:pc[k],"font-size":9})).textContent=k}
 }
-curve('sv_pre_3b','3b','pre','prefill吞吐');curve('sv_dec_3b','3b','dec','decode吞吐');
+curve('sv_pre_3b','3b','pre','prefill吞吐');curve('sv_dec_3b','3b','dec','decode吞吐');curve('sv_pre_8b','8b','pre','prefill吞吐');curve('sv_dec_8b','8b','dec','decode吞吐');
 })();
 </script></body></html>
