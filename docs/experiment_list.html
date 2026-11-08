@@ -35,6 +35,12 @@ caption{text-align:left;font-size:13px;color:#374151;margin-bottom:4px}
 </table>
 <div class="lgd">注:SharQ serving 在其自带 vLLM 集成单独测(fiveway §6:decode b256 慢于BF16、conc c256 4946);prefill/decode 同口径待补测标待run。batch 16/64/128/512 + 长上下文(2048/4096)+ ShareGPT 另有扩展表(部分待run)。</div>
 
+
+<div class="lgd" style="color:#b45309"><b>注:上表 ProMix 也是 r=1/8 代表点;serving 同样是整条曲线(下图,3B 18 点最全)。prefill(左)与 decode(右)分开看。</b></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+<div id="sv_pre_3b"></div><div id="sv_dec_3b"></div></div>
+<div class="lgd"><span style="color:#2563eb">■ ProMix曲线(扫r)</span> · 虚线=竞品单点:<span style="color:#e07a3f">NVFP4</span> <span style="color:#0891b2">FP8</span> <span style="color:#6b7280">BF16</span> <span style="color:#9333ea">GPTQ</span> <span style="color:#16a34a">AWQ</span>。x=r,y=吞吐 tok/s(越高越好)。</div>
+
 <h2>三、ProMix 可调曲线(每模型 20 点,r=0.05..1.0)—— 条件:5% 网格</h2>
 <table><tr><th>模型</th><th>精度曲线(wiki+C4)</th><th>serving 曲线</th></tr>
 <tr><td>1B</td><td class="win">✅ 20/20</td><td>🔄 6/20(待补)</td></tr>
@@ -104,4 +110,29 @@ function accChart(div,m){
  for(var k in peers){svg.appendChild(el("circle",{cx:X(D.PB[k]),cy:Y(peers[k]),r:4.5,fill:D.PC[k],stroke:"#fff","stroke-width":1}));svg.appendChild(el("text",{x:X(D.PB[k])+5,y:Y(peers[k])+3,fill:D.PC[k],"font-size":9,"font-weight":600})).textContent=k}
 }
 ['1b','3b','8b','70b'].forEach(function(m){accChart('acc_'+m,m)});
+</script><script>
+(function(){
+var SC={"SV": {"1b": [[0.05, 79283, 26023], [0.2, 106396, 35134], [0.85, 65802, 32483], [0.9, 94465, 32261], [0.95, 94665, 32522], [1.0, 94026, 31890]], "3b": [[0.0312, 42143, 13244], [0.0625, 44514, 13732], [0.0938, 41885, 13151], [0.1, 43035, 13464], [0.15, 42954, 13418], [0.1875, 42941, 13434], [0.2, 42639, 13396], [0.25, 43076, 13617], [0.4, 40696, 13128], [0.5, 40252, 13014], [0.65, 39749, 13007], [0.7, 39331, 12933], [0.75, 39145, 12872], [0.8, 38822, 12939], [0.85, 38510, 12906], [0.9, 38316, 12889], [0.95, 37941, 12787], [1.0, 37835, 12848]], "8b": [[0.0312, 27387, 10156], [0.0625, 27069, 9956], [0.1, 25510, 9730], [0.25, 25103, 9721]]}, "PR": {"1b": {}, "3b": {"BF16": {"pre": 33696, "dec": 12621}, "FP8": {"pre": 44910, "dec": 13769}, "NVFP4": {"pre": 55227, "dec": 15286}, "GPTQ": {"pre": 31184, "dec": 12477}, "AWQ": {"pre": 31497, "dec": 12393}}, "8b": {"BF16": {"pre": 16676, "dec": 8302}, "FP8": {"pre": 24483, "dec": 9691}, "NVFP4": {"pre": 35994, "dec": 11794}, "GPTQ": {"pre": 16018, "dec": 8498}, "AWQ": {"pre": 15527, "dec": 8306}}}};var ns="http://www.w3.org/2000/svg";
+function el(t,a){var e=document.createElementNS(ns,t);for(var k in a)e.setAttribute(k,a[k]);return e}
+function curve(div,m,key,title){
+ var box=document.getElementById(div);if(!box)return;var pts=(SC.SV[m]||[]).filter(function(p){return p[key==='pre'?1:2]});
+ if(!pts.length)return;var peers=SC.PR[m]||{};
+ var W=470,H=250,L=56,R=70,T=22,B=38,iw=W-L-R,ih=H-T-B;
+ var svg=el("svg",{viewBox:"0 0 "+W+" "+H});box.appendChild(svg);
+ var idx=key==='pre'?1:2;
+ var ys=pts.map(function(p){return p[idx]}).concat(Object.keys(peers).map(function(k){return peers[k][key]}).filter(Boolean));
+ var ymin=Math.min.apply(0,ys)*0.95,ymax=Math.max.apply(0,ys)*1.03;
+ var X=function(r){return L+r*iw},Y=function(v){return T+(1-(v-ymin)/(ymax-ymin))*ih};
+ svg.appendChild(el("text",{x:L,y:13,fill:"#1a1a2e","font-size":12,"font-weight":700})).textContent=m.toUpperCase()+" "+title;
+ for(var i=0;i<=3;i++){var v=ymin+(ymax-ymin)*i/3;svg.appendChild(el("line",{x1:L,y1:Y(v),x2:L+iw,y2:Y(v),stroke:"#eef0f4"}));svg.appendChild(el("text",{x:L-5,y:Y(v)+3,"text-anchor":"end",fill:"#6b7280","font-size":9})).textContent=Math.round(v)}
+ [0,.5,1].forEach(function(r){svg.appendChild(el("text",{x:X(r),y:H-22,"text-anchor":"middle",fill:"#6b7280","font-size":10})).textContent=r});
+ svg.appendChild(el("text",{x:L+iw/2,y:H-6,"text-anchor":"middle",fill:"#374151","font-size":10})).textContent="r";
+ var d="";pts.forEach(function(p,i){d+=(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[idx]).toFixed(1)+" "});
+ svg.appendChild(el("path",{d:d,fill:"none",stroke:"#2563eb","stroke-width":2.2}));
+ pts.forEach(function(p){svg.appendChild(el("circle",{cx:X(p[0]),cy:Y(p[idx]),r:2,fill:"#2563eb"}))});
+ var pc={BF16:"#6b7280",FP8:"#0891b2",NVFP4:"#e07a3f",GPTQ:"#9333ea",AWQ:"#16a34a"};
+ for(var k in peers){var val=peers[k][key];if(!val)continue;var y=Y(val);svg.appendChild(el("line",{x1:L,y1:y,x2:L+iw,y2:y,stroke:pc[k],"stroke-dasharray":"3 3",opacity:.6}));svg.appendChild(el("text",{x:L+iw+3,y:y+3,fill:pc[k],"font-size":9})).textContent=k}
+}
+curve('sv_pre_3b','3b','pre','prefill吞吐');curve('sv_dec_3b','3b','dec','decode吞吐');
+})();
 </script></body></html>
