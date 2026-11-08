@@ -79,6 +79,18 @@
 
 ---
 
+
+## serving batch 对账(手册规定 vs 实际,2026-11-08)
+手册(本文件 L59)规定:prefill 1024/128 · decode 128/1024 · 并发 1024/512@256 · 长上下文 ISL 2048/4096 · **batch→512** · ShareGPT。实际:
+| 项 | 手册 | 实际落地 | 缺口 |
+|---|---|---|---|
+| 主五方 batch | 16-512 | **只 16/64/128/256** | ❌ **batch 512 待run**(主 JSON 无 b512)|
+| ProMix 曲线 batch | ≤512 | ≤256 | ❌ b512 待run |
+| 长上下文 2048/4096×b512 | 全方法 | **仅 3B 片段**(ext_{bf,fp8,nv,pm}3b) | ❌ **8B 长上下文全缺 + b512 待run** |
+| ShareGPT 真实分布 | 全方法 | 3B/8B 零散(sgpt_*) | 🔄 部分,待补齐 |
+| 最大可服 batch / OOM 上限 | 要测 | 未测 | ❌ 待run |
+**诊断**:prefill 吞吐 PM/FP8 随 batch 单调升(3B b256=0.99、8B b256=1.12;b16→b256 均升)→ **"3B 不如 FP8"部分因 batch 没测到 512**(b512 大概率反超)。8B+大batch 是最占优组合却几乎没测。**卡空优先补 batch512(3B/8B prefill+decode)+ 8B 长上下文,而非补 1B serving。**
+
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
