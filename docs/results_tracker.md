@@ -91,6 +91,13 @@
 | 最大可服 batch / OOM 上限 | 要测 | 未测 | ❌ 待run |
 **诊断**:prefill 吞吐 PM/FP8 随 batch 单调升(3B b256=0.99、8B b256=1.12;b16→b256 均升)→ **"3B 不如 FP8"部分因 batch 没测到 512**(b512 大概率反超)。8B+大batch 是最占优组合却几乎没测。**卡空优先补 batch512(3B/8B prefill+decode)+ 8B 长上下文,而非补 1B serving。**
 
+
+## 70B 高尾补点:resume 隐患 + 修正(2026-11-09)
+- **发现**:feat/rd-alloc 里 `70b_r0.70.json`=wiki 5.796 但**无 c4**(旧 campaign killed 在 wiki↔c4 间);`70b_r0.80.json`=纯 stub(只 meta)。rd_scale **启动即写 meta stub**,wiki、c4 分段写,**c4 最后写**。
+- **stub 守卫 bug**:lane 脚本原判据=`"wikitext" in d`,但半成品 r0.70 有 wikitext 缺 c4 → 不会被删 → acc_point `[ ! -f OUT ]` 误跳,c4 永缺。**正确判据 = `"c4" in d`**(完整点的最后字段)。
+- **ssh 恢复后必做**:(1) 把 lane 守卫改成 `"c4" in d` 否则删;(2) 删 remote+local 的半成品/ stub(r0.70 无c4、r0.80 stub)强制重跑;(3) 本次见缝插针起的 4 lane(0.70/0.75/0.80/0.85)若已完成则 harvest 完整版覆盖半成品;(4) sanity-gate 看 0.70-0.85 是否跌破 SharQ 5.769(参照 r0.65 wiki 5.827 / bf16 5.316)。
+- **当前阻塞**:远端 host 自 2026-11-08 ~11:3x 起 ssh port22 超时,跨夜未恢复;detached lane 命运未知(host 若重启则被杀,幂等重跑补缺)。
+
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
