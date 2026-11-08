@@ -61,6 +61,50 @@ td.m{text-align:left;font-weight:600}.win{color:#16a34a;font-weight:600}.note{fo
 </table>
 <div class="note">排序处处一致:ProMix &lt; SharQ ≈ NVFP4 ≈ ARCQuant &lt; MicroMix &lt; CoQuant(PPL/0-shot/MMLU 互证)。70B:NVFP4 0-shot 77.94 / MMLU 78.99。老四样(QuaRot/SpinQuant/Atom/ResQ)wiki 更差一截(见 scoreboard)。</div></div>
 
+
+<h2>五、全模型精度对比(wikitext PPL,我们协议,含全部 related work)</h2>
+<div class="card"><table>
+<tr><th>方法(bit)</th><th>1B</th><th>3B</th><th>8B</th><th>13B</th><th>70B</th></tr>
+<tr><td class="m">bf16</td><td>13.16</td><td>7.82</td><td>6.14</td><td>4.89</td><td>5.32</td></tr>
+<tr><td class="m win">ProMix W4A4 (4.97)</td><td class="win">14.17</td><td class="win">8.27</td><td class="win">6.56</td><td class="win">5.03</td><td>5.97</td></tr>
+<tr><td class="m">SharQ (~4.5)</td><td>14.79</td><td>8.39</td><td>6.68</td><td>—</td><td class="win">5.77</td></tr>
+<tr><td class="m">NVFP4 (4.5)</td><td>15.65</td><td>8.63</td><td>6.87</td><td>—</td><td>5.93</td></tr>
+<tr><td class="m">ARCQuant (5.1)</td><td>15.22</td><td>8.54</td><td>6.81</td><td>—</td><td>6.18</td></tr>
+<tr><td class="m">MicroMix (5.2)</td><td>—</td><td>9.05</td><td>7.39</td><td>—</td><td>—</td></tr>
+<tr><td class="m">CoQuant (4.5)</td><td>16.64</td><td>9.56</td><td>7.69</td><td>—</td><td>—</td></tr>
+<tr><td class="m">ResQ (≈4.5, INT)</td><td>15.98</td><td>8.71</td><td>7.06</td><td>—</td><td>—</td></tr>
+<tr><td class="m">SpinQuant-learned (4.0)</td><td>16.14</td><td>9.25</td><td>7.88</td><td>—</td><td>—</td></tr>
+<tr><td class="m">Atom (≈4.2, INT)</td><td>18.40</td><td>9.70</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td class="m">QuaRot (≈4.0, INT)</td><td>22.11</td><td>10.72</td><td>8.65</td><td>—</td><td>—</td></tr>
+</table>
+<div class="note">ProMix ≤8B 全场第一(中小模型);70B 精度让位 SharQ(5.77,但 ProMix 曲线 r0.70=5.80 逼近,高比例待定)。INT 系(QuaRot/Atom/SpinQuant/ResQ)明显更差 + 在 Blackwell 无快 kernel。老四样为 W4A4KV4 口径(带 KV4)。</div></div>
+
+<h2>六、kernel 级同台(GEMM @ M=8192,ProMix fused vs 各对手)</h2>
+<div class="card"><table>
+<tr><th>对手</th><th>ProMix 相对它(越>1 越快)</th></tr>
+<tr><td class="m">fp16 cuBLAS</td><td class="win">2.32–3.06×</td></tr>
+<tr><td class="m">MicroMix (mix 5.5b)</td><td class="win">1.40–1.85×</td></tr>
+<tr><td class="m">SharQ</td><td class="win">1.12–1.51×</td></tr>
+<tr><td class="m">vLLM-NVFP4</td><td class="win">1.00–1.53×(赢 5/6)</td></tr>
+<tr><td class="m">ARCQuant (S=512)</td><td>0.93–1.09×(平手)</td></tr>
+</table>
+<div class="note">ProMix 融合 kernel 是最快梯队:赢 vLLM/MicroMix/SharQ,平 ARCQuant(但 ARCQuant 精度更差→Pareto 支配)。vs 同算法朴素 2-launch 快 1.3×(融合独立价值)。</div></div>
+
+<h2>七、理论计算复杂度 BOPs(含跑不了的 INT4/ASIC)</h2>
+<div class="card"><table>
+<tr><th>方法</th><th>W/A bit</th><th>理论 rel-BOPs</th><th>SM120 通路</th><th>门后真实 rel-BOPs</th></tr>
+<tr><td class="m">FP16</td><td>16/16</td><td>256</td><td>✅</td><td>256</td></tr>
+<tr><td class="m">FP8 W8A8</td><td>8.5/8</td><td>~68</td><td>✅</td><td>~68</td></tr>
+<tr><td class="m win">ProMix (r=1/8)</td><td>4.97/~4.5</td><td>~22</td><td>✅ 融合</td><td class="win">~22</td></tr>
+<tr><td class="m">NVFP4</td><td>4.5/4.5</td><td>~20</td><td>✅</td><td>~20</td></tr>
+<tr><td class="m">ARCQuant</td><td>5.1/4.5</td><td>~23</td><td>✅</td><td>~23+残差K</td></tr>
+<tr><td class="m">SharQ</td><td>~4.5/4.5</td><td>~20</td><td>✅</td><td>~40(双GEMM)</td></tr>
+<tr><td class="m">QuaRot/Atom (INT4)</td><td>4/4</td><td>~16(纸面最低)</td><td>❌ 无INT4通路</td><td>~64(降INT8)</td></tr>
+<tr><td class="m">FGMP (NVFP4+FP8)</td><td>~4.6/4.5</td><td>~21</td><td>❌ ASIC-only</td><td>N/A</td></tr>
+<tr><td class="m">Oltron (INT4+fp8/12)</td><td>混</td><td>低</td><td>❌ ASIC</td><td>N/A</td></tr>
+</table>
+<div class="note">理论 BOPs≈bit,但要乘"硬件通路门":INT4 纸面最便宜、Blackwell 实为 ~64(降INT8);SharQ 双GEMM 实 ~2×;FGMP/Oltron 无 GPU 路径。ProMix/NVFP4 理论=真实(格式有原生通路)。</div></div>
+
 <div class="card sub">数据源:精度曲线 docs/rd_acctune_data/densesweep/;serving docs/vllm_final_data/ + vllm_final_fiveway.md;精度矩阵 rd_accuracy_matrix.md + rd_newpeers_accuracy.md + rd_mmlu_report.md;70B rd_scale.md + rd_peers70b.md。完整索引 paper_evidence_index.md。</div>
 </div>
 
