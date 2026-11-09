@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CUTLASS = "/home/luofan/plaquant/third_party/cutlass"
 os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
 INC = [HERE, CUTLASS + "/include", CUTLASS + "/tools/util/include", CUTLASS + "/examples/common"]
-BASE = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+BASE = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 
 N, K_low, K_high, M = (int(x) for x in sys.argv[1:5])
 K_total = K_low + K_high

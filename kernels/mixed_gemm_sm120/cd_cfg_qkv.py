@@ -16,7 +16,7 @@ import mixed_gemm as mg
 nv.get_ext(); mx.get_ext(); b1.get_presf_ext()
 
 def build(lbl, NVST, MXST):
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
+    flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
              "-DCDCFG_TM=128", "-DCDCFG_TN=128", "-DCDCFG_TK=128",
              "-DCDCFG_CM=1", "-DCDCFG_CN=1", "-DCDCFG_CK=1",
              f"-DCDCFG_NVST={NVST}", f"-DCDCFG_MXST={MXST}"]

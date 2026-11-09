@@ -59,7 +59,7 @@ def build_decode_pack(W, K_low, K_high):
 
 def main():
     nv, mx, cd, qpf = load_kernels()
-    flags = ["-std=c++17", "-O3"]
+    flags = ["-std=c++20", "-O3"]
     dg = load(name="decode_gemv_ext", sources=[os.path.join(KERN, "decode_gemv_ext.cu")],
               extra_cuda_cflags=flags, verbose=False)
 

@@ -23,7 +23,7 @@ import mixed_gemm as mg
 import b1_fused as b1
 
 INC = [HERE, CUTLASS+"/include", CUTLASS+"/tools/util/include", CUTLASS+"/examples/common"]
-BASE = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+BASE = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 
 
 def build(kind):

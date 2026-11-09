@@ -27,7 +27,7 @@ SM_COUNT = 188
 FP4_PER = 4096
 FP8_PER = 2048
 INC = [HERE, CUTLASS+"/include", CUTLASS+"/tools/util/include", CUTLASS+"/examples/common"]
-BASE = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+BASE = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 
 
 def read_clk():

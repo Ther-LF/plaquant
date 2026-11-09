@@ -32,7 +32,7 @@ def load_exts():
     nv.get_ext(); mx.get_ext()
     inc = [KERN, os.path.join(CUTLASS, "include"),
            os.path.join(CUTLASS, "tools/util/include"), os.path.join(CUTLASS, "examples/common")]
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     cd = load(name="codesign_fused_ext", sources=[os.path.join(KERN, "codesign_fused_ext.cu")],
               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
     qpf = load(name="quant_pack_float_ext", sources=[os.path.join(KERN, "quant_pack_float_ext.cu")],

@@ -30,7 +30,7 @@ CUTLASS = "/home/luofan/plaquant/third_party/cutlass"
 os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
 INC = [HERE, CUTLASS + "/include", CUTLASS + "/tools/util/include",
        CUTLASS + "/examples/common"]
-BASE = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+BASE = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 
 PEAK_FP4 = 1469.0   # TFLOPS dense, docs/hardware_format_peak.md
 PEAK_FP8 = 807.0

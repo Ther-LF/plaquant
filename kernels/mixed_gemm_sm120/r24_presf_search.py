@@ -63,7 +63,7 @@ allgate = True
 
 for (lbl, TM, TN, TK, CM, CN, CK, STG, SCH) in CONFIGS:
     t0 = time.time()
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
+    flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
              f"-DPSCFG_TM={TM}", f"-DPSCFG_TN={TN}", f"-DPSCFG_TK={TK}",
              f"-DPSCFG_CM={CM}", f"-DPSCFG_CN={CN}", f"-DPSCFG_CK={CK}",
              f"-DPSCFG_STAGES={STG}", f"-DPSCFG_SCHED={SCH}"]

@@ -9,7 +9,7 @@ from torch.utils.cpp_extension import load
 import nvfp4_gemm as nv, mxfp8_gemm as mx
 nv.get_ext(); mx.get_ext()
 inc = [HERE, os.path.join(CUTLASS, "include"), os.path.join(CUTLASS, "tools/util/include"), os.path.join(CUTLASS, "examples/common")]
-flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 qpf = load(name="quant_pack_float_ext", sources=[os.path.join(HERE, "quant_pack_float_ext.cu")],
            extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
 

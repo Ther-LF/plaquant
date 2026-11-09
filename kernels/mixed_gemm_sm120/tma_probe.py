@@ -18,7 +18,7 @@ ext = load(
         os.path.join(CUTLASS, "tools/util/include"),
         os.path.join(CUTLASS, "examples/common"),
     ],
-    extra_cuda_cflags=["-std=c++17", "--expt-relaxed-constexpr",
+    extra_cuda_cflags=["-std=c++20", "--expt-relaxed-constexpr",
                        "--expt-extended-lambda", "-O3", "-Xptxas", "-v"],
     verbose=True,
 )

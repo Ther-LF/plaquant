@@ -14,7 +14,7 @@ ext = load(name="codesign_fused_trace",
     sources=[os.path.join(HERE, "codesign_fused_ext.cu")],
     extra_include_paths=[HERE, os.path.join(CUTLASS,"include"),
         os.path.join(CUTLASS,"tools/util/include"), os.path.join(CUTLASS,"examples/common")],
-    extra_cuda_cflags=["-std=c++17","--expt-relaxed-constexpr","--expt-extended-lambda","-O3","-DCD_TRACE"],
+    extra_cuda_cflags=["-std=c++20","--expt-relaxed-constexpr","--expt-extended-lambda","-O3","-DCD_TRACE"],
     verbose=False)
 print("SWEEP_BUILD_OK", flush=True)
 

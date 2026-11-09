@@ -26,7 +26,7 @@ import b1_fused as b1
 INC = [HERE, os.path.join(CUTLASS, "include"),
        os.path.join(CUTLASS, "tools/util/include"),
        os.path.join(CUTLASS, "examples/common")]
-FLAGS = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+FLAGS = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
 
 
 def get_serial():

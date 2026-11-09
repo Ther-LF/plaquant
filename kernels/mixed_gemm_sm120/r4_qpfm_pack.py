@@ -14,7 +14,7 @@ FL={"OFF":[],"OLD":["-DPROMIX_ACT_MSE=1","-DPROMIX_ACT_MSE_FAST=0","-DPROMIX_ACT
     "FAST1":["-DPROMIX_ACT_MSE=1","-DPROMIX_ACT_MSE_FAST=1","-DPROMIX_ACT_MSE_STEPS=1"]}
 inc=[KERN,os.path.join(CUT,"include"),os.path.join(CUT,"tools/util/include"),os.path.join(CUT,"examples/common")]
 def ld(f,d): return load(name=f"qpfm_{f.lower()}",sources=[os.path.join(KERN,"quant_pack_fused_ext.cu")],
-    extra_include_paths=inc,extra_cuda_cflags=["-std=c++17","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"]+d,verbose=False)
+    extra_include_paths=inc,extra_cuda_cflags=["-std=c++20","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"]+d,verbose=False)
 def mins(fn,it=50,wu=12):
     for _ in range(wu): fn()
     torch.cuda.synchronize(); ts=[]

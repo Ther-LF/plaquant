@@ -43,7 +43,7 @@ def _load(name, src, defs):
     inc = [KERN, os.path.join(CUTLASS, "include"),
            os.path.join(CUTLASS, "tools/util/include"),
            os.path.join(CUTLASS, "examples/common")]
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"] + defs
+    flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"] + defs
     return load(name=name, sources=[os.path.join(KERN, src)],
                 extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
 

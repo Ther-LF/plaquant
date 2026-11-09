@@ -19,7 +19,7 @@ ext = load(name="codesign_fused_ext",
     sources=[os.path.join(HERE, "codesign_fused_ext.cu")],
     extra_include_paths=[HERE, os.path.join(CUTLASS,"include"),
         os.path.join(CUTLASS,"tools/util/include"), os.path.join(CUTLASS,"examples/common")],
-    extra_cuda_cflags=["-std=c++17","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"],
+    extra_cuda_cflags=["-std=c++20","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"],
     verbose=False)
 print("LAT_BUILD_OK", flush=True)
 mg.get_fused_ext()  # warm hand-rolled mixed kernel ext

@@ -32,7 +32,7 @@ def split_k(K, hf=HIGH_FRACTION):
 def build():
     inc=[KERN, os.path.join(CUTLASS,"include"), os.path.join(CUTLASS,"tools/util/include"),
          os.path.join(CUTLASS,"examples/common")]
-    flags=["-std=c++17","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"]
+    flags=["-std=c++20","--expt-relaxed-constexpr","--expt-extended-lambda","-O3"]
     qpf = load(name="quant_pack_float_ext",
                sources=[os.path.join(KERN,"quant_pack_float_ext.cu")],
                extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)

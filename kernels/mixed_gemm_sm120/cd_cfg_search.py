@@ -83,7 +83,7 @@ print("CFG_SEARCH_START", flush=True)
 
 for (lbl, TM, TN, TK, CM, CN, CK, NVST, MXST) in CONFIGS:
     t0 = time.time()
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
+    flags = ["-std=c++20", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3",
              f"-DCDCFG_TM={TM}", f"-DCDCFG_TN={TN}", f"-DCDCFG_TK={TK}",
              f"-DCDCFG_CM={CM}", f"-DCDCFG_CN={CN}", f"-DCDCFG_CK={CK}",
              f"-DCDCFG_NVST={NVST}", f"-DCDCFG_MXST={MXST}"]
