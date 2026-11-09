@@ -158,7 +158,7 @@ Track A         Track B(KDA)       Track C              Track D
 ## ✅ Spark 栈命门解除(2026-11-10):fht + vLLM 装成
 - **fast_hadamard_transform** 源码编译成功(Dao-AILab repo,setup.py 原生含 `sm_121` gencode);卡点=torch12.8 vs nvcc13 版本检查 → patch `cpp_extension._check_cuda_version` 跳过(前向兼容,简单扩展 OK)。**bridge PPL + 全精度 eval 解锁**(rd_acctune 顶层 import fht,故 bridge 也需它)。
 - **vLLM 0.33** aarch64 轮子装成(`import vllm` OK)→ Track D 解锁。
-- 栈齐:torch2.11/sm_121 + transformers5.22 + datasets5.1 + fht + vllm。待:3B 模型传完(~7.3G/12G)→ bridge PPL 自动发射(watcher 694166)。
+- 栈齐(torch 2.14 note):**vLLM 装机把 torch 升到 2.14.0+cu130**(原 2.11+cu128)→ torch 与系统 nvcc 都 CUDA13,版本一致更干净,不再需版本检查 hack。新栈实测:GB10 matmul OK + **fht 实际 hadamard 计算通过**(非仅 import)。栈齐:torch2.14/cu130/sm_121 + transformers5.20 + datasets5.1 + fht(functional) + vllm0.33。**注意:Track A 的 b1_fused .so 是 torch2.11 下编的,Track D 用前可能需按 2.14 重编**。待:3B 模型传完(~7.3G/12G)→ bridge PPL 自动发射(watcher 694166)。
 
 ## 7. 下一步
 
