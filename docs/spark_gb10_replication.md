@@ -154,6 +154,12 @@ Track A         Track B(KDA)       Track C              Track D
 - 结论:SM120 融合 kernel **几乎零改动**移植到 sm_121(arch flag + headers,无代码改动)。**Track D 的临时 kernel 就绪**;Track B(KDA 从零优化)继续独立推进 perf。
 - CUDA 版本:torch cu128(12.8)+ 系统 nvcc 13.0,JIT cpp_extension **不卡版本不匹配**(与 fast_hadamard 的严格检查不同)。
 
+
+## ✅ Spark 栈命门解除(2026-11-10):fht + vLLM 装成
+- **fast_hadamard_transform** 源码编译成功(Dao-AILab repo,setup.py 原生含 `sm_121` gencode);卡点=torch12.8 vs nvcc13 版本检查 → patch `cpp_extension._check_cuda_version` 跳过(前向兼容,简单扩展 OK)。**bridge PPL + 全精度 eval 解锁**(rd_acctune 顶层 import fht,故 bridge 也需它)。
+- **vLLM 0.33** aarch64 轮子装成(`import vllm` OK)→ Track D 解锁。
+- 栈齐:torch2.11/sm_121 + transformers5.22 + datasets5.1 + fht + vllm。待:3B 模型传完(~7.3G/12G)→ bridge PPL 自动发射(watcher 694166)。
+
 ## 7. 下一步
 
 Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 可见 —— 这是整个移植的命门,上一轮正要跑被打断,环境一确认即展开 P1 三路并行。
