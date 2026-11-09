@@ -78,9 +78,9 @@ Track A         Track B(KDA)       Track C              Track D
 - **Gate**:torch 见 GB10(cap 12.1)+ bridge PPL 逐位一致 → 解锁 A/B/C/D。
 
 ### Track A — 临时移植 kernel(下游解锁器,门槛低)
-- [ ] A.1 `kernels/mixed_gemm_sm120/` 的 setup.py 改 arch:`sm_120a`→`sm_121a`(或 `-arch=sm_121`);CUDA13 编译。
+- [x] A.1 ✅ arch via TORCH_CUDA_ARCH_LIST=12.1a。原: setup.py 改 arch:`sm_120a`→`sm_121a`(或 `-arch=sm_121`);CUDA13 编译。
 - [ ] A.2 修 aarch64/CUDA13 编译错(头文件/intrinsic 差异;CUTLASS 4.5 对 sm_121 的支持确认)。
-- [ ] A.3 correctness:对 reference 2-launch 跑 cosine≥0.999(共享卡即可)。
+- [x] A.3 ✅ correctness cosine 0.999999(sm_121,2026-11-10)。
 - [ ] A.4 导出可被 vLLM 插件调用的 op(交付给 D)。
 - **Gate**:cosine≥0.999 → D 可用;**不测 perf**(perf 是 B 的事)。
 
@@ -144,6 +144,15 @@ Track A         Track B(KDA)       Track C              Track D
 - **待定(用户明示留后)**:Track C 在 Spark 上跑多少精度点(全 20-grid vs 少量复现确认)——取决于论文是否要"全在 GB10 实测"的说法。
 
 ---
+
+- **CN 网络**:huggingface.co 不可达,所有 HF 下载走 `HF_ENDPOINT=https://hf-mirror.com`;模型用 ungated `unsloth/Llama-3.2-1B|3B`、`unsloth/llama-3-8b`(配置里就是这些,无需 token)。
+
+
+## ✅ Track A 完成(2026-11-10):sm_121 融合 kernel 移植成功
+- `kernels/mixed_gemm_sm120/b1_fused.py`(b1_fused_ext.cu)**在 GB10/sm_121 编译通过**:仅需 `TORCH_CUDA_ARCH_LIST=12.1a`(12.0a→12.1a,nvcc 13.0 接受 `sm_121a`),+ 装 `python3.12-dev`(Python.h)+ cutlass 4.4.2@cb37157(github clone)。
+- **correctness PASS**:N/K/M 多形状(2048×8192×2048、3072×3072×{1,16,2048})**fp4_presf=0.999999 / fp8_presf=0.999999 [PASS]**,BOUNDS PRESF ALL PASS,EXIT rc=0 → **cosine≥0.999 gate 过**。
+- 结论:SM120 融合 kernel **几乎零改动**移植到 sm_121(arch flag + headers,无代码改动)。**Track D 的临时 kernel 就绪**;Track B(KDA 从零优化)继续独立推进 perf。
+- CUDA 版本:torch cu128(12.8)+ 系统 nvcc 13.0,JIT cpp_extension **不卡版本不匹配**(与 fast_hadamard 的严格检查不同)。
 
 ## 7. 下一步
 
