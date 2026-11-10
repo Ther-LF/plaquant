@@ -176,6 +176,15 @@ Track A         Track B(KDA)       Track C              Track D
 - Round 1(cfg×stages 网格扫 + cosine-gate + 中位计时 → GB10 最优 dispatch)已挂 **GPU-free poller**(wait_and_run.sh,sglang<40GB 时 flock-x 自动触发);ncu 就绪(sudo 计数器)。
 - 当前让路:sglang 96%util/61GB 实际服务中 → perf/ncu 正确 yield,等干净窗口。artifacts: kernels/mixed_gemm_sm120/gb10_kda/。
 
+
+## Track D 插件移植(2026-11-11):vLLM 0.33 移植实质完成(差 e2e smoke)
+- **API audit**:vLLM 0.33 **未破** promix 插件 —— LinearBase/LinearMethodBase/register_quantization_config/parameter.* /direct_register_custom_op 全在,签名不变;仅 torch2.14 非致命 deprecation 警告。
+- **插件导入+quant method 实例化 CONFIRMED**;`vllm.general_plugins` entry point `promix_quant` **pip -e 装好,vLLM 启动自动注册**(无需手动 import)。
+- **kernel 路径 sm_121 编译通过**:成熟融合 kernel `codesign_fused_ext.cu`(W4A4 双格式:fused_gemm_prepacked/prepack_sf/quant_pack)**c++20+12.1a 干净编译** → 功能 bring-up **不需 b1_fused adapter**(真实管线直接 build;b1_fused 接口不同,deferred)。
+- 改动:kernels.py(12.1a/c++20)、full_network_realkernel.py(预授权,12.1a/c++20)、pip install -e。
+- **差最后一步 e2e smoke**(`/home/luofan/smoke_promix.py` 已 staged,vLLM offline LLM + fp16 + eager)——阻塞于 box 不可达,恢复后串行跑(先 Track C 释放内存)。
+- **两 agent(B KDA / D 插件)均完成 box-independent 工作,parked 于 Spark 停机,context 保留可 SendMessage 唤醒续跑。**
+
 ## 7. 下一步
 
 Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 可见 —— 这是整个移植的命门,上一轮正要跑被打断,环境一确认即展开 P1 三路并行。
