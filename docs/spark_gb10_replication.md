@@ -1,3 +1,27 @@
+# ⏸️ SPARK 暂停(2026-11-11,用户主动关机)
+
+> Spark box(111.229.66.102)由用户主动关闭,**暂停**。非故障。重启后一连上即可续跑(环境/模型/artifacts/JIT .so/staged 脚本全在盘;两 agent context 保留可 SendMessage 唤醒)。下方为暂停时的进度快照。
+
+## Spark 复刻进度快照(暂停点)
+| Track | 状态 | 产出/剩余 |
+|---|---|---|
+| **0 环境** | ✅ 完成 | torch2.14.0+cu130 / sm_121 / fht(源码编)/ vLLM0.33 / transformers5.20 / datasets 全验证 |
+| **A 临时kernel** | ✅ 完成 | 融合 kernel 移植 sm_121,cosine **0.999999**(仅需 12.1a+c++20+python-dev)|
+| **C 精度** | ✅ bridge gate 过 / ⏸️ 发货点在跑时被关 | **bf16 bridge wiki 7.8146 逐位复现锚点 7.8148**;默认配方量化 8.2592;发货配方(ring512/gptq512/..)复现 8.218 的 run 被关机中断,脚本`fire_ship.sh`+stats 已就位,重启重跑 |
+| **B KDA kernel** | ✅ Round0 / ⏸️ Round1 待净卡 | oracle cosine 1.0;**关键发现:kernel 对 GB10 48-SM 失配(vs Pro6000 188 SM)=跨平台 config 重调洞察**;Round1 cfg 网格 poller 已挂,artifacts 在 gb10_kda/ |
+| **D vLLM插件** | ✅ 移植+注册+kernel编译全通 / ⏸️ e2e smoke 待跑 | vLLM0.33 API 未破,entry-point 自动注册,codesign 融合 kernel sm_121 编译通过;smoke 脚本 `/home/luofan/smoke_promix.py` staged |
+
+## 关机前的事故教训(重启后遵守)
+GB10 单卡 **121GB 统一内存容不下并发双 GPTQ + sglang** → 曾把 unified mem 撑爆、sshd 饿死。**重启后重 job(GPTQ/export/smoke-perf)必须串行,一次一个**;correctness 可共享卡但也别叠双 GPTQ。
+
+## 重启后续跑清单(串行)
+1. Track C 发货配方 `bash /home/luofan/fire_ship.sh` → 量化 wiki 对 8.218;
+2. Track D export(--no-gptq 功能版)→ e2e smoke(smoke_promix.py)→ T0/T1/T2;
+3. Track B Round1 cfg 网格(等 sglang 走的净卡窗口)→ ncu → GB10 dispatch 重调;
+4. 两 agent 可 SendMessage 唤醒(context 在)。
+
+---
+
 # Spark/GB10 复刻编排方案(kernel→算法→框架→实验,4-track 并行)
 
 > 2026-11-09 定稿(brainstorming 产出)。目标:在 NVIDIA DGX Spark(GB10 / SM121 / aarch64)上**从头到尾复刻** ProMix 全套工作,作为论文的**第二硬件点**(跨平台泛化证据)。核心策略:4 条同等重要的 track 并行,用 agent team 推进,单卡 GPU 按"只有测量步才需独占"调度。
