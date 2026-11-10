@@ -166,6 +166,7 @@ Track A         Track B(KDA)       Track C              Track D
 - sanity-gate:复现✅ / 无NaN✅ / 合理✅。**证明 ProMix 方法+环境在 GB10 上逐位可复现**(精度硬件无关的实证)。C4 同轮计算中。
 - 前置链(本轮逐个解除):模型(Pro6000→Mac→Spark 中转,12G)+ fht(源码编+torch版本检查patch)+ rotation artifacts(U/R/E deref 传输)+ wikitext-2(镜像下载)+ `--point` 参数 + HF_ENDPOINT 镜像(替 OFFLINE)。
 - **Track 0 的 bridge gate(3B)通过** → Track C 精度在 Spark 成立。
+- **补充(C4 同轮 BRIDGE_RC=0 完成)**:`--bridge` 连带跑了默认配方量化管线 → **量化 wiki=8.2592(dense/gptq128 轻配方,非发货配方)**,证明 GPTQ+ring分配+act-MSE **全链在 GB10 端到端跑通**(sel_rings 1288/10304)。**要复现发货锚点 8.218 需用发货 knobs(ring512+gptq512+percdamp0.025+weight_mse7+act_mse_up2)重跑**。bf16 bridge 7.8146 的逐位复现才是环境验证 gate(已过)。
 
 ## 7. 下一步
 
