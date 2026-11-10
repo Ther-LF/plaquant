@@ -98,6 +98,11 @@
 - **ssh 恢复后必做**:(1) 把 lane 守卫改成 `"c4" in d` 否则删;(2) 删 remote+local 的半成品/ stub(r0.70 无c4、r0.80 stub)强制重跑;(3) 本次见缝插针起的 4 lane(0.70/0.75/0.80/0.85)若已完成则 harvest 完整版覆盖半成品;(4) sanity-gate 看 0.70-0.85 是否跌破 SharQ 5.769(参照 r0.65 wiki 5.827 / bf16 5.316)。
 - **当前阻塞**:远端 host 自 2026-11-08 ~11:3x 起 ssh port22 超时,跨夜未恢复;detached lane 命运未知(host 若重启则被杀,幂等重跑补缺)。
 
+
+## 70B tail 收口(2026-11-11):Pro6000 无法获取,结论定稿
+- **8 次见缝插针重试全在 wiki-eval 阶段 OOM** —— 70B offload wiki eval 需 ~40-60min,此间任一别团队落到同卡(70B ~90GB + 别人 job > 96GB)即 OOM;Pro6000 多团队争抢下**给不出不被打断的独占窗口**。放弃在 Pro6000 跑 tail。
+- **70B 精度结论(不含 tail,诚实定稿)**:已完成 r0.15-0.65,最低 **r0.60=5.8245**,高比例端趋平,**让位 SharQ 5.769(差 ~0.055)** —— 整条曲线结论:ProMix 全程压 NVFP4(5.928)、可调、**serving 远快于 SharQ**,精度在 70B 让位但各有千秋。tail(0.70-1.0)要拿需 Spark(暂停中)或 Pro6000 某段真空出独占卡。
+
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
