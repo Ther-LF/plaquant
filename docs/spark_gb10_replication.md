@@ -168,6 +168,14 @@ Track A         Track B(KDA)       Track C              Track D
 - **Track 0 的 bridge gate(3B)通过** → Track C 精度在 Spark 成立。
 - **补充(C4 同轮 BRIDGE_RC=0 完成)**:`--bridge` 连带跑了默认配方量化管线 → **量化 wiki=8.2592(dense/gptq128 轻配方,非发货配方)**,证明 GPTQ+ring分配+act-MSE **全链在 GB10 端到端跑通**(sel_rings 1288/10304)。**要复现发货锚点 8.218 需用发货 knobs(ring512+gptq512+percdamp0.025+weight_mse7+act_mse_up2)重跑**。bf16 bridge 7.8146 的逐位复现才是环境验证 gate(已过)。
 
+
+## Track B Round-0(2026-11-11):KDA 发现 kernel 对 GB10 失配
+- **KDA setup 完成**:NVlabs/kda skill 子模块(KernelWiki@76d27b5 / ncu-report-skill@d188794)初始化 + 链入 ~/.claude/skills;KDA 是 prompt/skill 驱动 workflow(非二进制),agent 亲自驱动闭环。
+- **Round 0 baseline**:b1_fused oracle 在 sm_121 编译通过 + **cosine 1.000000 全 shape×M×cfg** → 有效 oracle + warm-start。
+- **🔑 核心发现:kernel 对 GB10 失配** —— **GB10 仅 48 SM vs Pro6000 的 188 SM(3.9× 少)**,+1536 线程/SM、100KB smem/SM。此前 25 轮 auto-dispatch(cfg=0)是在 188-SM 上固化的,48 SM 上 tile/wave 假设全错(decode tile CTA 数 < SM 数=underfill;prefill tile wave-quantization 尾部浪费)。**纯 config 级优化目标(不动 mainloop)** → 这是跨平台泛化的论文级洞察:相同格式/算法,dispatch 需按目标 arch SM 数重调。
+- Round 1(cfg×stages 网格扫 + cosine-gate + 中位计时 → GB10 最优 dispatch)已挂 **GPU-free poller**(wait_and_run.sh,sglang<40GB 时 flock-x 自动触发);ncu 就绪(sudo 计数器)。
+- 当前让路:sglang 96%util/61GB 实际服务中 → perf/ncu 正确 yield,等干净窗口。artifacts: kernels/mixed_gemm_sm120/gb10_kda/。
+
 ## 7. 下一步
 
 Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 可见 —— 这是整个移植的命门,上一轮正要跑被打断,环境一确认即展开 P1 三路并行。
