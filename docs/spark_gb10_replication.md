@@ -160,6 +160,13 @@ Track A         Track B(KDA)       Track C              Track D
 - **vLLM 0.33** aarch64 轮子装成(`import vllm` OK)→ Track D 解锁。
 - 栈齐(torch 2.14 note):**vLLM 装机把 torch 升到 2.14.0+cu130**(原 2.11+cu128)→ torch 与系统 nvcc 都 CUDA13,版本一致更干净,不再需版本检查 hack。新栈实测:GB10 matmul OK + **fht 实际 hadamard 计算通过**(非仅 import)。栈齐:torch2.14/cu130/sm_121 + transformers5.20 + datasets5.1 + fht(functional) + vllm0.33。**注意:Track A 的 b1_fused .so 是 torch2.11 下编的,Track D 用前可能需按 2.14 重编**。待:3B 模型传完(~7.3G/12G)→ bridge PPL 自动发射(watcher 694166)。
 
+
+## 🎯 Track C/0 Gate PASS(2026-11-11):bridge PPL 逐位复现
+- **Spark(GB10/SM121/aarch64/torch2.14)3B bf16 bridge wiki = 7.8146** vs **Pro6000 锚点 7.8148** → **Δ=−0.0002(浮点舍入级,逐位复现)**。
+- sanity-gate:复现✅ / 无NaN✅ / 合理✅。**证明 ProMix 方法+环境在 GB10 上逐位可复现**(精度硬件无关的实证)。C4 同轮计算中。
+- 前置链(本轮逐个解除):模型(Pro6000→Mac→Spark 中转,12G)+ fht(源码编+torch版本检查patch)+ rotation artifacts(U/R/E deref 传输)+ wikitext-2(镜像下载)+ `--point` 参数 + HF_ENDPOINT 镜像(替 OFFLINE)。
+- **Track 0 的 bridge gate(3B)通过** → Track C 精度在 Spark 成立。
+
 ## 7. 下一步
 
 Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 可见 —— 这是整个移植的命门,上一轮正要跑被打断,环境一确认即展开 P1 三路并行。
