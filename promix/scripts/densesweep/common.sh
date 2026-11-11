@@ -10,7 +10,7 @@
 REPO=${DENSESWEEP_REPO:-/home/luofan/plaquant-densesweep}
 WORK=${DENSESWEEP_WORK:-/home/luofan/densesweep}
 BENCH=$WORK/bench
-VENV_PY=/home/luofan/baselines/venv/bin/python
+VENV_PY=/usr/bin/python  # FIX: baselines/venv drifted to TF5.17; pin system py TF4.48.1
 mkdir -p $WORK/logs $WORK/ckpt $BENCH
 
 export HF_HOME=/home/luofan/hf_cache PYTHONUNBUFFERED=1
