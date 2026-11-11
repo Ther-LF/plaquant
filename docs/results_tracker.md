@@ -108,6 +108,12 @@
 - **SharQ + NVFP4 的 3B/8B zero-shot 全部跑完**(piqa/arc_e/arc_c/hellaswag/winogrande/lambada 6 任务)→ 填上精度矩阵缺格。sanity-gate 过(SharQ-3B piqa 0.762、NVFP4-3B piqa 0.749/hellaswag_norm 0.717,值合理无 NaN)。SharQ 存 json、NVFP4 存 run log,均 commit+harvest(`880b991`)。
 - **方法学**:Pro6000 碎片空卡(几分钟就被别团队抢)跑**短 0-shot eval**(4-13min/格)可在被抢前落地 —— 与 70B(需 40-60min 整窗、8 次全 OOM)相反。后续碎片窗口优先补短 eval,不碰长任务。
 
+
+## MMLU campaign 补齐完成(2026-11-11)
+- **4 个缺格落地(6-卡空窗)**:nv_3b(NVFP4-3B)**52.62** / nv_8b(NVFP4-8B)**62.22** / nvb_3b(bf16桥-3B)**56.47** / nvb_8b(bf16桥-8B)**65.45**。sanity-gate 过:nv_3b=52.62≈矩阵已报 52.63、nvb_3b=56.47≈bf16 桥 56.11,吻合复现。
+- → **MMLU campaign 13 stage(pm/bf16/arc/sharq/nv/nvb × 1b/3b/8b)全部完成**;核心精度矩阵(PPL + 0-shot + MMLU × ProMix/SharQ/ARCQuant/NVFP4/MicroMix/CoQuant/bf16 × 3B/8B)**基本闭合**。
+- 剩余边缘缺口(非核心):FP-Quant/QuTLASS(无 runner)、老四样 MMLU(用论文报告值,INT4 无通路不重跑)、ProMix 多比例 0-shot/MMLU、70B 下游、1B/13B MMLU。
+
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
