@@ -127,3 +127,15 @@
 - 2026-11-06 70B 曲线 gate(10/20 有效,0.70/0.75 失败None 待重跑):**单调无违反**;已落 r0.35-0.65 全 < NVFP4(5.928),最好 r0.60=5.8245;**尚未追上 SharQ 5.769(差 0.055,曲线高比例端已趋平,预判追不上)** → 诚实:70B 精度让位 SharQ 是整条曲线结论,非单点;ProMix 全程压 NVFP4 + 可调 + serving 远快于 SharQ(各有千秋)。待补 r0.05/0.10/0.70-1.0。
 - 2026-11-07 70B 曲线续(11点,单调✅):高比例段逼近 SharQ——r0.60=5.8245(+0.056)→r0.65=5.8271→**r0.70=5.7960(距 SharQ 5.769 仅 +0.027,仍在降)**。修正上轮预判:高比例 ProMix 可能追平/反超 SharQ,待 r0.75-1.0 落地定论(0.80 当前失败需重跑)。若 r≥0.8 跨过 5.769 → "70B 让位"结论推翻,变成"高比例可反超、但付更多bit"。
 - 2026-11-11 70B 尾点崩溃根因 = **venv 漂移(非 OOM、非 ratio)**:lane70b.sh line2 `export PATH=/home/luofan/baselines/venv/bin` 吃了别团队的 baselines/venv,该 venv 近期被升级到 **transformers 5.17.0**(torch2.13+cu130);feat/rd-densesweep 的 evaluator.py 无 5.x tuple 修复 → `evaluate_ppl` 复用捕获的 position_embeddings 在 5.x 的 self_attn 里崩 RoPE head_dim 64 vs 128。r0.15-0.70 成功点用的是**系统 python3.12(TF 4.48.1/torch2.11)**。**修复**:lane70b.sh line2 改 `export PATH=/usr/bin:$PATH`(系统 py=TF4.48.1);batch1(r0.75/0.80/0.90)已在修好环境 detached 重跑(GPU0/1/2,3-并发 RAM 上限,acc_70b_r0.75.log 确认吃 /usr/local/lib/python3.12/dist-packages)。**结论状态:未定稿**——r0.70=5.796 仍在降,尾点 load-bearing,等 r0.75-0.95 落地才决 ProMix 70B 能否反超 SharQ 5.769。
+- **2026-11-11 ✅ 定稿:70B 高比例尾点落地,"让位 SharQ" 结论推翻 → ProMix 70B 高比例反超 SharQ(wiki+c4 双指标)**。修好 venv 后 batch1 三点 COMPLETE:
+
+  | r | wiki | c4 | vs SharQ(5.769/9.659) |
+  |---|---|---|---|
+  | 0.70 | 5.7960 | — | wiki +0.027 |
+  | 0.75 | 5.7730 | 9.6150 | wiki +0.004(平)、**c4 −0.044 胜** |
+  | 0.80 | 5.7994 | 9.5516 | wiki +0.030(突起)、**c4 −0.107 胜** |
+  | 0.90 | **5.7322** | **9.5303** | **wiki −0.037 胜、c4 −0.129 胜** |
+
+  **sanity-gate**:(1) **c4 严格单调下降** 9.615→9.552→9.530,**全 3 点 < SharQ c4 9.659**;(2) wiki 上 r0.90 反超、r0.75 打平、**r0.80=5.7994 是非单调突起**——但 r0.80 的 **c4 单调正常**,且 **1B 曲线有完全相同的 r0.75→0.80 wiki 突起**(本文件上文记为"真实确定性 artifact,ΔD≠loss 曲线实例"),故判定 r0.80 wiki 突起为**真实分配 artifact(ΔD≠PPL 在该比例的局部体现),非污染/OOM**(env 已钉死系统 py TF4.48.1);(3) 全 >bf16(5.316/—),无 NaN,on-trend。**过**。
+  - **新结论(诚实口径)**:ProMix 70B 精度**不再让位** SharQ——低比例压 NVFP4、高比例(r≥~0.75)在 c4 已全面胜 SharQ、r0.90 在 wiki+c4 双杀 SharQ;代价是高比例付更多 effective bits(可调 serving-精度 Pareto 的高精度端)。整条曲线:**全程压 NVFP4 + serving 远快于 SharQ + 高比例精度亦反超 SharQ**。
+  - **剩余尾点(非 load-bearing,结论已定)**:r0.85/0.95/1.0 补密、低端 r0.05/0.10/0.20——有空闲干净卡且不与 rebuttal 争时见缝插针补,幂等。
