@@ -23,7 +23,7 @@ if [ ! -f $OUT ]; then
   fi
   env PYTHONPATH=$REPO ${WMSE:+PROMIX_WEIGHT_MSE_STEPS=$WMSE} \
       ${LOADDEV:+PROMIX_LOAD_DEVICE=$LOADDEV} \
-    python $DRIVER --config $CFG_ACC --point $TAG \
+    $VENV_PY $DRIVER --config $CFG_ACC --point $TAG \
       --substrate ring --ring_size 512 --alloc measured --budget_frac $R \
       --gptq_nsamples $GPTQ_N ${PD:+--percdamp $PD} --c4 \
       --stats_cache $WORK/stats_${SIZE}_ring512.pt \
