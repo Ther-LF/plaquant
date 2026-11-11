@@ -103,6 +103,11 @@
 - **8 次见缝插针重试全在 wiki-eval 阶段 OOM** —— 70B offload wiki eval 需 ~40-60min,此间任一别团队落到同卡(70B ~90GB + 别人 job > 96GB)即 OOM;Pro6000 多团队争抢下**给不出不被打断的独占窗口**。放弃在 Pro6000 跑 tail。
 - **70B 精度结论(不含 tail,诚实定稿)**:已完成 r0.15-0.65,最低 **r0.60=5.8245**,高比例端趋平,**让位 SharQ 5.769(差 ~0.055)** —— 整条曲线结论:ProMix 全程压 NVFP4(5.928)、可调、**serving 远快于 SharQ**,精度在 70B 让位但各有千秋。tail(0.70-1.0)要拿需 Spark(暂停中)或 Pro6000 某段真空出独占卡。
 
+
+## peer 0-shot 补格完成(2026-11-11,GPU2 碎片窗口)
+- **SharQ + NVFP4 的 3B/8B zero-shot 全部跑完**(piqa/arc_e/arc_c/hellaswag/winogrande/lambada 6 任务)→ 填上精度矩阵缺格。sanity-gate 过(SharQ-3B piqa 0.762、NVFP4-3B piqa 0.749/hellaswag_norm 0.717,值合理无 NaN)。SharQ 存 json、NVFP4 存 run log,均 commit+harvest(`880b991`)。
+- **方法学**:Pro6000 碎片空卡(几分钟就被别团队抢)跑**短 0-shot eval**(4-13min/格)可在被抢前落地 —— 与 70B(需 40-60min 整窗、8 次全 OOM)相反。后续碎片窗口优先补短 eval,不碰长任务。
+
 ## 验证记录(controller 每次收割时追加)
 - 2026-11-05 建表:上述 ✅ 行均已 `git show origin/feat/rd-alloc:<path>` 核过存在。
 - 2026-11-05 peers-70b 收割:`git cat-file -e docs/rd_peers70b.md` PASS;SharQ 70B 领先全 W4A4 场、ARCQuant 70B 翻转劣于 NVFP4。
