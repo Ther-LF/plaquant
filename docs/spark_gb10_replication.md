@@ -219,3 +219,18 @@ Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 �
 - **结论**:不止 bf16 bridge(7.8146≈7.8148),**完整发货管线**(GPTQ+ring512+measured-ΔD分配+两级weight scale+act-MSE d3u2)在第二硬件平台(GB10/sm_121/aarch64/CUDA13/torch2.14)端到端逐位可复现 → **精度故事硬件无关的实证闭合**(Track C.2 gate 过)。
 - GPU:与别团队 sglang(60GB)共享卡跑完(correctness 对干扰不敏感,只是慢;c4 138s/it)。artifacts:spark_3b_ship.json。
 - **Track C 剩余**:C.3 全 20 点 grid 是否在 Spark 跑 = 用户留后未定;1B/8B 发货锚点复现可同法补(需时)。
+
+## 🎯 Track D e2e smoke PASS(2026-11-12)
+- **Export**:`export.py --no-gptq --substrate ring --ring_size 512 --alloc config --resolve-paths --no-perproj-ppl` → `promix-llama-3.2-3b`(model.safetensors 3.3GB + promix_export_meta.json)。踩坑:(1) 缺 `--resolve-paths` → basis 路径按 config 的 mxfp8nvfp4 命名找不到(rd_acctune 靠 resolve_paths 映射到实际 U-wikitext-512-*.bin);(2) 默认 `--perproj-ppl` 的 eval materialize 大量激活 → 与 sglang 59GB 共卡 OOM,加 `--no-perproj-ppl`+`expandable_segments` 解决。
+- **e2e smoke**(`smoke_promix.py`,vLLM0.33 + fp16 + enforce_eager,gpu_mem_util 0.35 与 sglang 共卡):**SMOKE_RC 0,生成连贯英文**("The capital of France is"→"...Paris is a city of art, culture, fashion, and history")→ **功能 T0 gate 过**。ProMix 量化插件+融合 kernel 路径在 GB10/sm_121/aarch64/vLLM0.33 端到端跑通。
+- **Track D 剩余**:D.4 serving perf 五方同栈(需干净卡,sglang 占中→让路);D.5 B 成熟后 swap A→B 重测 perf。
+
+## Spark 复刻进度(2026-11-12 更新)
+| Track | correctness/功能 | perf(需干净卡)|
+|---|---|---|
+| 0 环境 | ✅ | — |
+| A 临时kernel | ✅ cosine 0.999999 | — |
+| C 精度 | ✅ 发货配方 8.2167/11.2623 复现(噪声内)| — |
+| D vLLM | ✅ e2e smoke 生成连贯文本 | ⏳ D.4 五方 serving(让路等干净卡)|
+| B KDA | ✅ Round0 oracle + 48-SM 洞察 | ⏳ Round1 cfg 网格+ncu(让路等干净卡)|
+**功能/正确性四 track 全绿**;剩余纯 perf(B.Round1 / D.4)需 sglang 让出干净卡,+ C.3 全网格待用户定。
