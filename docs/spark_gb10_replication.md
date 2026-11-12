@@ -212,3 +212,10 @@ Track A         Track B(KDA)       Track C              Track D
 ## 7. 下一步
 
 Track 0 先行(bring-up agent)。0.1 的第一步 = 装 ARM-torch 验证 GB10 可见 —— 这是整个移植的命门,上一轮正要跑被打断,环境一确认即展开 P1 三路并行。
+
+## 🎯 Track C 发货配方复现 COMPLETE(2026-11-12)
+- **Spark(GB10/SM121/aarch64/torch2.14)3B 发货配方**(ring512+gptq512+percdamp0.025+wmse7+act_mse_up2+measured 0.125,fake-quant):**wiki 8.2167 / c4 11.2623**,SHIP_RC 0。
+- **对 Pro6000(SM120)锚点 wiki 8.2180 / c4 11.2549**:Δwiki=−0.0013、Δc4=+0.0074 —— **两项都 < Pro6000 自身 3-seed 方差(±0.0020 / ±0.0101)** → 在测量噪声内逐位复现。
+- **结论**:不止 bf16 bridge(7.8146≈7.8148),**完整发货管线**(GPTQ+ring512+measured-ΔD分配+两级weight scale+act-MSE d3u2)在第二硬件平台(GB10/sm_121/aarch64/CUDA13/torch2.14)端到端逐位可复现 → **精度故事硬件无关的实证闭合**(Track C.2 gate 过)。
+- GPU:与别团队 sglang(60GB)共享卡跑完(correctness 对干扰不敏感,只是慢;c4 138s/it)。artifacts:spark_3b_ship.json。
+- **Track C 剩余**:C.3 全 20 点 grid 是否在 Spark 跑 = 用户留后未定;1B/8B 发货锚点复现可同法补(需时)。
