@@ -1,6 +1,6 @@
-# ⏸️ SPARK 暂停(2026-11-11,用户主动关机)
+# ▶️ SPARK 已重开续跑(2026-11-12)
 
-> Spark box(111.229.66.102)由用户主动关闭,**暂停**。非故障。重启后一连上即可续跑(环境/模型/artifacts/JIT .so/staged 脚本全在盘;两 agent context 保留可 SendMessage 唤醒)。下方为暂停时的进度快照。
+> **2026-11-12 更新:box 已重新上线**(uptime 21h,torch2.14/cu130/sm_121 cap(12,1) 验证通过,artifacts/脚本全在盘)。别团队 sglang 占 60GB/121GB(剩 ~51-60GB,correctness/eval 可共享卡,B-profile/D-perf 需让干净卡)。**Track C 发货配方复现已重启**(`fire_ship.sh`,pid 单 job detached,→ spark_3b_ship.json 对锚点 8.218)。重启纪律:重 job 串行一次一个(单 3B GPTQ+sglang 安全;**双 GPTQ+sglang 会撑爆统一内存**,见下)。下方为暂停时的进度快照。
 
 ## Spark 复刻进度快照(暂停点)
 | Track | 状态 | 产出/剩余 |
