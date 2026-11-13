@@ -70,12 +70,15 @@ def evaluate_ppl(model, testenc, dev, batch_size=8):
     for i in tqdm(range(len(layers)), desc="(Eval) Layers"):
         layer = layers[i].to(dev)
         for j in range(nbatches):
-            outs[j] = layer(
+            _layer_out = layer(
                 inps[j],
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
-            )[0]
+            )
+            # transformers>=5.x decoder layers return a bare Tensor, not a tuple;
+            # unconditional [0] would slice the batch dim -> 2D -> RoPE head-dim crash (Qwen3 tf5).
+            outs[j] = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
