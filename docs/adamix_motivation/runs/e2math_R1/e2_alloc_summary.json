@@ -1,0 +1,3931 @@
+{
+  "summary": {
+    "rep": "R1",
+    "total_groups": 1288,
+    "K": 196,
+    "rho_global": 0.1522,
+    "spearman_var_delta_global": 0.8819945159668068,
+    "spearman_fit_diag_delta": 0.9816420427014434,
+    "byte_accounting": {
+      "A_pos": {
+        "weight_bytes": 1475346432,
+        "scale_bytes": 147259392,
+        "fp8_groups": 196,
+        "total_groups": 1288
+      },
+      "B_local": {
+        "weight_bytes": 1475346432,
+        "scale_bytes": 147259392,
+        "fp8_groups": 196,
+        "total_groups": 1288
+      },
+      "C_global": {
+        "weight_bytes": 1512046592,
+        "scale_bytes": 144965632,
+        "fp8_groups": 196,
+        "total_groups": 1288
+      },
+      "D_var": {
+        "weight_bytes": 1436024832,
+        "scale_bytes": 149716992,
+        "fp8_groups": 196,
+        "total_groups": 1288
+      }
+    },
+    "overlaps": {
+      "A_pos&B_local": {
+        "shared_groups": 114,
+        "of_K": 196
+      },
+      "A_pos&C_global": {
+        "shared_groups": 91,
+        "of_K": 196
+      },
+      "A_pos&D_var": {
+        "shared_groups": 73,
+        "of_K": 196
+      },
+      "B_local&C_global": {
+        "shared_groups": 131,
+        "of_K": 196
+      },
+      "B_local&D_var": {
+        "shared_groups": 45,
+        "of_K": 196
+      },
+      "C_global&D_var": {
+        "shared_groups": 57,
+        "of_K": 196
+      }
+    },
+    "note": "A-pos=per-layer top-k_l by VARIANCE (PCA position/variance rule, direction=high-variance->FP8); B-local=per-layer top-k_l by measured DELTA; C-global=global top-K DELTA; D-var=global top-K VARIANCE. byte counts ignore no metadata beyond w+scale; equal group count != equal bytes (out_features differ). PPL of these masks is GPU/out-of-scope."
+  },
+  "spearman_per_layer": {
+    "model.layers.0.mlp.down_proj": 0.8411764705882353,
+    "model.layers.0.mlp.gate_proj": 0.9428571428571428,
+    "model.layers.0.mlp.up_proj": 0.9428571428571428,
+    "model.layers.0.self_attn.k_proj": 0.9428571428571428,
+    "model.layers.0.self_attn.q_proj": 0.9428571428571428,
+    "model.layers.0.self_attn.v_proj": 0.9428571428571428,
+    "model.layers.1.mlp.down_proj": 0.6176470588235294,
+    "model.layers.1.mlp.gate_proj": 0.2571428571428571,
+    "model.layers.1.mlp.up_proj": 0.2571428571428571,
+    "model.layers.1.self_attn.k_proj": 0.7142857142857143,
+    "model.layers.1.self_attn.q_proj": 0.7142857142857143,
+    "model.layers.1.self_attn.v_proj": 0.7142857142857143,
+    "model.layers.10.mlp.down_proj": 0.7588235294117647,
+    "model.layers.10.mlp.gate_proj": 0.6,
+    "model.layers.10.mlp.up_proj": 0.6,
+    "model.layers.10.self_attn.k_proj": 0.6571428571428571,
+    "model.layers.10.self_attn.q_proj": 0.6571428571428571,
+    "model.layers.10.self_attn.v_proj": 0.6571428571428571,
+    "model.layers.11.mlp.down_proj": 0.861764705882353,
+    "model.layers.11.mlp.gate_proj": 0.37142857142857144,
+    "model.layers.11.mlp.up_proj": 0.37142857142857144,
+    "model.layers.11.self_attn.k_proj": 0.6,
+    "model.layers.11.self_attn.q_proj": 0.6,
+    "model.layers.11.self_attn.v_proj": 0.6,
+    "model.layers.12.mlp.down_proj": 0.65,
+    "model.layers.12.mlp.gate_proj": 0.3142857142857143,
+    "model.layers.12.mlp.up_proj": 0.3142857142857143,
+    "model.layers.12.self_attn.k_proj": 0.37142857142857144,
+    "model.layers.12.self_attn.q_proj": 0.37142857142857144,
+    "model.layers.12.self_attn.v_proj": 0.37142857142857144,
+    "model.layers.13.mlp.down_proj": 0.8794117647058823,
+    "model.layers.13.mlp.gate_proj": 0.3142857142857143,
+    "model.layers.13.mlp.up_proj": 0.3142857142857143,
+    "model.layers.13.self_attn.k_proj": 0.4857142857142857,
+    "model.layers.13.self_attn.q_proj": 0.4857142857142857,
+    "model.layers.13.self_attn.v_proj": 0.4857142857142857,
+    "model.layers.14.mlp.down_proj": 0.9529411764705882,
+    "model.layers.14.mlp.gate_proj": 0.3142857142857143,
+    "model.layers.14.mlp.up_proj": 0.3142857142857143,
+    "model.layers.14.self_attn.k_proj": 0.3142857142857143,
+    "model.layers.14.self_attn.q_proj": 0.3142857142857143,
+    "model.layers.14.self_attn.v_proj": 0.3142857142857143,
+    "model.layers.15.mlp.down_proj": 0.8529411764705882,
+    "model.layers.15.mlp.gate_proj": 0.2,
+    "model.layers.15.mlp.up_proj": 0.2,
+    "model.layers.15.self_attn.k_proj": 0.3142857142857143,
+    "model.layers.15.self_attn.q_proj": 0.3142857142857143,
+    "model.layers.15.self_attn.v_proj": 0.3142857142857143,
+    "model.layers.16.mlp.down_proj": 0.9117647058823529,
+    "model.layers.16.mlp.gate_proj": 0.2,
+    "model.layers.16.mlp.up_proj": 0.2,
+    "model.layers.16.self_attn.k_proj": 0.14285714285714285,
+    "model.layers.16.self_attn.q_proj": 0.14285714285714285,
+    "model.layers.16.self_attn.v_proj": 0.14285714285714285,
+    "model.layers.17.mlp.down_proj": 0.9852941176470589,
+    "model.layers.17.mlp.gate_proj": 0.2571428571428571,
+    "model.layers.17.mlp.up_proj": 0.2571428571428571,
+    "model.layers.17.self_attn.k_proj": 0.42857142857142855,
+    "model.layers.17.self_attn.q_proj": 0.42857142857142855,
+    "model.layers.17.self_attn.v_proj": 0.42857142857142855,
+    "model.layers.18.mlp.down_proj": 0.8470588235294118,
+    "model.layers.18.mlp.gate_proj": 0.42857142857142855,
+    "model.layers.18.mlp.up_proj": 0.42857142857142855,
+    "model.layers.18.self_attn.k_proj": 0.42857142857142855,
+    "model.layers.18.self_attn.q_proj": 0.42857142857142855,
+    "model.layers.18.self_attn.v_proj": 0.42857142857142855,
+    "model.layers.19.mlp.down_proj": 0.9852941176470589,
+    "model.layers.19.mlp.gate_proj": 0.6,
+    "model.layers.19.mlp.up_proj": 0.6,
+    "model.layers.19.self_attn.k_proj": 0.42857142857142855,
+    "model.layers.19.self_attn.q_proj": 0.42857142857142855,
+    "model.layers.19.self_attn.v_proj": 0.42857142857142855,
+    "model.layers.2.mlp.down_proj": 0.7235294117647059,
+    "model.layers.2.mlp.gate_proj": -0.14285714285714285,
+    "model.layers.2.mlp.up_proj": -0.14285714285714285,
+    "model.layers.2.self_attn.k_proj": 0.42857142857142855,
+    "model.layers.2.self_attn.q_proj": 0.42857142857142855,
+    "model.layers.2.self_attn.v_proj": 0.42857142857142855,
+    "model.layers.20.mlp.down_proj": 0.8352941176470589,
+    "model.layers.20.mlp.gate_proj": 0.42857142857142855,
+    "model.layers.20.mlp.up_proj": 0.42857142857142855,
+    "model.layers.20.self_attn.k_proj": 0.6,
+    "model.layers.20.self_attn.q_proj": 0.6,
+    "model.layers.20.self_attn.v_proj": 0.6,
+    "model.layers.21.mlp.down_proj": 0.7823529411764706,
+    "model.layers.21.mlp.gate_proj": 0.42857142857142855,
+    "model.layers.21.mlp.up_proj": 0.42857142857142855,
+    "model.layers.21.self_attn.k_proj": 0.42857142857142855,
+    "model.layers.21.self_attn.q_proj": 0.42857142857142855,
+    "model.layers.21.self_attn.v_proj": 0.42857142857142855,
+    "model.layers.22.mlp.down_proj": 0.9117647058823529,
+    "model.layers.22.mlp.gate_proj": 0.5428571428571428,
+    "model.layers.22.mlp.up_proj": 0.5428571428571428,
+    "model.layers.22.self_attn.k_proj": 0.5428571428571428,
+    "model.layers.22.self_attn.q_proj": 0.5428571428571428,
+    "model.layers.22.self_attn.v_proj": 0.5428571428571428,
+    "model.layers.23.mlp.down_proj": 0.9117647058823529,
+    "model.layers.23.mlp.gate_proj": 0.7142857142857143,
+    "model.layers.23.mlp.up_proj": 0.7142857142857143,
+    "model.layers.23.self_attn.k_proj": 0.5428571428571428,
+    "model.layers.23.self_attn.q_proj": 0.5428571428571428,
+    "model.layers.23.self_attn.v_proj": 0.5428571428571428,
+    "model.layers.24.mlp.down_proj": 0.8764705882352941,
+    "model.layers.24.mlp.gate_proj": 0.6,
+    "model.layers.24.mlp.up_proj": 0.6,
+    "model.layers.24.self_attn.k_proj": 0.7142857142857143,
+    "model.layers.24.self_attn.q_proj": 0.7142857142857143,
+    "model.layers.24.self_attn.v_proj": 0.7142857142857143,
+    "model.layers.25.mlp.down_proj": 0.888235294117647,
+    "model.layers.25.mlp.gate_proj": 0.8285714285714286,
+    "model.layers.25.mlp.up_proj": 0.8285714285714286,
+    "model.layers.25.self_attn.k_proj": 0.9428571428571428,
+    "model.layers.25.self_attn.q_proj": 0.9428571428571428,
+    "model.layers.25.self_attn.v_proj": 0.9428571428571428,
+    "model.layers.26.mlp.down_proj": 0.9147058823529411,
+    "model.layers.26.mlp.gate_proj": 0.8285714285714286,
+    "model.layers.26.mlp.up_proj": 0.8285714285714286,
+    "model.layers.26.self_attn.k_proj": 0.9428571428571428,
+    "model.layers.26.self_attn.q_proj": 0.9428571428571428,
+    "model.layers.26.self_attn.v_proj": 0.9428571428571428,
+    "model.layers.27.mlp.down_proj": 0.6235294117647059,
+    "model.layers.27.mlp.gate_proj": 0.6571428571428571,
+    "model.layers.27.mlp.up_proj": 0.6571428571428571,
+    "model.layers.27.self_attn.k_proj": 0.9428571428571428,
+    "model.layers.27.self_attn.q_proj": 0.9428571428571428,
+    "model.layers.27.self_attn.v_proj": 0.9428571428571428,
+    "model.layers.3.mlp.down_proj": 0.9735294117647059,
+    "model.layers.3.mlp.gate_proj": 0.2571428571428571,
+    "model.layers.3.mlp.up_proj": 0.2571428571428571,
+    "model.layers.3.self_attn.k_proj": 0.5428571428571428,
+    "model.layers.3.self_attn.q_proj": 0.5428571428571428,
+    "model.layers.3.self_attn.v_proj": 0.5428571428571428,
+    "model.layers.4.mlp.down_proj": 0.9823529411764705,
+    "model.layers.4.mlp.gate_proj": 0.5428571428571428,
+    "model.layers.4.mlp.up_proj": 0.5428571428571428,
+    "model.layers.4.self_attn.k_proj": 0.4857142857142857,
+    "model.layers.4.self_attn.q_proj": 0.4857142857142857,
+    "model.layers.4.self_attn.v_proj": 0.4857142857142857,
+    "model.layers.5.mlp.down_proj": 0.8823529411764706,
+    "model.layers.5.mlp.gate_proj": 0.7714285714285715,
+    "model.layers.5.mlp.up_proj": 0.7714285714285715,
+    "model.layers.5.self_attn.k_proj": 0.7142857142857143,
+    "model.layers.5.self_attn.q_proj": 0.7142857142857143,
+    "model.layers.5.self_attn.v_proj": 0.7142857142857143,
+    "model.layers.6.mlp.down_proj": 0.6647058823529411,
+    "model.layers.6.mlp.gate_proj": 0.7142857142857143,
+    "model.layers.6.mlp.up_proj": 0.7142857142857143,
+    "model.layers.6.self_attn.k_proj": 0.6,
+    "model.layers.6.self_attn.q_proj": 0.6,
+    "model.layers.6.self_attn.v_proj": 0.6,
+    "model.layers.7.mlp.down_proj": 0.8529411764705882,
+    "model.layers.7.mlp.gate_proj": 0.5428571428571428,
+    "model.layers.7.mlp.up_proj": 0.5428571428571428,
+    "model.layers.7.self_attn.k_proj": 0.4857142857142857,
+    "model.layers.7.self_attn.q_proj": 0.4857142857142857,
+    "model.layers.7.self_attn.v_proj": 0.4857142857142857,
+    "model.layers.8.mlp.down_proj": 0.9176470588235294,
+    "model.layers.8.mlp.gate_proj": 0.4857142857142857,
+    "model.layers.8.mlp.up_proj": 0.4857142857142857,
+    "model.layers.8.self_attn.k_proj": 0.5428571428571428,
+    "model.layers.8.self_attn.q_proj": 0.5428571428571428,
+    "model.layers.8.self_attn.v_proj": 0.5428571428571428,
+    "model.layers.9.mlp.down_proj": 0.8764705882352941,
+    "model.layers.9.mlp.gate_proj": 0.6571428571428571,
+    "model.layers.9.mlp.up_proj": 0.6571428571428571,
+    "model.layers.9.self_attn.k_proj": 0.5428571428571428,
+    "model.layers.9.self_attn.q_proj": 0.5428571428571428,
+    "model.layers.9.self_attn.v_proj": 0.5428571428571428
+  },
+  "per_layer": {
+    "model.layers.0.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.0.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.0.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.0.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 6,
+        "ng": 6,
+        "ratio": 1.0
+      }
+    },
+    "model.layers.0.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 6,
+        "ng": 6,
+        "ratio": 1.0
+      }
+    },
+    "model.layers.0.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 6,
+        "ng": 6,
+        "ratio": 1.0
+      }
+    },
+    "model.layers.1.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.1.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.1.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.1.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.1.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.1.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.10.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.10.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.10.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.10.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.10.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.10.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.11.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.11.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.11.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.11.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.11.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.11.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.12.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.12.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.12.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.12.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.12.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.12.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.13.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.13.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.13.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.13.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.13.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.13.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.14.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.14.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.14.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.14.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.14.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.14.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.15.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.15.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.15.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.15.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.15.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.15.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.16.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.16.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.16.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.16.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.16.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.16.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.17.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.18.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.19.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.2.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.2.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.2.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.2.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.2.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.2.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.20.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.20.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.20.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.20.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.20.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.20.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.21.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.21.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.21.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.21.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.21.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.21.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.22.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.23.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.23.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.23.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.23.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.23.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.23.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.24.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.24.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.24.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.24.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.24.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.24.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.25.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.26.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.27.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.3.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.3.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.3.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.3.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.3.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.3.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.4.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.4.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.4.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 6,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.4.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.4.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.4.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.5.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.5.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.5.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.5.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.5.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.5.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.6.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.6.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.6.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.6.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.6.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.6.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.7.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.7.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.7.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.7.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.7.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.7.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.8.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.8.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.8.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      }
+    },
+    "model.layers.8.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.8.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.8.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 3,
+        "ng": 6,
+        "ratio": 0.5
+      }
+    },
+    "model.layers.9.mlp.down_proj": {
+      "A_pos": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "B_local": {
+        "fp8": 2,
+        "ng": 16,
+        "ratio": 0.125
+      },
+      "C_global": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      },
+      "D_var": {
+        "fp8": 0,
+        "ng": 16,
+        "ratio": 0.0
+      }
+    },
+    "model.layers.9.mlp.gate_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.9.mlp.up_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      },
+      "D_var": {
+        "fp8": 2,
+        "ng": 6,
+        "ratio": 0.3333
+      }
+    },
+    "model.layers.9.self_attn.k_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.9.self_attn.q_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    },
+    "model.layers.9.self_attn.v_proj": {
+      "A_pos": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "B_local": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "C_global": {
+        "fp8": 1,
+        "ng": 6,
+        "ratio": 0.1667
+      },
+      "D_var": {
+        "fp8": 4,
+        "ng": 6,
+        "ratio": 0.6667
+      }
+    }
+  }
+}

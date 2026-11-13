@@ -1,0 +1,44 @@
+{
+  "run_id": "e1a_Llama-3.2-3B_G512",
+  "kind": "E1a",
+  "model": "/home/luofan/models/Llama-3.2-3B",
+  "model_short": "Llama-3.2-3B",
+  "basis_file": "/home/luofan/plaquant-adamix/rotation/U-wikitext-512-Llama-3.2-3B.bin",
+  "basis_sha16": "3a402945c1d33f8b",
+  "G": 512,
+  "max_tokens": 2048,
+  "fit_samples": 1,
+  "diag_samples": 1,
+  "seqlen": 2048,
+  "calib": "wikitext-2-train",
+  "seed": 0,
+  "example_layers": [
+    1,
+    14,
+    26
+  ],
+  "example_layers_rule": "shallow=1, mid=n_layers//2, deep=n_layers-2",
+  "reps": {
+    "R0": "I",
+    "R1": "blockdiag(Sylvester-Hadamard-512)",
+    "R2": "P (shared attn_mlp PCA for qkv/gate/up; local full PCA for down)",
+    "R3": "P . blockdiag(R_g)"
+  },
+  "precision": {
+    "U4": "all NVFP4",
+    "LDelta": "per-layer top-k_l=round(ng/8) MXFP8 by fit Delta"
+  },
+  "quant": "RTN deployed NVFP4(bs16)/MXFP8(bs32) on X and W; single-level weight; NO GPTQ",
+  "act_mse_search": true,
+  "act_mse_fast": true,
+  "weight_two_level": true,
+  "weight_mse_search": true,
+  "down_included": true,
+  "down_status": "ok",
+  "down_caveat": "down R2/R3 use LOCAL full PCA, NOT the shipped 256-block PCA + online Hadamard",
+  "eligible": "q/k/v/gate/up/down (o_proj excluded per 3.1)",
+  "device": "cpu",
+  "torch": "2.11.0+cu130",
+  "tf": "4.48.1",
+  "wall_s": 1629.7
+}

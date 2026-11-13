@@ -1,0 +1,70 @@
+# AdaMix Motivation — fixed protocol (this CPU-only run)
+# Task book: outputs/adamix-motivation-experiments.md (§3 shared protocol, §4 E1a).
+# Scope of THIS run: inventory + E1a (3B) + E2 allocation-math (no PPL). GPU
+# experiments (E1b full-model PPL, E2-PTQ, E4 kernel) are OUT OF SCOPE (all 8
+# Pro6000 cards occupied by another team).
+
+model:
+  name: Llama-3.2-3B
+  path: /home/luofan/models/Llama-3.2-3B
+  hidden_size: 3072
+  intermediate_size: 8192
+  num_hidden_layers: 28
+  torch_dtype_checkpoint: bfloat16
+  loaded_as: float32            # CPU run; fp16 matmul is slow/unsupported on CPU
+  eligible_linears: [q_proj, k_proj, v_proj, gate_proj, up_proj, down_proj]
+  o_proj: excluded              # per §3.1 (per-head fixed-ratio path, not in global selection)
+
+formats:                         # real deployed formats (NOT ideal INT4/INT8)
+  nvfp4:
+    block_size: 16
+    elem: e2m1 ; max: 6.0
+    block_scale: e4m3 (ceil to grid), per-block MSE scale search ON (shipped)
+  mxfp8:
+    block_size: 32
+    elem: e4m3 ; max: 448.0
+    block_scale: e8m0 (round-up to power of 2)
+  applied_to: [activation, weight]   # same precision per channel-group for X and W
+  weight_quant: single-level RTN fake-quant (deployed two-level weight refinement OFF
+                for a clean control); NO GPTQ (§4 — avoid weight compensation masking
+                the representation effect)
+
+group_width_G: 512               # main allocation/intra-group-rotation width (§3.1)
+
+representations:                  # E1a 4x2 matrix (§4), orthogonal input-space T
+  R0: I
+  R1: blockdiag(R_g)  (Sylvester-Hadamard, width 512, per ring_rotation.build_uniform_ring_R1)
+  R2: P               (PCA change-of-basis)
+  R3: P . blockdiag(R_g)
+  P_definition:
+    qkv_gate_up: shared attn_mlp PCA basis (3072x3072) from the SHIPPED U file -> faithful
+    down_proj:   LOCAL full PCA (per-layer variance-sorted eigenbasis of fit X covariance)
+                 CAVEAT: shipped down path = 256-block PCA + online Hadamard, NOT a single
+                 global PCA; down R2/R3 are an ISOLATED change-of-basis probe only.
+
+precision_settings:               # reused inside every representation
+  U4:     all eligible groups NVFP4
+  LDelta: per-layer k_l = round(n_groups/8) groups upgraded to MXFP8, chosen by
+          measured fit Delta = d_fp4 - d_fp8 (top-k_l)
+  rounding_note: 3072-dim -> 6 groups -> k_l=round(0.75)=1 -> rho_actual~0.167 (reported);
+                 8192-dim (down) -> 16 groups -> k_l=2 -> rho=0.125 exactly.
+
+delta_metric:                     # §5
+  d_lg_f: "||Z_lg - Zhat_lg(f)||_F^2 / (n_l * G)"   # Zhat = dequantized
+  delta_lg: "d(FP4) - d(FP8)"                        # signed; negatives kept
+
+calibration:
+  dataset: wikitext-2-raw-v1 (train) ; seqlen: 2048 ; seed: 0
+  fit_diag_split: disjoint train windows; masks + Delta selected on FIT,
+                  re-measured (NOT re-selected) on DIAGNOSTIC (§3.2)
+  tokens_per_space: 2048 (<= 4096 cap per §3.2)
+
+e2_allocation_policies:           # §5, representation frozen at R3, math only (no PPL)
+  A_pos:   per-layer uniform k_l, top-k_l by per-group VARIANCE (PCA position/variance rule)
+  B_local: per-layer uniform k_l, top-k_l by measured DELTA
+  C_global: global budget K=sum(k_l), top-K by measured DELTA (cross-layer)
+  D_var:   global budget K, top-K by per-group VARIANCE
+  exchange_identity: moving one FP8 group i->j changes summed group MSE by Delta_i - Delta_j
+
+device: cpu ; CUDA_VISIBLE_DEVICES: "" (never grab a GPU)
+env: torch 2.11.0+cu130, transformers 4.48.1 (system python3)
