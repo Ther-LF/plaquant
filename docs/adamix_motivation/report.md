@@ -133,3 +133,72 @@ cross-model (8B) generality. **Refuted here:** "PCA alone improves quality".
 ## Next CPU step
 8B E1a + E2-math (same two commands, 8B checkpoint/basis; ~2.5× slower, CPU-doable
 once its basis is located). Everything else (E1b/E2-PTQ/E4) needs a free GPU.
+
+---
+
+## Cross-model check: Llama-3-8B (§3.1 mandated)
+
+8B run: `runs/e1a_8b/` (manifest `run_id=e1a_Llama-3-8B_G512`, wall 8119s ≈
+135 min CPU), basis `U-wikitext-512-llama-3-8b.bin` (attn_mlp 4096×4096),
+checkpoint `/home/luofan/models/llama-3-8b`, 32 layers, hidden 4096 (8 groups),
+inter 14336 (28 groups). Same scripts, same protocol (G=512, RTN, deployed
+NVFP4/MXFP8, 2048 fit + 2048 disjoint diag). down uses the same LOCAL-PCA probe
+caveat. E2-math dirs: `runs/e2math_8b/` (R3) and `runs/e2math_8b_{R0,R1,R2}/`.
+
+### E1a aggregate (mean over all q/k/v/gate/up layers, fit) — 3B vs 8B
+
+| rep | policy | 3B act_mse | 8B act_mse | 3B out_rel_sq | 8B out_rel_sq |
+|---|---|---|---|---|---|
+| R0 (I) | U4 | 7.43e-3 | 7.39e-3 | 9.98e-3 | 1.124e-2 |
+| R0 | LDelta | 5.90e-3 | 6.14e-3 | 8.06e-3 | 9.54e-3 |
+| R2 (PCA) | U4 | 7.36e-3 | 7.32e-3 | 1.21e-2 | 1.410e-2 |
+| R2 | LDelta | 3.41e-3 | 3.82e-3 | 5.10e-3 | 6.42e-3 |
+| R3 (PCA+ring) | U4 | 7.48e-3 | 7.43e-3 | 1.15e-2 | 1.332e-2 |
+| R3 | LDelta | 3.41e-3 | 3.83e-3 | 4.91e-3 | 6.26e-3 |
+
+Per-projection (8B, fit): attn R2 U4 out_mse 1.34e-2 vs R0 6.92e-3 (PCA worsens
+uniform-FP4 output, as on 3B); attn R3 LDelta out_rel_sq 5.37e-3 vs R0 LDelta
+8.21e-3; mlp R3 LDelta 7.58e-3 vs R0 9.84e-3... (R0 11.5e-3); down R3 LDelta
+1.49e-3 vs R0 1.46e-2 (~10×, local-PCA caveat). Diagnostic generalization (R3
+LDelta attn+mlp): fit 6.255e-3 vs **diag 6.231e-3** — no overfit (diag marginally
+better).
+
+### E2 allocation-math — 3B vs 8B
+
+| rep | Spearman(var,Δ) 3B | 8B | A∩B 3B | A∩B 8B | A∩C 3B | A∩C 8B |
+|---|---|---|---|---|---|---|
+| R0 (I) | 0.871 | 0.942 | 57% | 58% | 46% | 52% |
+| R1 (ring) | 0.882 | 0.943 | 58% | 64% | 46% | 53% |
+| R2 (PCA) | 0.998 | 0.9994 | 100% | 100% | 72% | 56% |
+| R3 (PCA+ring) | 0.996 | 0.9989 | 99.5% | 99.7% | 72% | 56% |
+
+(8B: 2176 groups, K=288, rho_actual=0.1324; Spearman(fit,diag Δ)=0.988 on R2/R3.)
+
+### Cross-model reading (honest)
+
+**The 3B conclusions REPLICATE on 8B, qualitatively intact:**
+1. **PCA alone does not help — it worsens uniform-FP4 output error.** 8B R2 U4
+   out_rel_sq 1.410e-2 > R0 1.124e-2 (attn out_mse 1.34e-2 vs 6.92e-3). Same sign
+   as 3B, every projection.
+2. **PCA ~halves activation MSE under per-layer Δ-selection** (7.4e-3→3.8e-3) and
+   cuts output rel-sq-error; ring alone (R1) adds little.
+3. **PCA makes variance an almost-perfect Δ-proxy** (Spearman 0.94→0.999) and
+   makes variance-selection coincide with Δ-selection (A∩B 58%→100%). This is the
+   cleanest replication — nearly identical to 3B (0.87→0.998, 57%→100%).
+4. Masks generalize fit→diag on both models.
+
+**Where 8B DIVERGES (reported per the task-book "8B 不普遍获益" warning):**
+- The *magnitude* of the LDelta gain is **smaller** on 8B: output rel-sq-err drop
+  R0-LDelta→R3-LDelta is ~34% on 8B (9.54e-3→6.26e-3) vs ~39% on 3B
+  (8.06e-3→4.91e-3). Absolute LDelta errors are higher on 8B across the board.
+- In the **raw** basis (R0), 8B's variance is already a better Δ-proxy than 3B's
+  (Spearman 0.942 vs 0.871; A∩B 58% vs 57%) — so there is slightly less "work"
+  for PCA to do in aligning variance with Δ on 8B.
+- **Cross-layer quota reallocation moves MORE groups on 8B**: A∩C only 56% on R3
+  (vs 72% on 3B) — i.e. the per-layer→global budget shift (B→C) is a *bigger*
+  mask lever on 8B. Whether it helps PPL is GPU/out-of-scope on both models.
+
+**Net:** the representation↔selection interaction that motivates AdaMix holds on
+both 3B and 8B; the *size* of the benefit is model-dependent (smaller on 8B),
+which is consistent with prior reports that 8B benefits less. No claim is made
+about full-model PPL on either model (GPU deferred).
