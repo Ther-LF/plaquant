@@ -107,10 +107,11 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 
 | ID | 实验 | GPU 车道 | 预估 |
 |---|---|---|---|
-| E1 | ✅ `rd_mmlu_report.md`(3B ProMix MMLU 第一 54.12;8B 平 SharQ;0-shot 1B/3B 噪声内、8B +0.33)| 4 | 完成 |
-| E2 | 32B/70B ✅ `rd_scale_report.md`(70B 全矩阵;32B arch no-go;领先 70B 翻转+0.045 诚实;单卡量化70B 完胜双卡BF16 3.4-4.2×/GPU;ring512 分配增益 70B 回归) | 0-2 | 完成 |
-| E4 | ✅ `rd_operator_pareto.md` | 6 | 完成 |
+| **E0(新,块1重定义 2026-11-20)** | **精度主实验 = ProMix 比例曲线**(7模型×4指标×{KV16,KV4}×11点);旧 E1/E2 的单点精度被此取代为曲线campaign;对手需跑齐全模型(表B) | 见下 | 🔄 **开跑中**(表A/B/C 跟踪)|
+| E1(旧) | ⚠️ 已并入 E0:旧版是发货点 r=1/8 单点(`rd_mmlu_report.md` 3B MMLU 54.12 等)——作为曲线 r=1/8 的历史锚点保留,但精度主实验以 E0 曲线为准 | 4 | 并入 E0 |
+| E2(旧) | ⚠️ 已并入 E0:70B/32B 的单点(`rd_scale_report.md`)并入 E0 的模型维度(70B 曲线 + Qwen3-32B);serving 的 70B 口径仍在块2 | 0-2 | 并入 E0 |
+| E4 | ✅ `rd_operator_pareto.md`(算子 Pareto,块3)| 6 | 完成 |
 | E5 | 组件累计消融(精度 build-up + 性能 build-up) ✅ `docs/rd_buildup_ablation.md` | 5(精度)/7(性能) | 完成 |
 | E6 | 3-seed 误差棒(headline 点) ✅ 同上 | 搭 E5 车道 | 完成 |
-| E3 | 8B r-sweep 补密 | 低优,E2 后 | — |
-| (KV4) | ✅ `rd_kv4_fix.md` | 3 | 完成 |
+| E3 | 8B serving r-sweep 补密(块2,非精度)5/6,第6点撞 qkv mixed-K-split bug 待修 | 低优 | 🔄 5/6 |
+| (KV4) | 机制已通 `rd_kv4_fix.md`;KV4 精度曲线并入 E0(每格第二条曲线)| 3 | 并入 E0 |
