@@ -3,18 +3,73 @@
 > 2026-11-03 定稿(与用户确认:加 32B/70B 规模点;领域任务暂不补;"bias 实验"= 系统组件逐项收益分解)。
 > 状态标记:✅ 已有(出处见 `paper_evidence_index.md`)/ 🔄 进行中 / ❌ 待跑(本 spec 启动)。
 
-## 块 1:精度主实验
+## 块 1:精度主实验 —— ProMix 比例曲线(2026-11-20 重定义,方案 A)
 
-| 实验 | 状态 |
-|---|---|
-| W4A4 全同行同协议 PPL(wiki+C4,1B/3B/8B/13B) | ✅ |
-| 0-shot 6 任务(旧锚点) | ✅;**新配方(ring512)0-shot** ❌ E1 |
-| **MMLU 5-shot**(ProMix 新配方 + ARCQuant/SharQ/NVFP4/BF16) | ❌ E1 |
-| 领域任务(HumanEval/GSM8K) | 暂不做(用户定) |
-| KV4 公平行 | 🔄(feat/rd-kv4)|
-| **规模扩展:32B + 70B**(用户定,"B 太小") | ❌ E2 |
+> **重定义**:旧版是"发货点 r=1/8 的 ProMix vs 对手"单点对比表(误把默认配置当成实验)。
+> 现在:精度主实验 = **ProMix 沿高精度比例 r 的精度曲线**;对手各用自己固定配置,是曲线旁的
+> **参照散点/横线**。**不再有单点对比表**。
 
-**E2 规模扩展细则**:候选 = Qwen3-32B(已缓存!先验 head_dim 兼容性,Qwen3-8B plugin 已通)+ Llama-3.3-70B 或 Llama-2-70B(Llama 架构稳,需下载 ~140GB,先报可行性)。精度管线优先(GPTQ 逐层可在 96GB 单卡+offload 做);测 {bf16 bridge, uniform-1/8, measured-1/8, NVFP4} wiki+C4。serving:量化后 70B(~40GB)单卡可服;**BF16 70B 锚点需 TP=2 而我们插件未做 TP** → 70B serving 先给"量化单卡 vs BF16-TP2"的诚实口径或只报精度,TP 支持另立项。
+**实验本体**:ProMix 高精度比例 r 的精度曲线。每个「模型 × 指标」画 **两条**(两种 KV 配置):
+- **W4A4 / KV16** —— 发货默认,KV 不量化
+- **W4A4KV4** —— KV 4-bit,用于和 INT4-KV4 对手(ResQ/QuaRot/Atom/SpinQuant)**同-KV 公平比**
+  (KV 位宽:option(a) 每头高段凑整到 32 ≈ 5.44 b/v@head128;见 `rd_kv4_fix.md`)
+
+**自变量 r**:均匀 11 点 `0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0`
+(r=0 = 纯 NVFP4 左锚点;r=1 = 全高精度 MXFP8)。
+**坏点规则(铁律)**:某 r 若不能块对齐/整除、或量化/eval 报错 → **跳过该点 + 记录原因(跟踪表 C) +
+汇报**,绝不让一个坏点卡住整条曲线(先例:融合 qkv 在某些 r 产生 mixed K-split 断言失败)。
+
+**指标(4,= W4A4 对手并集,已核够)**:WikiText-2 PPL · C4 PPL ·
+0-shot 6 任务(piqa/arc_e/arc_c/hellaswag/winogrande/lambada)均值 · MMLU 5-shot。
+领域任务(GSM8K/HumanEval):W4A4 量化论文基本不用 → 不做。
+
+**模型(7)**:Llama-3.2-1B · Llama-3.2-3B · Llama-3-8B · Llama-3-70B ·
+Qwen3-8B · Qwen3-14B · Qwen3-32B(含 Llama↔Qwen 跨架构泛化)。
+
+**对手(曲线旁参照,各自固定配置,需跑齐全 7 模型)**:
+- **W4A4 同类**:SharQ · ARCQuant · NVFP4 · MicroMix · CoQuant
+- **INT4-KV4**(对 ProMix-KV4 曲线比;Blackwell 无 INT4 通路 → s4 降 INT8,带 caveat):
+  QuaRot · SpinQuant · Atom · ResQ(ResQ 取 W4A4KV4 版本以同-KV)
+- **参照组(别类)**:bf16 上界 · GPTQ/AWQ W4A16 · FP8 W8A8
+
+**协议**:fake-quant 算法级;ring512 + measured-ΔD 分配;校准 WikiText-2 512 samples/seqlen2048/
+seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu.py --budget_frac r
+--c4 --mmlu --zeroshot`(一次量化出全 4 指标)。
+
+> **规模 caveat(原 E2)**:70B 走 GPTQ 逐层 offload(96GB 单卡);70B 下游(0-shot/MMLU)需先跑通
+> offload-lm-eval 通路(目前只有 NVFP4 代理)。serving 的 70B 口径见块 2。
+
+### 跟踪表 A — ProMix 曲线进度(做一点填一点;格式 `KV16 n/11 · KV4 n/11`;⬜ = 未启动)
+| 模型 | wiki | C4 | 0-shot | MMLU |
+|---|---|---|---|---|
+| Llama-3.2-1B  | ⬜ | ⬜ | ⬜ | ⬜ |
+| Llama-3.2-3B  | ⬜ | ⬜ | ⬜ | ⬜ |
+| Llama-3-8B    | ⬜ | ⬜ | ⬜ | ⬜ |
+| Llama-3-70B   | ⬜ | ⬜ | ⬜ | ⬜ |
+| Qwen3-8B      | ⬜ | ⬜ | ⬜ | ⬜ |
+| Qwen3-14B     | ⬜ | ⬜ | ⬜ | ⬜ |
+| Qwen3-32B     | ⬜ | ⬜ | ⬜ | ⬜ |
+
+### 跟踪表 B — 对手覆盖(每格 = 该对手×模型 的 4 指标;✅全测 / 部分列指标 / ⬜待跑 / — 不适用)
+| 对手 | 1B | 3B | 8B | 70B | Qwen3-8B | Qwen3-14B | Qwen3-32B |
+|---|---|---|---|---|---|---|---|
+| SharQ     | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| ARCQuant  | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| NVFP4     | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| MicroMix  | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| CoQuant   | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| QuaRot    | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| SpinQuant | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Atom      | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| ResQ      | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| bf16      | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| GPTQ/AWQ W4A16 | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| FP8 W8A8  | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+
+### 跟踪表 C — 跳过记录(坏点 + 原因)
+| 模型 | KV | r | 指标 | 原因 |
+|---|---|---|---|---|
+| (空) | | | | |
 
 ## 块 2:端到端 serving
 
