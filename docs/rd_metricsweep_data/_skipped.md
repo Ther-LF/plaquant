@@ -20,3 +20,4 @@
 | llama3-8b | kv16 | 0.9 | all | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_llama3-8b_kv16_r0.9.log |
 | llama3.2-3b | kv16 | 0.9 | all | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_llama3.2-3b_kv16_r0.9.log |
 | llama3-8b | kv16 | 1.0 | all | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_llama3-8b_kv16_r1.0.log |
+| llama3.2-3b | kv16 | 1.0 | all | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_llama3.2-3b_kv16_r1.0.log |
