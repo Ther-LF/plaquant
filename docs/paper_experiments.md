@@ -40,15 +40,16 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 > offload-lm-eval 通路(目前只有 NVFP4 代理)。serving 的 70B 口径见块 2。
 
 ### 跟踪表 A — ProMix 曲线进度(做一点填一点;格式 `KV16 n/11 · KV4 n/11`;⬜ = 未启动)
+> 执行策略(2026-11-20):PPL 趟(wiki+C4)先快跑全 11 点;MMLU/0-shot 为独立慢趟(S1/S2/S3 待定)。故 wiki/C4 先行,0-shot/MMLU 暂 0。
 | 模型 | wiki | C4 | 0-shot | MMLU |
 |---|---|---|---|---|
-| Llama-3.2-1B  | ⬜ | ⬜ | ⬜ | ⬜ |
-| Llama-3.2-3B  | ⬜ | ⬜ | ⬜ | ⬜ |
-| Llama-3-8B    | ⬜ | ⬜ | ⬜ | ⬜ |
+| Llama-3.2-1B  | KV16 1/11🔄 | KV16 1/11🔄 | ⬜ | ⬜ |
+| Llama-3.2-3B  | KV16 1/11🔄 | KV16 1/11🔄 | ⬜ | ⬜ |
+| Llama-3-8B    | 🔄 r0.0 | 🔄 | ⬜ | ⬜ |
 | Llama-3-70B   | ⬜ | ⬜ | ⬜ | ⬜ |
-| Qwen3-8B      | ⬜ | ⬜ | ⬜ | ⬜ |
-| Qwen3-14B     | ⬜ | ⬜ | ⬜ | ⬜ |
-| Qwen3-32B     | ⬜ | ⬜ | ⬜ | ⬜ |
+| Qwen3-8B      | KV16 1/11🔄 | 🔄 | ⬜ | ⬜ |
+| Qwen3-14B     | 🔄 r0.0 | 🔄 | ⬜ | ⬜ |
+| Qwen3-32B     | ⬜(模型未缓存) | ⬜ | ⬜ | ⬜ |
 
 ### 跟踪表 B — 对手覆盖(每格 = 该对手×模型 的 4 指标;✅全测 / 部分列指标 / ⬜待跑 / — 不适用)
 | 对手 | 1B | 3B | 8B | 70B | Qwen3-8B | Qwen3-14B | Qwen3-32B |
