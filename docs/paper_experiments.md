@@ -112,12 +112,41 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 | Qwen3-14B    | ⬜ | ⬜ | 同上 |
 | Qwen3-32B    | ⬜ | ⬜ | 同上 |
 
-## 块 3:算子级
+## 块 3:算子级 —— 延迟-vs-r 曲线(2026-11-20 重定义)
 
-| 实验 | 状态 |
+> 终版融合 kernel 的 GEMM 延迟随 r 的曲线;对手 kernel 为散点。算子级 = 比 serving **更宽**的同台
+> (无 vLLM 集成但有可跑 kernel 的对手在此比,如 ARCQuant/MicroMix);连 kernel 都跑不了的 → BOPs。
+
+**实验本体**:ProMix 终版 kernel(全 R1–R5 杠杆默认开,`MixedQuantLinear._gemm` 发货 dispatch)的
+**GEMM 延迟 vs r 曲线**(x=延迟,y=有效bit);对手算子为点,看曲线压住/夹住谁。
+
+**比例网格**:**均匀 11 点** `0.0, 0.1, 0.2, …, 1.0`(**对齐块1**;K_high 按 RING=64 snap;r=1 = all-but-one-ring,K_low=64)。
+
+**shape(全 7 模型 × 3 投影 × M∈{2048,8192})**——每模型 qkvo / gate_up / down 的 N×K:
+- 3B:qkvo 3072×3072 · gate_up 8192×3072 · down 3072×8192
+- 8B:qkvo 4096×4096 · gate_up 14336×4096 · down 4096×14336
+- **1B / 70B / Qwen3-8B / Qwen3-14B / Qwen3-32B:维度建表时从各自 config 读入填**(不臆造)
+
+**对手(算子级同台,各自 shipping kernel,GEMM-only)**:torch FP4 · ARCQuant(S=0/512) ·
+MicroMix(FP4/5.5b) · SharQ · vLLM-NVFP4 · torch FP8 · bf16;连 kernel 都跑不了的 FGMP/Oltron → BOPs。
+
+**指标**:GEMM 延迟(ms,cudaEvent median-of-50 + CUDA-graph replay median=serving 口径) ·
+vs FP16 加速比 · 每点 cosine 门(vs fp32,≥0.986)。
+
+**状态**:🔄 **需按新网格重测**——现有 `rd_operator_pareto.md` 是**非均匀 11 点 + 仅 3B/8B**,作废;
+重跑 = 均匀 11 点 × 全 7 模型 shape × 2 个 M(kernel timing 便宜)。旧结论参考:r=1/8 在 M=8192 比
+r=0 快 4–23%(混精度算子级近乎免费),r>1/4 后线性涨(斜率 1.25–1.85×),ARCQuant 平手其余被压。
+
+### 跟踪表 E — 算子曲线进度(每格 = 该模型 3 投影 × 2 个 M 的均匀 11 点曲线;⬜ 未测)
+| 模型 | 算子延迟-vs-r 曲线 |
 |---|---|
-| M=8192 全对手算子同台 + 融合价值 | ✅ |
-| **算子 Pareto 曲线(终版 kernel 的 延迟-vs-r 全曲线 0→1,对手算子为点)** | ❌ E4(旧 ratio-curve 是优化前 kernel,需终版复测)|
+| Llama-3.2-1B | ⬜ |
+| Llama-3.2-3B | ⬜(旧非均匀数据作废) |
+| Llama-3-8B   | ⬜(旧非均匀数据作废) |
+| Llama-3-70B  | ⬜ |
+| Qwen3-8B     | ⬜ |
+| Qwen3-14B    | ⬜ |
+| Qwen3-32B    | ⬜ |
 
 ## 块 4:机制/内部分析
 
