@@ -11,7 +11,7 @@ set -u
 REPO=/home/luofan/plaquant-metricsweep
 PY=/home/luofan/baselines/venv/bin/python   # has lm_eval 0.4.13 + TF5.x (evaluator.py tuple-fix on branch)
 GRID="0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0"
-TAG=$1; CFG=$2; GPU=$3; KV=${4:-kv16}
+TAG=$1; CFG=$2; GPU=$3; KV=${4:-kv16}; MODE=${5:-full}
 OUTD=$REPO/docs/rd_metricsweep_data
 SKIP=$OUTD/_skipped.md
 mkdir -p $OUTD
@@ -20,31 +20,31 @@ cd $REPO
 export HF_ENDPOINT=https://hf-mirror.com HF_HOME=/home/luofan/hf_cache PYTHONPATH=$REPO
 export MASTER_ADDR=127.0.0.1 MASTER_PORT=$((29500 + GPU))   # unique per-GPU port — parallel sweeps must not share torch.distributed 29500
 # KV4 wiring TBD; for now only kv16 (KV cache bf16). kv4 branch reserved.
-KVFLAG=""
 [ "$KV" = "kv4" ] && { echo "kv4 not wired yet — aborting"; exit 2; }
+# MODE: ppl = wiki+C4 only (fast core curve); full = +MMLU+0shot (slow downstream)
+if [ "$MODE" = "ppl" ]; then EVALFLAGS="--c4"; REQ="('c4' in d)"; else EVALFLAGS="--c4 --mmlu --zeroshot"; REQ="('c4' in d and 'mmlu_5shot' in d and 'zeroshot' in d)"; fi
 
-complete() { $PY -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if ('c4' in d and 'mmlu_5shot' in d and 'zeroshot' in d) else 1)" "$1" 2>/dev/null; }
+complete() { $PY -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if $REQ else 1)" "$1" 2>/dev/null; }
 
 for r in $GRID; do
   PT=${TAG}_${KV}_r${r}
   OUT=$OUTD/${PT}.json
   LOG=$OUTD/log_${PT}.log
-  if [ -f "$OUT" ] && complete "$OUT"; then echo "[$TAG $KV] r=$r complete, skip"; continue; fi
-  echo "[$TAG $KV] START r=$r $(date)"
+  if [ -f "$OUT" ] && complete "$OUT"; then echo "[$TAG $KV $MODE] r=$r complete, skip"; continue; fi
+  echo "[$TAG $KV $MODE] START r=$r $(date)"
   CUDA_VISIBLE_DEVICES=$GPU $PY promix/scripts/rd_mmlu.py --config $CFG --point $PT \
     --substrate ring --ring_size 512 --alloc measured --budget_frac $r \
-    --c4 --mmlu --zeroshot $KVFLAG --out $OUT > $LOG 2>&1
+    $EVALFLAGS --out $OUT > $LOG 2>&1
   rc=$?
   if [ $rc -ne 0 ] || ! grep -q RD_MMLU_DONE "$LOG"; then
     reason=$(grep -oE "AssertionError[^$]*|RuntimeError[^$]*|CUDA out of memory|not divisible[^$]*" "$LOG" | tail -1 | head -c 140)
-    echo "| $TAG | $KV | $r | all | rc=$rc ${reason:-see $LOG} |" >> "$SKIP"
-    echo "[$TAG $KV] SKIP r=$r rc=$rc — ${reason:-unknown, see log}"
-    rm -f "$OUT"
+    echo "| $TAG | $KV | $r | $MODE | rc=$rc ${reason:-see $LOG} |" >> "$SKIP"
+    echo "[$TAG $KV $MODE] SKIP r=$r rc=$rc — ${reason:-unknown, see log}"
     continue
   fi
   git add "$OUT" "$SKIP" 2>/dev/null
-  git commit -q -m "metricsweep: $PT (wiki+c4+mmlu+0shot)" 2>/dev/null
-  echo "[$TAG $KV] DONE r=$r $(date)"
+  git commit -q -m "metricsweep: $PT $MODE (wiki+c4$([ "$MODE" = full ] && echo +mmlu+0shot))" 2>/dev/null
+  echo "[$TAG $KV $MODE] DONE r=$r $(date)"
 done
-git add "$SKIP" 2>/dev/null; git commit -q -m "metricsweep: $TAG $KV skip-log" 2>/dev/null
-echo "[$TAG $KV] GRID COMPLETE $(date)"
+git add "$SKIP" 2>/dev/null; git commit -q -m "metricsweep: $TAG $KV $MODE skip-log" 2>/dev/null
+echo "[$TAG $KV $MODE] GRID COMPLETE $(date)"
