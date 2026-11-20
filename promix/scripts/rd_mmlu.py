@@ -51,7 +51,8 @@ import transformers
 
 from promix.utils import DEV, cleanup_memory
 from promix.eval import ptq as ptqmod
-from promix.eval.data import get_wikitext2
+from promix.eval.evaluator import evaluate_ppl
+from promix.eval.data import get_wikitext2, get_c4
 from promix.quantize import quant_utils as qu
 
 import rd_validity as rv
@@ -113,6 +114,18 @@ def eval_mmlu(model, tokenizer, batch_size, limit=None):
     return extract_mmlu(res)
 
 
+def eval_c4_ppl(model, config, eval_seed=None):
+    model.to(DEV)
+    model.seqlen = config["eval"]["max_length"]
+    tok = transformers.AutoTokenizer.from_pretrained(config["model"]["name"])
+    if eval_seed is None:
+        eval_seed = config["calibration"].get("seed", 0)
+    c4 = get_c4(nsamples=256, seed=eval_seed,
+                seqlen=model.seqlen, tokenizer=tok, eval_mode=True)
+    return float(evaluate_ppl(model, c4, DEV,
+                              batch_size=config["eval"]["batch_size"]))
+
+
 def build_newrecipe(config, args):
     """ring512 + measured-MSE (+ GPTQ/percdamp knobs from the caller; act/weight
     MSE knobs from process env) — the rd_acctune build path, verbatim."""
@@ -133,7 +146,7 @@ def build_newrecipe(config, args):
         del cmodel
         cleanup_memory()
         total_rings = sum(stats[n]["nr"] for n in stats)
-        budget = int(round(0.125 * total_rings))
+        budget = int(round(args.budget_frac * total_rings))
         chosen = rv.measured_alloc(stats, budget, total_rings)
         nsel = sum(len(v) for v in chosen.values())
         print(f"ALLOC total_rings={total_rings} sel={nsel} "
@@ -160,6 +173,11 @@ def main():
     ap.add_argument("--percdamp", type=float, default=None)
     ap.add_argument("--mmlu", action="store_true")
     ap.add_argument("--zeroshot", action="store_true")
+    ap.add_argument("--c4", action="store_true",
+                    help="also eval C4 PPL (same model, one quantize)")
+    ap.add_argument("--budget_frac", type=float, default=0.125,
+                    help="FP8 ring budget as fraction of total rings "
+                         "(ProMix ratio sweep knob; default 0.125 = shipped 1/8)")
     ap.add_argument("--skip_wiki", action="store_true",
                     help="skip the wikitext gate (debug only)")
     ap.add_argument("--expect_wiki", type=float, default=None,
@@ -227,6 +245,12 @@ def main():
                   f"— aborting before lm-eval", flush=True)
             save()
             sys.exit(2)
+
+    if args.c4:
+        t0 = time.time()
+        results["c4"] = eval_c4_ppl(model, config)
+        print(f"C4 c4={results['c4']:.4f} ({time.time()-t0:.0f}s)", flush=True)
+        save()
 
     if args.mmlu:
         t0 = time.time()
