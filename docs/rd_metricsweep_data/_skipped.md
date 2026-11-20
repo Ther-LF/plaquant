@@ -30,3 +30,4 @@
 | llama3-8b | kv16 | 0.9 | all | rc=1 AssertionError: missing artifact: ./rotation/U-wikitext-512-llama-3-8b.bin |
 | llama3.2-1b | kv16 | 0.9 | all | rc=1 AssertionError: missing artifact: ./rotation/U-wikitext-512-Llama-3.2-1B-Instruct.bin |
 | llama3.2-3b | kv16 | 1.0 | all | rc=1 AssertionError: missing artifact: ./rotation/U-wikitext-512-Llama-3.2-3B.bin |
+| llama3-8b | kv16 | 1.0 | all | rc=1 AssertionError: missing artifact: ./rotation/U-wikitext-512-llama-3-8b.bin |
