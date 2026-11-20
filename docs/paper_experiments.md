@@ -71,15 +71,46 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 |---|---|---|---|---|
 | (空) | | | | |
 
-## 块 2:端到端 serving
+## 块 2:端到端 serving —— 同栈 vLLM(QServe 式,2026-11-20 重定义)
 
-| 实验 | 状态 |
-|---|---|
-| 五方同栈(b16-512)+ 论文方法 e2e(SharQ/MicroMix)+ 跨论文表 | ✅ |
-| e2e Pareto(r-sweep 曲线) | ✅(3B 6 点);**8B 补密至 6 点** ❌ E3(低优)|
-| 32B/70B serving 点 | ❌ E2 附带(带 TP caveat)|
+> 诚实对标 = **同一推理栈(vLLM 0.32, RTX Pro 6000 SM120)下真跑**。torch-only / 只测单 block /
+> 无 vLLM kernel 的对手**不进 serving**(他们的 headline 虚高,见 `quant_e2e_methodology_survey.md`),
+> 改用跨论文表(自报加速比)+ BOPs。
 
-**决定:不做"单层比较"档** —— 无 serving 的对手已在算子级同台(比单 block 口径更强)。
+**比较对象(分档)**:
+- **同栈真跑(serving 同台)**:BF16 · **FP8 W8A8** · NVFP4 W4A4 · **ProMix W4A4** · SharQ(自带 vLLM 集成)
+- **weight-only 一档(不同计算类,单列标注"只省带宽不省 compute")**:GPTQ-Marlin W4A16 · AWQ-Marlin W4A16
+- **论文方法 e2e 同卡复现**:MicroMix(可跑但 decode ~4.4× 慢,诚实列)
+- **跨论文相对表(自报加速比,相对参照,不同台)**:QServe 1.2–2.4× · Atom 2.53× · AWQ · QuaRot …(口径见 survey)
+- **跑不了 serving → BOPs(理论 + 门后真实, `theoretical_complexity.md`)**:
+  ARCQuant(自家 CUTLASS 非 vLLM) · CoQuant · QuaRot/Atom/ResQ/SpinQuant(INT4 无通路) · FGMP/Oltron(ASIC)
+
+**测试方案(统一协议)**:
+- **batch 网格**:`b1 / 16 / 32 / 64 / 128 / 256 / 512`(bs=1 latency-bound → 大 batch compute-bound)
+- **负载(ISL/OSL)**:prefill-heavy **1024/128** · decode-heavy **128/1024** · 纯 prefill TTFT **L2048** ·
+  QServe 连续批处理 **1024/512@并发**(c64/128/256) · 长上下文 **2048/4096**(fp8-KV)
+- **记录指标**:**TTFT**(prefill 延迟) · **TPOT**(decode 每 token) · **gen tok/s**(吞吐) ·
+  **并发吞吐** · **容量**(KV GiB / 最大可服 batch)
+
+**实验**:
+1. 同栈多方 × 上面全网格 —— 大体 ✅(`vllm_final_fiveway`);补缺:batch512、8B 长上下文、ShareGPT 真实分布
+2. **ProMix serving r-sweep 曲线** —— 与块1 **同 11 点均匀网格**(0→1),每点过 T2 gate;看 serving 代价随 r 的平坦度(卖点:接近纯 FP4 吞吐 + 全程更高精度 + 一个旋钮)
+3. 跨论文相对表 + BOPs(非同栈对手)
+4. **70B**:量化单卡 vs BF16-TP2 诚实口径(插件无 TP)
+5. 维持决定:**不做"单层比较"档**
+
+**模型范围**:全 7 个(3B/8B 主;1B sanity;70B 带 TP caveat;Qwen3-8B/14B/32B 取决于 vLLM 插件 Qwen 支持——**待验**,Llama 路径现成)
+
+### 跟踪表 D — serving 进度(⬜ 未启动 / 🔄 部分 / ✅ 齐)
+| 模型 | 同栈多方(全网格) | ProMix r-sweep(11点) | 已知缺格 |
+|---|---|---|---|
+| Llama-3.2-1B | ⬜ | ⬜ | — |
+| Llama-3.2-3B | 🔄(缺 b512/ShareGPT) | ⬜ | b512, ShareGPT |
+| Llama-3-8B   | 🔄(缺 b512/长上下文/ShareGPT) | ⬜ | b512, 长上下文, ShareGPT |
+| Llama-3-70B  | ⬜(量化单卡 vs BF16-TP2) | ⬜ | TP caveat |
+| Qwen3-8B     | ⬜ | ⬜ | 插件 Qwen 支持待验 |
+| Qwen3-14B    | ⬜ | ⬜ | 同上 |
+| Qwen3-32B    | ⬜ | ⬜ | 同上 |
 
 ## 块 3:算子级
 
