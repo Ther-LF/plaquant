@@ -43,12 +43,12 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 > 执行策略(2026-11-20):PPL 趟(wiki+C4)先快跑全 11 点;MMLU/0-shot 为独立慢趟(S1/S2/S3 待定)。故 wiki/C4 先行,0-shot/MMLU 暂 0。
 | 模型 | wiki | C4 | 0-shot | MMLU |
 |---|---|---|---|---|
-| Llama-3.2-1B  | KV16 11/11✅ · KV4 3/11🔄 | KV16 11/11✅ · KV4 3/11🔄 | 🔄 full跑中 | 🔄 full跑中 |
-| Llama-3.2-3B  | KV16 11/11✅ · KV4 🔄 | KV16 11/11✅ · KV4 🔄 | ⬜ | ⬜ |
-| Llama-3-8B    | KV16 5/11🔄 | KV16 5/11🔄 | ⬜ | ⬜ |
+| Llama-3.2-1B  | KV16 11/11✅ · KV4 6/11🔄 | KV16 11/11✅ · KV4 6/11🔄 | 🔄 full跑中 | 🔄 full跑中 |
+| Llama-3.2-3B  | KV16 11/11✅ · KV4 🔄r0.0 | KV16 11/11✅ · KV4 🔄 | ⬜ | ⬜ |
+| Llama-3-8B    | KV16 6/11🔄 | KV16 6/11🔄 | ⬜ | ⬜ |
 | Llama-3-70B   | ⬜(配置已备,需offload driver) | ⬜ | ⬜ | ⬜ |
-| Qwen3-8B      | KV16 5/11🔄 | KV16 5/11🔄 | ⬜ | ⬜ |
-| Qwen3-14B     | 🔄 GPU7(r0.0 OOM末补) | 🔄 | ⬜ | ⬜ |
+| Qwen3-8B      | KV16 5/11🔄r0.5 | KV16 5/11🔄 | ⬜ | ⬜ |
+| Qwen3-14B     | 🔄 GPU7 r0.3(r0.0 OOM末补) | 🔄 | ⬜ | ⬜ |
 | Qwen3-32B     | ⬜(模型未缓存) | ⬜ | ⬜ | ⬜ |
 
 ### 跟踪表 B — 对手覆盖(每格 = 该对手×模型 的 4 指标;✅全测 / 部分列指标 / ⬜待跑 / — 不适用)
