@@ -11,7 +11,7 @@ set -u
 REPO=/home/luofan/plaquant-metricsweep
 PY=/home/luofan/baselines/venv/bin/python   # has lm_eval 0.4.13 + TF5.x (evaluator.py tuple-fix on branch)
 GRID="0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0"
-TAG=$1; CFG=$2; GPU=$3; KV=${4:-kv16}; MODE=${5:-full}; LIM=${6:-}
+TAG=$1; CFG=$2; GPU=$3; KV=${4:-kv16}; MODE=${5:-full}; LIM=${6:-}; BS=${7:-}
 OUTD=$REPO/docs/rd_metricsweep_data
 SKIP=$OUTD/_skipped.md
 mkdir -p $OUTD
@@ -21,7 +21,7 @@ export HF_ENDPOINT=https://hf-mirror.com HF_HOME=/home/luofan/hf_cache PYTHONPAT
 export MASTER_ADDR=127.0.0.1 MASTER_PORT=$((29500 + GPU))   # unique per-GPU port — parallel sweeps must not share torch.distributed 29500
 # KV: kv16 = KV cache bf16 (default); kv4 = KV cache 4-bit (use the -kv4.yaml config, labels outputs _kv4)
 # MODE: ppl = wiki+C4 only (fast core curve); full = +MMLU+0shot (slow downstream)
-if [ "$MODE" = "ppl" ]; then EVALFLAGS="--c4"; REQ="('c4' in d)"; else EVALFLAGS="--c4 --mmlu --zeroshot${LIM:+ --limit $LIM}"; REQ="('c4' in d and 'mmlu_5shot' in d and 'zeroshot' in d)"; fi
+if [ "$MODE" = "ppl" ]; then EVALFLAGS="--c4"; REQ="('c4' in d)"; else EVALFLAGS="--c4 --mmlu --zeroshot${LIM:+ --limit $LIM}${BS:+ --batch_size $BS}"; REQ="('c4' in d and 'mmlu_5shot' in d and 'zeroshot' in d)"; fi
 
 complete() { $PY -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if $REQ else 1)" "$1" 2>/dev/null; }
 
