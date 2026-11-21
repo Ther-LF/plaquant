@@ -27,3 +27,4 @@
 | qwen3-14b | kv16 | 0.5 | ppl | rc=1 CUDA out of memory |
 | llama3-8b | kv16 | 0.4 | full | rc=1 CUDA out of memory |
 | qwen3-14b | kv16 | 0.6 | ppl | rc=1 CUDA out of memory |
+| llama3-8b | kv16 | 0.5 | full | rc=1 CUDA out of memory |
