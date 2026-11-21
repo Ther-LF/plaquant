@@ -41,3 +41,5 @@
 | qwen3-14b | kv16 | 0.7 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-14b_kv16_r0.7.log |
 | qwen3-14b | kv16 | 0.8 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-14b_kv16_r0.8.log |
 | qwen3-14b | kv16 | 0.9 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-14b_kv16_r0.9.log |
+| llama3-8b | kv16 | 0.7 | full | rc=1 CUDA out of memory |
+| qwen3-14b | kv16 | 0.9 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-14b_kv16_r0.9.log |
