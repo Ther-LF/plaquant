@@ -41,7 +41,7 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 
 ### 跟踪表 A — ProMix 曲线进度(做一点填一点;格式 `KV16 n/11 · KV4 n/11`;⬜ = 未启动)
 > 执行策略(2026-11-20):PPL 趟(wiki+C4)先快跑全 11 点;MMLU/0-shot 为独立慢趟(S1/S2/S3 待定)。故 wiki/C4 先行,0-shot/MMLU 暂 0。
-> **下游 S1(2026-11-21):MMLU/0-shot 曲线用 `--limit 100`/子任务(~7× 提速,全量每点~2hr跑不动);`1B-KV16` 保留全量(11/11)做 limited≈full 校准锚点。**
+> **下游 S1(2026-11-21):MMLU/0-shot 曲线限样本提速。小模型(1B/3B) limit100;大模型(8B/Qwen) MMLU=22800请求 bs16 OOM→ limit25+batch8(~40min/点,bs不改结果只省显存/时);14B 同理待补。`1B-KV16` 保留全量(11/11)做 limited≈full 校准锚点。**
 | 模型 | wiki | C4 | 0-shot | MMLU |
 |---|---|---|---|---|
 | Llama-3.2-1B  | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4🔄 | KV16 11/11✅ · KV4🔄 |
