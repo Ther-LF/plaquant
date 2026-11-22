@@ -1,0 +1,36 @@
+START rd_mmlu {"point": "llama3-8b_kv16_r0.9", "model": "/home/luofan/models/llama-3-8b", "substrate": "ring", "ring_size": 512, "alloc": "measured", "gptq_nsamples": 128, "percdamp": 0.01, "act_mse_steps": 3, "act_mse_steps_up": 0, "weight_mse_steps": 3, "lm_eval_batch_size": 8, "limit": 25, "zs_tasks": ["piqa", "arc_easy", "arc_challenge", "hellaswag", "winogrande", "lambada_openai"]}
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]Loading weights:   0%|          | 1/291 [00:00<00:58,  4.97it/s]Loading weights:  16%|█▌        | 46/291 [00:00<00:01, 176.52it/s]Loading weights:  26%|██▌       | 76/291 [00:00<00:01, 210.29it/s]Loading weights:  36%|███▌      | 104/291 [00:00<00:00, 228.34it/s]Loading weights:  45%|████▌     | 131/291 [00:00<00:00, 239.30it/s]Loading weights:  55%|█████▍    | 159/291 [00:00<00:00, 246.94it/s]Loading weights:  66%|██████▋   | 193/291 [00:00<00:00, 270.54it/s]Loading weights:  76%|███████▌  | 221/291 [00:00<00:00, 272.23it/s]Loading weights:  86%|████████▌ | 249/291 [00:01<00:00, 266.16it/s]Loading weights:  95%|█████████▌| 277/291 [00:01<00:00, 267.53it/s]Loading weights: 100%|██████████| 291/291 [00:01<00:00, 244.86it/s]
+[rank0]:[W1121 15:16:33.318511669 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 1050673152 bytes (free: 235143168, total: 101973819392).
+[rank0]:[W1121 15:16:33.318763664 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 1050673152 bytes (free: 235143168, total: 101973819392).
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 279, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 232, in main
+[rank0]:     model, frac = build_newrecipe(config, args)
+[rank0]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 141, in build_newrecipe
+[rank0]:     cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_validity.py", line 73, in build_base
+[rank0]:     model = load_model(config["model"]["name"], dtype=torch.float16)
+[rank0]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/models/loader.py", line 34, in load_model
+[rank0]:     model = model.cuda()
+[rank0]:             ^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/transformers/modeling_utils.py", line 3645, in cuda
+[rank0]:     return super().cuda(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1096, in cuda
+[rank0]:     return self._apply(lambda t: t.cuda(device))
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 933, in _apply
+[rank0]:     module._apply(fn)
+[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 964, in _apply
+[rank0]:     param_applied = fn(param)
+[rank0]:                     ^^^^^^^^^
+[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1096, in <lambda>
+[rank0]:     return self._apply(lambda t: t.cuda(device))
+[rank0]:                                  ^^^^^^^^^^^^^^
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1002.00 MiB. GPU 0 has a total capacity of 94.97 GiB of which 224.25 MiB is free. Including non-PyTorch memory, this process has 14.64 GiB memory in use. Of the allocated memory 13.98 GiB is allocated by PyTorch, and 129.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[rank0]:[W1121 15:16:34.969890077 ProcessGroupNCCL.cpp:1624] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
