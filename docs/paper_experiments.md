@@ -106,9 +106,9 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 ### 跟踪表 D — serving 进度(⬜ 未启动 / 🔄 部分 / ✅ 齐)
 | 模型 | 同栈多方(全网格) | ProMix r-sweep(11点) | 已知缺格 |
 |---|---|---|---|
-| Llama-3.2-1B | ⬜ | ⬜ | — |
-| Llama-3.2-3B | 🔄(缺 b512/ShareGPT) | ⬜ | b512, ShareGPT |
-| Llama-3-8B   | 🔄(缺 b512/长上下文/ShareGPT) | ⬜ | b512, 长上下文, ShareGPT |
+| Llama-3.2-1B | 🔄(同栈已有) | ✅ 11/11(TPOT r0→1 +3.7%,平坦) | — |
+| Llama-3.2-3B | 🔄(缺 b512/ShareGPT) | ✅ 11/11(+1.5%,平坦) | b512, ShareGPT |
+| Llama-3-8B   | 🔄(缺 b512/长上下文/ShareGPT) | ✅ 11/11 | b512, 长上下文, ShareGPT |
 | Llama-3-70B  | ⬜(量化单卡 vs BF16-TP2) | ⬜ | TP caveat |
 | Qwen3-8B     | ⬜ | ⬜ | 插件 Qwen 支持待验 |
 | Qwen3-14B    | ⬜ | ⬜ | 同上 |
