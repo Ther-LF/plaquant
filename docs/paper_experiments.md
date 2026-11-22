@@ -44,12 +44,12 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 > **下游 S1(2026-11-21):MMLU/0-shot 曲线限样本提速。小模型(1B/3B) limit100;大模型(8B/Qwen) MMLU=22800请求 bs16 OOM→ limit25+batch8(~40min/点,bs不改结果只省显存/时);14B 同理待补。`1B-KV16` 保留全量(11/11)做 limited≈full 校准锚点。**
 | 模型 | wiki | C4 | 0-shot | MMLU |
 |---|---|---|---|---|
-| Llama-3.2-1B  | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 10/11🔄 | KV16 11/11✅ · KV4 10/11🔄 |
+| Llama-3.2-1B  | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ |
 | Llama-3.2-3B  | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ |
 | Llama-3-8B    | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ |
-| Llama-3-70B   | KV16 10/11🔄(复用densesweep同recipe曲线r0.1-1.0,r0.0补跑中) | KV16 10/11🔄 | ⬜(下游需offload-lmeval,另立项) | ⬜ |
-| Qwen3-8B      | KV16 11/11✅(r0.7 artifact) · KV4 11/11✅(平台区wiggle) | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 10/11🔄 | KV16 11/11✅ · KV4 10/11🔄 |
-| Qwen3-14B     | KV16 1/11🔄(全卡清空,重跑中) · KV4 🔄起步 | 🔄 | ⬜ | ⬜ |
+| Llama-3-70B   | KV16 11/11✅(densesweep r0.1-1.0 + r0.0悬崖点29.4) | KV16 11/11✅(r0.0 c4=41.7) | ⬜(下游需offload-lmeval,另立项) | ⬜ |
+| Qwen3-8B      | KV16 11/11✅(r0.7 artifact) · KV4 11/11✅(平台区wiggle) | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ |
+| Qwen3-14B     | KV16 wiki9/11·c4补跑🔄 · KV4 wiki9/11🔄 | 🔄 | 🔄(lim25起步) | 🔄 |
 | Qwen3-32B     | ⬜(模型未缓存) | ⬜ | ⬜ | ⬜ |
 
 ### 跟踪表 B — 对手覆盖(每格 = 该对手×模型 的 4 指标;✅全测 / 部分列指标 / ⬜待跑 / — 不适用)
@@ -111,7 +111,7 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 ### 跟踪表 D — serving 进度(⬜ 未启动 / 🔄 部分 / ✅ 齐)
 | 模型 | 同栈多方(全网格) | ProMix r-sweep(11点) | 已知缺格 |
 |---|---|---|---|
-| Llama-3.2-1B | 🔄(同栈已有) | ✅ 11/11(TPOT r0→1 +3.7%,平坦) | — |
+| Llama-3.2-1B | ⬜(五方以3B/8B为主,1B为sanity) | ✅ 11/11(TPOT r0→1 +3.7%,平坦) | — |
 | Llama-3.2-3B | 🔄(缺 b512/ShareGPT) | ✅ 11/11(+1.5%,平坦) | b512, ShareGPT |
 | Llama-3-8B   | 🔄(缺 b512/长上下文/ShareGPT) | ✅ 11/11 | b512, 长上下文, ShareGPT |
 | Llama-3-70B  | ⬜(量化单卡 vs BF16-TP2) | ⬜ | TP caveat |
