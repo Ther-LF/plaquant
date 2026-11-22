@@ -420,9 +420,45 @@ def main():
             budget = int(round(budget_frac * total_rings))
             chosen = rv.clamp_chosen(
                 rv.measured_alloc(stats, budget, total_rings), stats)
+            # vLLM fused-GEMM constraint: members of a merged group (q/k/v,
+            # gate/up) share ONE activation K split. The global deltaD
+            # allocation can give them different ring counts at some budgets
+            # (export used to die on "mixed K splits"). Unify each group to
+            # the member max (top-up the short members by their own deltaD
+            # order; capped at nr-1 to keep >=1 NVFP4 ring). Fake-quant build
+            # below uses the SAME unified chosen, so served == evaluated.
+            import re as _re
+            groups = {}
+            for nm in chosen:
+                m = _re.search(r"layers\.(\d+)\..*\.(q|k|v|gate|up)_proj", nm)
+                if m:
+                    gid = (m.group(1), "qkv" if m.group(2) in ("q", "k", "v") else "gateup")
+                    groups.setdefault(gid, []).append(nm)
+            bumped = 0
+            for gid, members in groups.items():
+                if len(members) < 2:
+                    continue
+                tgt = max(len(chosen[nm]) for nm in members)
+                tgt = min(tgt, min(stats[nm]["nr"] for nm in members) - 1)
+                for nm in members:
+                    need = tgt - len(chosen[nm])
+                    if need <= 0:
+                        if len(chosen[nm]) > tgt:  # cap overshoot (nr-1 clamp)
+                            dd = stats[nm]["deltaD"]
+                            keep = sorted(chosen[nm], key=lambda r: -float(dd[r]))[:tgt]
+                            bumped += len(chosen[nm]) - tgt
+                            chosen[nm] = set(keep)
+                        continue
+                    dd = stats[nm]["deltaD"]
+                    rest = sorted((r for r in range(stats[nm]["nr"])
+                                   if r not in chosen[nm]),
+                                  key=lambda r: -float(dd[r]))
+                    chosen[nm] |= set(rest[:need])
+                    bumped += need
             nsel = sum(len(v) for v in chosen.values())
             print(f"ALLOC total_rings={total_rings} sel={nsel} "
-                  f"(frac={nsel/total_rings:.4f})", flush=True)
+                  f"(frac={nsel/total_rings:.4f}, fused-unify moved {bumped} rings)",
+                  flush=True)
         model = rv.build_eval(config, r1_off=False, chosen=chosen,
                               ring_r1=ring_r1, ring_size=args.ring_size)
     else:
