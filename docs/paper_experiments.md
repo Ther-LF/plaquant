@@ -147,13 +147,13 @@ r=0 快 4–23%(混精度算子级近乎免费),r>1/4 后线性涨(斜率 1.25�
 ### 跟踪表 E — 算子曲线进度(每格 = 该模型 3 投影 × 2 个 M 的均匀 11 点曲线;⬜ 未测)
 | 模型 | 算子延迟-vs-r 曲线 |
 |---|---|
-| Llama-3.2-1B | ⬜ |
+| Llama-3.2-1B | ✅ 均匀11点(`ours_uniform11_ext.json`,launch-bound微抖动benign) |
 | Llama-3.2-3B | ✅ 均匀11点×3投影×2M(`rd_oppareto_data/ours_uniform11.json`,cosine≥0.992,单调) |
 | Llama-3-8B   | ✅ 同上 |
-| Llama-3-70B  | ⬜ |
-| Qwen3-8B     | ⬜ |
-| Qwen3-14B    | ⬜ |
-| Qwen3-32B    | ⬜ |
+| Llama-3-70B  | ✅ 均匀11点(down@8192: 3.02→5.9ms 单调) |
+| Qwen3-8B     | ✅ 均匀11点 |
+| Qwen3-14B    | ✅ 均匀11点 |
+| Qwen3-32B    | —(shape未列,模型未缓存;如需可补5120×25600) |
 
 ## 块 4:机制/内部分析
 
