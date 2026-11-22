@@ -1,36 +1,7 @@
 START rd_mmlu {"point": "llama3-8b_kv16_r0.4", "model": "/home/luofan/models/llama-3-8b", "substrate": "ring", "ring_size": 512, "alloc": "measured", "gptq_nsamples": 128, "percdamp": 0.01, "act_mse_steps": 3, "act_mse_steps_up": 0, "weight_mse_steps": 3, "lm_eval_batch_size": 8, "limit": 25, "zs_tasks": ["piqa", "arc_easy", "arc_challenge", "hellaswag", "winogrande", "lambada_openai"]}
 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]Loading weights:   0%|          | 1/291 [00:00<00:57,  5.03it/s]Loading weights:  20%|██        | 59/291 [00:00<00:00, 232.93it/s]Loading weights:  31%|███▏      | 91/291 [00:00<00:00, 261.81it/s]Loading weights:  42%|████▏     | 122/291 [00:00<00:00, 245.01it/s]Loading weights:  52%|█████▏    | 150/291 [00:00<00:00, 253.09it/s]Loading weights:  61%|██████    | 178/291 [00:00<00:00, 249.32it/s]Loading weights:  70%|███████   | 205/291 [00:00<00:00, 240.37it/s]Loading weights:  79%|███████▉  | 230/291 [00:01<00:00, 224.43it/s]Loading weights:  91%|█████████ | 265/291 [00:01<00:00, 246.50it/s]Loading weights: 100%|██████████| 291/291 [00:01<00:00, 238.76it/s]
-[rank0]:[W1121 15:13:21.393473558 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 1050673152 bytes (free: 235143168, total: 101973819392).
-[rank0]:[W1121 15:13:21.393713749 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 1050673152 bytes (free: 235143168, total: 101973819392).
-[rank0]: Traceback (most recent call last):
-[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 279, in <module>
-[rank0]:     main()
-[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 232, in main
-[rank0]:     model, frac = build_newrecipe(config, args)
-[rank0]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 141, in build_newrecipe
-[rank0]:     cmodel = rv.build_base(config, r1_off=False, ring_r1=ring_r1,
-[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_validity.py", line 73, in build_base
-[rank0]:     model = load_model(config["model"]["name"], dtype=torch.float16)
-[rank0]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/models/loader.py", line 34, in load_model
-[rank0]:     model = model.cuda()
-[rank0]:             ^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/transformers/modeling_utils.py", line 3645, in cuda
-[rank0]:     return super().cuda(*args, **kwargs)
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1096, in cuda
-[rank0]:     return self._apply(lambda t: t.cuda(device))
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 933, in _apply
-[rank0]:     module._apply(fn)
-[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 964, in _apply
-[rank0]:     param_applied = fn(param)
-[rank0]:                     ^^^^^^^^^
-[rank0]:   File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1096, in <lambda>
-[rank0]:     return self._apply(lambda t: t.cuda(device))
-[rank0]:                                  ^^^^^^^^^^^^^^
-[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1002.00 MiB. GPU 0 has a total capacity of 94.97 GiB of which 224.25 MiB is free. Including non-PyTorch memory, this process has 14.64 GiB memory in use. Of the allocated memory 13.98 GiB is allocated by PyTorch, and 129.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
-[rank0]:[W1121 15:13:22.098397676 ProcessGroupNCCL.cpp:1624] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+Loading weights:   0%|          | 0/291 [00:00<?, ?it/s]Loading weights:   0%|          | 1/291 [00:00<00:53,  5.43it/s]Loading weights:  16%|█▌        | 46/291 [00:00<00:01, 198.46it/s]Loading weights:  26%|██▌       | 76/291 [00:00<00:00, 220.99it/s]Loading weights:  35%|███▌      | 103/291 [00:00<00:00, 237.42it/s]Loading weights:  45%|████▍     | 130/291 [00:00<00:00, 243.03it/s]Loading weights:  54%|█████▍    | 157/291 [00:00<00:00, 250.02it/s]Loading weights:  65%|██████▌   | 190/291 [00:00<00:00, 266.46it/s]Loading weights:  76%|███████▌  | 220/291 [00:00<00:00, 245.58it/s]Loading weights:  88%|████████▊ | 256/291 [00:01<00:00, 264.21it/s]Loading weights:  98%|█████████▊| 284/291 [00:01<00:00, 264.49it/s]Loading weights: 100%|██████████| 291/291 [00:01<00:00, 244.67it/s]
+/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+[rank0]:[W1122 05:30:55.514950185 ProcessGroupNCCL.cpp:5276] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
+Rotating layers:   0%|          | 0/32 [00:00<?, ?it/s]Rotating layers:   3%|▎         | 1/32 [00:03<01:34,  3.06s/it]Rotating layers:   6%|▋         | 2/32 [00:05<01:25,  2.85s/it]Rotating layers:   9%|▉         | 3/32 [00:08<01:20,  2.77s/it]Rotating layers:  12%|█▎        | 4/32 [00:11<01:16,  2.74s/it]Rotating layers:  16%|█▌        | 5/32 [00:13<01:13,  2.70s/it]Rotating layers:  19%|█▉        | 6/32 [00:16<01:10,  2.71s/it]Rotating layers:  22%|██▏       | 7/32 [00:19<01:07,  2.70s/it]Rotating layers:  25%|██▌       | 8/32 [00:21<01:04,  2.69s/it]Rotating layers:  28%|██▊       | 9/32 [00:24<01:02,  2.70s/it]Rotating layers:  31%|███▏      | 10/32 [00:27<00:59,  2.70s/it]Rotating layers:  34%|███▍      | 11/32 [00:29<00:56,  2.70s/it]Rotating layers:  38%|███▊      | 12/32 [00:32<00:54,  2.70s/it]Rotating layers:  41%|████      | 13/32 [00:35<00:51,  2.70s/it]Rotating layers:  44%|████▍     | 14/32 [00:38<00:48,  2.70s/it]Rotating layers:  47%|████▋     | 15/32 [00:40<00:45,  2.69s/it]Rotating layers:  50%|█████     | 16/32 [00:43<00:42,  2.68s/it]Rotating layers:  53%|█████▎    | 17/32 [00:46<00:40,  2.69s/it]Rotating layers:  56%|█████▋    | 18/32 [00:48<00:37,  2.69s/it]Rotating layers:  59%|█████▉    | 19/32 [00:51<00:34,  2.68s/it]Rotating layers:  62%|██████▎   | 20/32 [00:54<00:32,  2.68s/it]Rotating layers:  66%|██████▌   | 21/32 [00:56<00:29,  2.68s/it]
