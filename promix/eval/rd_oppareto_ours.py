@@ -32,12 +32,26 @@ DEV = "cuda"
 RING = 64   # rd_validity RING — one NVFP4 ring kept at the r=1 end
 
 SHAPES = [
+    ("1B", "qkvo",    2048, 2048),
+    ("1B", "gate_up", 8192, 2048),
+    ("1B", "down",    2048, 8192),
     ("3B", "qkvo",    3072, 3072),
     ("3B", "gate_up", 8192, 3072),
     ("3B", "down",    3072, 8192),
     ("8B", "qkvo",    4096, 4096),
     ("8B", "gate_up", 14336, 4096),
     ("8B", "down",    4096, 14336),
+    # cross-family + scale (configs read from HF: Qwen3-8B 4096/12288,
+    # Qwen3-14B 5120/17408; Llama-3-70B 8192/28672)
+    ("Q8B", "qkvo",    4096, 4096),
+    ("Q8B", "gate_up", 12288, 4096),
+    ("Q8B", "down",    4096, 12288),
+    ("Q14B", "qkvo",    5120, 5120),
+    ("Q14B", "gate_up", 17408, 5120),
+    ("Q14B", "down",    5120, 17408),
+    ("70B", "qkvo",    8192, 8192),
+    ("70B", "gate_up", 28672, 8192),
+    ("70B", "down",    8192, 28672),
 ]
 
 R_GRID = [0.0, 1 / 32, 1 / 16, 1 / 12, 1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2,
