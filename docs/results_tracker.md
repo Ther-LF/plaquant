@@ -174,3 +174,6 @@ sanity-gate 过:wiki 低端单调下行 6.126→6.062→6.060→5.956(r0.25=5.99
 
 ## 对手×Qwen3 跨架构 probe(2026-11-23,表B):Llama特化管线不迁移
 同协议 as-shipped probe @Qwen3-8B:**SharQ 跑通但数值崩坏 wiki=42803.9/c4=27499.5**(双数据集一致,其 quantize_model_llama 不适配 Qwen3 QK-Norm 架构);**ARCQuant 直接不可跑**(FileNotFoundError: 需预计算 qwen3-8b reorder 索引,官方只发 Llama 工件)。对照:ProMix 同配方在 Qwen3-8B/14B 双 KV 全曲线正常(Q8B KV16 r0=10.92→r1=9.73,全程>bf16 9.725)。**论文卖点:跨家族泛化是真实差异点——PCA+ring 配方架构无关,Llama 特化对手管线不迁移。**(NVFP4/modelopt 路线待测,官方宣称支持 Qwen)
+
+## NVFP4×Qwen3-8B 落地(2026-11-23,表B Qwen列唯一可跑对手)
+llm-compressor NVFP4 ckpt + bench_vllm 同协议: **wiki=10.072**(bf16 9.725,+0.35 合理)。对比 ProMix Qwen8B 曲线: r=0.1 即 9.903<10.072,**r≥0.1 全程压 NVFP4**;r=0(10.92)略差于它=旋转无保护失配(与70B悬崖同机制,modelopt不旋转)。Qwen跨架构故事闭环: SharQ崩/ARC不可跑/NVFP4可跑但被压。
