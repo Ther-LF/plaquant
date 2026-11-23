@@ -171,3 +171,6 @@ sanity-gate 过:wiki 低端单调下行 6.126→6.062→6.060→5.956(r0.25=5.99
 
 ## 70B r=0 悬崖点(2026-11-22,E0 曲线锚点):混合精度必要性的最强证据
 70B r=0.0(PCA旋转+ring512+GPTQ,纯NVFP4 无FP8保护) **wiki=29.407 / c4=41.671** —— 两数据集一致(交叉验证过,非eval bug)。对照 r=0.1 wiki 6.062:**第一格10%FP8保护把PPL从29.4拉回6.1**。机制=build-up已证的"+PCA单独用会伤"(3B 8.99→13.54)随规模放大(70B emergent outliers):旋转把能量集中到头部通道,r=0时无高精度保护即崩。小模型r=0不崩(1B 15.7/3B 9.4/8B 7.4,+1~2.5)、70B 独崩(+24) = 规模涌现。**论文用法:精度-vs-r曲线的左端悬崖 + "为什么必须混合精度"的图一句话。**
+
+## 对手×Qwen3 跨架构 probe(2026-11-23,表B):Llama特化管线不迁移
+同协议 as-shipped probe @Qwen3-8B:**SharQ 跑通但数值崩坏 wiki=42803.9/c4=27499.5**(双数据集一致,其 quantize_model_llama 不适配 Qwen3 QK-Norm 架构);**ARCQuant 直接不可跑**(FileNotFoundError: 需预计算 qwen3-8b reorder 索引,官方只发 Llama 工件)。对照:ProMix 同配方在 Qwen3-8B/14B 双 KV 全曲线正常(Q8B KV16 r0=10.92→r1=9.73,全程>bf16 9.725)。**论文卖点:跨家族泛化是真实差异点——PCA+ring 配方架构无关,Llama 特化对手管线不迁移。**(NVFP4/modelopt 路线待测,官方宣称支持 Qwen)

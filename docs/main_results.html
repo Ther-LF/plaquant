@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProMix 主实验结果（完整）</title>
+<style>
+  :root[data-theme="light"]{--page:#f4f6fb;--surface:#fff;--ink:#0b1220;--ink2:#44506a;--muted:#6b7690;--grid:#e3e8f2;--axis:#aeb7cc;--border:rgba(20,30,60,.12);}
+  :root[data-theme="dark"]{--page:#0a0e17;--surface:#141a26;--ink:#f2f5fb;--ink2:#b7c1d6;--muted:#8b96ad;--grid:#232b3a;--axis:#3a4559;--border:rgba(255,255,255,.12);}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5}
+  .wrap{max-width:1060px;margin:0 auto;padding:26px 20px 90px}
+  header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  h1{font-size:23px;margin:0 0 2px}
+  .sub{color:var(--ink2);font-size:13px;margin:0;max-width:720px}
+  .toggle{border:1px solid var(--border);background:var(--surface);color:var(--ink2);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer}
+  .hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));gap:12px;margin:20px 0 6px}
+  .tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px 16px}
+  .tile .k{font-size:12px;color:var(--ink2);margin:0 0 5px}
+  .tile .v{font-size:25px;font-weight:650;margin:0;letter-spacing:-.5px}
+  .tile .d{font-size:12px;margin:5px 0 0;color:var(--ink2)}
+  .win{color:#15a800;font-weight:600}
+  section{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 18px 10px;margin:18px 0}
+  h2{font-size:16px;margin:0 0 3px}
+  .cap{color:var(--ink2);font-size:12.5px;margin:0 0 12px}
+  .ctl{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+  .ctl button{border:1px solid var(--border);background:transparent;color:var(--ink2);border-radius:7px;padding:4px 11px;font-size:12.5px;cursor:pointer}
+  .ctl button.on{background:#2563eb;color:#fff;border-color:#2563eb}
+  :root[data-theme="dark"] .ctl button.on{background:#3b82f6;border-color:#3b82f6}
+  .legend{display:flex;gap:15px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:2px 0 6px;align-items:center}
+  .legend i{display:inline-block;width:20px;height:0;vertical-align:middle;margin-right:5px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:5px}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--surface);font-size:12px;padding:6px 9px;border-radius:7px;opacity:0;transition:opacity .08s;z-index:9;white-space:nowrap}
+  .foot{color:var(--muted);font-size:11.5px;margin-top:6px}
+  .note{color:var(--ink2);font-size:12px;margin:8px 0 2px;padding:8px 11px;background:var(--page);border-radius:8px;border:1px solid var(--border)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>ProMix 主实验结果 · 完整</h1>
+    <p class="sub">W4A4 混合精度（NVFP4+MXFP8 融合）· 同协议同硬件实测（RTX Pro 6000 SM120 / vLLM 0.32）· 全尺寸 1B–70B · 精度 + 性能 + 算子 · 截至 2026-11-20</p>
+  </div>
+  <button class="toggle" id="themeBtn">◐ 主题</button>
+</header>
+
+<div class="hero" id="hero"></div>
+
+<section>
+  <h2>① 精度 · PPL（越低越好）</h2>
+  <p class="cap">同协议 W4A4。<b>ProMix 是可调方法</b>——深蓝 = 发货点 r=1/8，浅蓝 = 其他高精度比例（扫过一个范围）。3B/8B/70B 有逐比例实测；提高 r 可越过更多对手。灰虚线 = bf16 无损下界。</p>
+  <div class="legend">
+    <span><i style="border-top:9px solid #2563eb"></i>ProMix r=1/8（发货）</span>
+    <span><i style="border-top:9px solid #2563eb;opacity:.48"></i>ProMix 其他比例</span>
+    <span><i style="border-top:9px solid #7c89a6;opacity:.82"></i>对手 W4A4</span>
+    <span><i style="border-top:1.6px dashed var(--ref)"></i>bf16 下界</span>
+  </div>
+  <div class="ctl" id="ppl_metric"><button data-v="wiki" class="on">WikiText-2</button><button data-v="c4">C4</button></div>
+  <div class="ctl" id="ppl_size"><button data-v="1B">1B</button><button data-v="3B" class="on">3B</button><button data-v="8B">8B</button><button data-v="13B">13B</button><button data-v="70B">70B</button></div>
+  <svg id="ppl_svg"></svg>
+  <p class="foot" id="ppl_foot"></p>
+</section>
+
+<section>
+  <h2>② 0-shot 平均（6 任务，越高越好）</h2>
+  <p class="cap">piqa / arc_e / arc_c / hellaswag / winogrande / lambada 平均。ProMix 在 8B 居 W4A4 之首（73.02，近乎无损 73.33）。</p>
+  <div class="ctl" id="zs_size"><button data-v="1B">1B</button><button data-v="3B" class="on">3B</button><button data-v="8B">8B</button><button data-v="13B">13B</button></div>
+  <svg id="zs_svg"></svg>
+  <p class="note">70B 0-shot：仅 NVFP4 代理测得 <b>77.94</b>（ProMix-70B 下游因机器饱和未跑）。</p>
+</section>
+
+<section>
+  <h2>③ MMLU 5-shot（越高越好）</h2>
+  <p class="cap">ProMix 3B <b>54.12</b> 居 W4A4 第一；8B <b>62.85</b> 与 SharQ 62.87 基本持平。bf16 为上界。</p>
+  <div class="ctl" id="mmlu_size"><button data-v="3B" class="on">3B</button><button data-v="8B">8B</button></div>
+  <svg id="mmlu_svg"></svg>
+  <p class="note">70B MMLU：NVFP4 代理 <b>78.99</b>（ProMix 未跑）。</p>
+</section>
+
+<section>
+  <h2>④ 70B 精度-比例曲线：高比例尾反超 SharQ</h2>
+  <p class="cap">ProMix 随高精度比例 r 从 0.05→1.00 单调下探，越过 NVFP4，并在 <b>r≥0.75</b> 跌破 SharQ。r0.95 wiki <b>5.708</b> 为全曲线最优（比 SharQ 低 0.061）。绿点 = 已跌破 SharQ。</p>
+  <div class="legend">
+    <span><i style="border-top:3px solid #2563eb"></i>ProMix（可调）</span>
+    <span><span class="dot" style="background:#15a800"></span>跌破 SharQ</span>
+    <span><i style="border-top:2.2px dashed var(--ink2)"></i>SharQ 阈值</span>
+    <span><i style="border-top:1.6px dashed var(--muted)"></i>bf16 · NVFP4 · ARCQuant</span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="curve_grid">
+    <div><svg id="c_wiki"></svg></div><div><svg id="c_c4"></svg></div>
+  </div>
+</section>
+
+<section>
+  <h2>⑤ 端到端 serving · 五方同栈</h2>
+  <p class="cap">decode-heavy 128/1024。ProMix 在同 W4A4 精度下吞吐接近 NVFP4、远胜 BF16/GPTQ；大 batch 优势放大。TPOT 越低越好 / 吞吐越高越好。</p>
+  <div class="ctl" id="sv_size"><button data-v="3B" class="on">3B</button><button data-v="8B">8B</button></div>
+  <div class="ctl" id="sv_metric"><button data-v="tpot" class="on">TPOT 延迟 ms ↓</button><button data-v="gen">生成吞吐 tok/s ↑</button></div>
+  <div class="legend" id="sv_legend"></div>
+  <svg id="sv_svg"></svg>
+  <p class="note">跨论文相对 FP16 加速（自栈口径）：ProMix 1.13×(3B)/1.27×(8B) · NVFP4 1.27×/1.51× · SharQ decode b256 0.92×（双 GEMM ~2× 工作量）· MicroMix 2.0× prefill。70B：量化单卡 vs BF16-TP2 ≈ 3.4–4.2×/GPU。</p>
+</section>
+
+<section>
+  <h2>⑥ 理论 vs 门后真实 BOPs（相对 FP16=256）</h2>
+  <p class="cap">纸面 BOPs ≈ 看 bit，但必须乘硬件 datapath 门。<b>INT4 系</b>纸面最便宜（16）但 Blackwell 无 INT4 通路→降 INT8 实为 <b>64</b>；<b>SharQ</b> 纸面 20 但稀疏+稠密双 GEMM 实为 <b>40</b>。ProMix/NVFP4 理论=真实（有原生通路）。</p>
+  <div class="legend"><span><i style="border-top:9px solid #2563eb"></i>理论</span><span><i style="border-top:9px solid #eb6834"></i>门后真实</span></div>
+  <svg id="bops_svg"></svg>
+</section>
+
+<section>
+  <h2>⑦ 组件累计消融（3B · E5）</h2>
+  <p class="cap">从 RTN 纯 NVFP4 逐步加组件，累计 WikiText-2 PPL。PCA 单独用会伤（需配旋转+混精），混合精度与 GPTQ 买回最多，measured 分配为发货点。</p>
+  <svg id="build_svg"></svg>
+</section>
+
+<p class="foot">来源：rd_accuracy_matrix / rd_newpeers_accuracy / rd_mmlu_report / rd_metrics_report / rd_scale_report / rd_peers70b / vllm_final_fiveway / theoretical_complexity / rd_buildup_ablation / results_tracker。ProMix 精度用发货新配方(ring512+measured-1/8)；70B 方法条用发货 r=1/8，曲线另示可调性。缺测格见各节注。</p>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const T={
+ light:{surface:'#fff',ink:'#0b1220',ink2:'#44506a',muted:'#6b7690',grid:'#e3e8f2',axis:'#aeb7cc',
+   series:'#2563eb',good:'#15a800',peer:'#7c89a6',ref:'#334155',
+   mPro:'#2563eb',mNv:'#eb6834',mFp8:'#1baf7a',mBf16:'#334155',mGptq:'#94a3b8',bA:'#2563eb',bB:'#eb6834'},
+ dark:{surface:'#141a26',ink:'#f2f5fb',ink2:'#b7c1d6',muted:'#8b96ad',grid:'#232b3a',axis:'#3a4559',
+   series:'#3b82f6',good:'#16a34a',peer:'#8b96ad',ref:'#cbd5e1',
+   mPro:'#3b82f6',mNv:'#d95926',mFp8:'#199e70',mBf16:'#cbd5e1',mGptq:'#64748b',bA:'#3b82f6',bB:'#d95926'}
+};
+function th(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';}
+function c(role){return T[th()][role];}
+const NS='http://www.w3.org/2000/svg';
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+const tip=document.getElementById('tip');
+function stip(e,h){tip.innerHTML=h;tip.style.opacity=1;tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';}
+function htip(){tip.style.opacity=0;}
+
+// ---------- DATA ----------
+// kind: 2=ProMix(ours) 1=bf16 ref 0=peer. ProMix=shipped new-recipe.
+const PPL={wiki:{
+ "1B":[["bf16",13.16,1],["ProMix",14.17,2],["SharQ",14.79,0],["ARCQuant",15.22,0],["NVFP4",15.65,0],["CoQuant",16.64,0],["Atom",18.40,0],["SpinQuant",18.62,0],["QuaRot",22.11,0]],
+ "3B":[["bf16",7.82,1],["ProMix",8.22,2],["SharQ",8.39,0],["ARCQuant",8.54,0],["NVFP4",8.63,0],["MicroMix",9.05,0],["CoQuant",9.18,0],["Atom",9.70,0],["SpinQuant",10.09,0],["QuaRot",10.72,0]],
+ "8B":[["bf16",6.14,1],["ProMix",6.56,2],["SharQ",6.68,0],["ARCQuant",6.81,0],["NVFP4",6.87,0],["CoQuant",7.35,0],["MicroMix",7.39,0],["Atom",7.57,0],["SpinQuant",7.88,0],["QuaRot",8.65,0]],
+ "13B":[["bf16",4.89,1],["ProMix",5.03,2]],
+ "70B":[["bf16",5.32,1],["ProMix (1/8)",5.98,2],["SharQ",5.77,0],["NVFP4",5.93,0],["ARCQuant",6.18,0]]
+},c4:{
+ "1B":[["bf16",18.52,1],["ProMix",19.71,2],["ARCQuant",20.79,0],["SharQ",20.96,0],["CoQuant",23.32,0]],
+ "3B":[["bf16",10.43,1],["ProMix",11.25,2],["SharQ",11.29,0],["ARCQuant",11.55,0],["MicroMix",12.28,0],["CoQuant",12.82,0]],
+ "8B":[["bf16",8.89,1],["ProMix",9.56,2],["SharQ",9.58,0],["ARCQuant",9.79,0],["MicroMix",10.56,0],["CoQuant",10.79,0]],
+ "13B":[["bf16",6.47,1],["ProMix",6.65,2]],
+ "70B":[["bf16",9.20,1],["ProMix (1/8)",9.85,2],["SharQ",9.66,0],["NVFP4",9.75,0],["ARCQuant",10.05,0]]
+}};
+const ZS={ // 0-shot avg (higher better)
+ "1B":[["bf16",59.33,1],["ProMix",57.01,2]],
+ "3B":[["bf16",68.11,1],["ProMix",66.33,2],["SharQ",66.64,0],["NVFP4",66.16,0],["ARCQuant",66.14,0],["MicroMix",65.14,0],["CoQuant",64.24,0]],
+ "8B":[["bf16",73.33,1],["ProMix",73.02,2],["SharQ",71.89,0],["NVFP4",71.48,0],["ARCQuant",71.47,0],["MicroMix",70.63,0]],
+ "13B":[["bf16",72.36,1],["ProMix",71.85,2]]
+};
+const MMLU={ // higher better
+ "3B":[["bf16",56.11,1],["ProMix",54.12,2],["SharQ",53.42,0],["ARCQuant",52.64,0],["NVFP4",52.63,0],["CoQuant",50.26,0],["MicroMix",49.79,0]],
+ "8B":[["bf16",65.28,1],["ProMix",62.85,2],["SharQ",62.87,0],["NVFP4",62.34,0],["ARCQuant",62.19,0],["CoQuant",59.81,0],["MicroMix",59.12,0]]
+};
+// ProMix per-ratio sweep (kind 1=shipped r=1/8, 0=other ratio). Only sizes/metrics with committed points.
+const PSWEEP={wiki:{
+ "3B":[["1/32",8.502],["1/16",8.421],["3/32",8.375],["1/8",8.370,1],["3/16",8.332],["1/4",8.283]],
+ "8B":[["1/32",6.817],["1/16",6.714],["1/8",6.640,1],["1/4",6.587]],
+ "70B":[["0.05",6.126],["1/8",5.983,1],["0.50",5.874],["0.75",5.773],["0.95",5.708]]
+},c4:{
+ "70B":[["0.05",9.956],["1/8",9.855,1],["0.75",9.615],["0.95",9.529],["1.00",9.496]]
+}};
+const CURVE=[[0.05,6.1261,9.9564],[0.10,6.0620,9.9091],[0.15,6.0602,9.9092],[0.20,5.9562,9.8380],[0.25,5.9983,9.8255],[0.30,5.9604,9.8009],[0.35,5.9012,9.7062],[0.40,5.8836,9.7075],[0.45,5.8644,9.7226],[0.50,5.8742,9.6740],[0.55,5.8586,9.6470],[0.60,5.8245,9.6571],[0.65,5.8271,9.6675],[0.75,5.7730,9.6150],[0.80,5.7994,9.5517],[0.85,5.7633,9.5633],[0.90,5.7322,9.5303],[0.95,5.7079,9.5288],[1.00,5.7476,9.4958]];
+const REF={wiki:[["bf16",5.3159],["NVFP4",5.928],["ARCQuant",6.1834],["SharQ",5.7693]],c4:[["bf16",9.2036],["ARCQuant",10.0487],["SharQ",9.6590]]};
+const BATCH=[1,16,32,64,128,256,512];
+const SERVE={ // decode-heavy 128/1024
+ tpot:{"3B":{BF16:[5.47,6.35,7.45,8.91,12.74,19.70,37.27],FP8:[3.63,4.41,5.25,6.91,10.07,18.23,32.63],GPTQ:[2.71,3.53,4.56,6.89,11.21,19.86,36.82],NVFP4:[3.42,3.86,4.72,6.45,9.69,16.51,30.35],ProMix:[4.09,5.21,6.29,8.11,11.29,18.14,32.80]},
+      "8B":{BF16:[11.46,12.37,13.80,15.98,20.11,29.50,57.03],FP8:[6.91,7.89,8.82,10.78,14.67,25.64,44.78],GPTQ:[4.52,5.49,6.66,9.58,16.33,28.59,54.90],NVFP4:[5.43,6.45,7.04,8.76,12.87,21.24,38.37],ProMix:[6.84,7.81,9.05,11.92,15.82,24.88,44.18]}},
+ gen:{"3B":{BF16:[183,2505,4253,7072,9822,12621,13314],FP8:[275,3608,6043,9147,12481,13769,15349],GPTQ:[368,4485,6888,9065,11091,12477,13431],NVFP4:[292,4110,6731,9832,13044,15286,16608],ProMix:[244,3051,5042,7801,11161,13834,15262]},
+      "8B":{BF16:[87,1286,2293,3926,6166,8302,8560],FP8:[145,2016,3589,5836,8505,9691,11014],GPTQ:[221,2867,4675,6437,7500,8498,8808],NVFP4:[184,2467,4509,7209,9767,11794,13030],ProMix:[146,2033,3499,5288,7909,9992,11209]}}
+};
+const SVCOL={BF16:'mBf16',FP8:'mFp8',GPTQ:'mGptq',NVFP4:'mNv',ProMix:'mPro'};
+const SVDASH={BF16:'4 3',FP8:'none',GPTQ:'2 3',NVFP4:'none',ProMix:'none'};
+const BOPS=[["FP16",256,256],["FP8",68,68],["GPTQ W4A16",64,64],["ProMix",22,22],["NVFP4",20,20],["SharQ",20,40],["INT4 (QuaRot/Atom)",16,64]];
+const BUILD=[["RTN 纯NVFP4",8.99],["+PCA U",13.54],["+ring512 R1",13.49],["+混合1/8",9.97],["+GPTQ",8.90],["+两级scale",8.60],["+act-MSE",8.42],["+measured(发货)",8.22],["+decode W4A16",7.95]];
+
+// ---------- hero ----------
+document.getElementById('hero').innerHTML=[
+ ['3B / 8B ProMix','8.22 / 6.56','wiki · 最好的 W4A4','win · ↓ SharQ 8.39/6.68'],
+ ['70B 可调最优','5.708','r0.95 · 比 SharQ 低 0.061','win · ↓ 反超'],
+ ['8B 0-shot','73.02','W4A4 第一 · 近无损 73.33',''],
+ ['70B 曲线','19 点','r0.05 → 1.00 全扫描',''],
+ ['serving 8B','≈NVFP4','大batch吞吐追平 NVFP4','']
+].map(t=>`<div class="tile"><p class="k">${t[0]}</p><p class="v">${t[1]}</p><p class="d">${t[3]?'<span class=win>'+t[3].split(' · ')[0]+'</span> · '+t[3].split(' · ').slice(1).join(' · ')+' · ':''}${t[2]}</p></div>`).join('');
+
+// ---------- generic horizontal bars ----------
+function bars(svgId,data,{higher=false,unit='',foot=null}={}){
+  const svg=document.getElementById(svgId);svg.innerHTML='';
+  const rows=data.slice().sort((a,b)=>higher?b[1]-a[1]:a[1]-b[1]);
+  const W=520,rowH=27,m={l:92,r:48,t:10,b:8};const H=m.t+rows.length*rowH+m.b;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const bf=data.find(d=>d[2]===1);const vals=data.map(d=>d[1]);
+  let xmin=Math.min(...vals),xmax=Math.max(...vals);const sp=(xmax-xmin)||1;xmin=Math.max(0,xmin-sp*0.12);xmax+=sp*0.12;
+  const X=v=>m.l+(v-xmin)/(xmax-xmin)*(W-m.l-m.r);
+  rows.forEach((d,i)=>{const y=m.t+i*rowH,isO=d[2]===2,isR=d[2]===1,isSw=d[2]===3;
+    const col=(isO||isSw)?c('series'):(isR?c('ref'):c('peer'));const op=isO?1:(isSw?.48:(isR?.9:.82));
+    const lb=el('text',{x:m.l-8,y:y+rowH/2+4,fill:(isO||isSw)?c('series'):c('ink2'),'font-size':11.5,'text-anchor':'end','font-weight':isO?700:500});lb.textContent=d[0];svg.appendChild(lb);
+    const w=Math.max(X(d[1])-m.l,1);
+    const r=el('rect',{x:m.l,y:y+5,width:w,height:rowH-11,rx:3,fill:col,opacity:op});
+    r.addEventListener('mousemove',e=>stip(e,`${d[0]} · <b>${d[1]}</b>${unit}`));r.addEventListener('mouseleave',htip);svg.appendChild(r);
+    const vt=el('text',{x:X(d[1])+5,y:y+rowH/2+4,fill:c('ink2'),'font-size':10.5,'font-weight':isO?700:500,'font-variant-numeric':'tabular-nums'});vt.textContent=d[1];svg.appendChild(vt);
+  });
+  if(bf){const x=X(bf[1]);svg.appendChild(el('line',{x1:x,y1:m.t,x2:x,y2:H-m.b,stroke:c('ref'),'stroke-width':1.4,'stroke-dasharray':'4 4',opacity:.75}));}
+  if(foot)document.getElementById(foot[0]).textContent=foot[1];
+}
+
+// ---------- 70B curve ----------
+function curve(id,idx,refs,title){
+  const svg=document.getElementById(id);svg.innerHTML='';
+  const W=500,H=290,m={l:46,r:12,t:28,b:36};svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const ys=CURVE.map(d=>d[idx]).concat(refs.map(r=>r[1]));let ymin=Math.min(...ys),ymax=Math.max(...ys);const pd=(ymax-ymin)*.08;ymin-=pd;ymax+=pd;
+  const X=v=>m.l+(v-.05)/.95*(W-m.l-m.r),Y=v=>m.t+(1-(v-ymin)/(ymax-ymin))*(H-m.t-m.b);
+  const tt=el('text',{x:m.l,y:15,fill:c('ink'),'font-size':12.5,'font-weight':600});tt.textContent=title;svg.appendChild(tt);
+  for(let i=0;i<=5;i++){const v=ymin+(ymax-ymin)*i/5,y=Y(v);svg.appendChild(el('line',{x1:m.l,y1:y,x2:W-m.r,y2:y,stroke:c('grid')}));
+    const t=el('text',{x:m.l-6,y:y+3.5,fill:c('muted'),'font-size':10,'text-anchor':'end'});t.textContent=v.toFixed(2);svg.appendChild(t);}
+  [0.05,0.25,0.5,0.75,1.0].forEach(v=>{const x=X(v);const t=el('text',{x:x,y:H-m.b+15,fill:c('muted'),'font-size':10,'text-anchor':'middle'});t.textContent=v;svg.appendChild(t);});
+  svg.appendChild(Object.assign(el('text',{x:(m.l+W-m.r)/2,y:H-2,fill:c('ink2'),'font-size':10.5,'text-anchor':'middle'}),{textContent:'高精度比例 r'}));
+  refs.forEach(r=>{const isS=r[0]==='SharQ',y=Y(r[1]);svg.appendChild(el('line',{x1:m.l,y1:y,x2:W-m.r,y2:y,stroke:isS?c('ink2'):c('muted'),'stroke-width':isS?2.2:1.5,'stroke-dasharray':isS?'7 4':'4 4',opacity:isS?1:.85}));
+    const t=el('text',{x:W-m.r-2,y:y-4,fill:isS?c('ink2'):c('muted'),'font-size':10,'text-anchor':'end','font-weight':isS?700:500});t.textContent=r[0]+' '+r[1].toFixed(2);svg.appendChild(t);});
+  svg.appendChild(el('path',{d:CURVE.map((d,i)=>(i?'L':'M')+X(d[0])+' '+Y(d[idx])).join(' '),fill:'none',stroke:c('series'),'stroke-width':3,'stroke-linejoin':'round'}));
+  const sq=refs.find(r=>r[0]==='SharQ');
+  CURVE.forEach(d=>{const b=sq&&d[idx]<sq[1];const ci=el('circle',{cx:X(d[0]),cy:Y(d[idx]),r:b?5:3.5,fill:b?c('good'):c('series'),stroke:c('surface'),'stroke-width':2});
+    ci.addEventListener('mousemove',e=>stip(e,`r=${d[0]} · <b>${d[idx].toFixed(3)}</b>${b?' ↓SharQ':''}`));ci.addEventListener('mouseleave',htip);svg.appendChild(ci);});
+}
+
+// ---------- multi-line (serving) ----------
+function serveChart(){
+  const size=cur('sv_size'),metric=cur('sv_metric');const svg=document.getElementById('sv_svg');svg.innerHTML='';
+  const d=SERVE[metric][size];const lower=metric==='tpot';
+  const W=560,H=320,m={l:52,r:70,t:14,b:40};svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  let all=[];Object.values(d).forEach(a=>all=all.concat(a));let ymin=0,ymax=Math.max(...all)*1.04;
+  const X=i=>m.l+i/(BATCH.length-1)*(W-m.l-m.r),Y=v=>m.t+(1-(v-ymin)/(ymax-ymin))*(H-m.t-m.b);
+  for(let i=0;i<=5;i++){const v=ymin+(ymax-ymin)*i/5,y=Y(v);svg.appendChild(el('line',{x1:m.l,y1:y,x2:W-m.r,y2:y,stroke:c('grid')}));
+    const t=el('text',{x:m.l-6,y:y+3.5,fill:c('muted'),'font-size':10,'text-anchor':'end'});t.textContent=Math.round(v);svg.appendChild(t);}
+  BATCH.forEach((b,i)=>{const t=el('text',{x:X(i),y:H-m.b+15,fill:c('muted'),'font-size':10,'text-anchor':'middle'});t.textContent='b'+b;svg.appendChild(t);});
+  svg.appendChild(Object.assign(el('text',{x:(m.l+W-m.r)/2,y:H-3,fill:c('ink2'),'font-size':10.5,'text-anchor':'middle'}),{textContent:'batch size'}));
+  svg.appendChild(Object.assign(el('text',{x:m.l,y:10,fill:c('ink2'),'font-size':10.5}),{textContent:lower?'TPOT ms（越低越好）':'生成 tok/s（越高越好）'}));
+  Object.entries(d).forEach(([name,arr])=>{const col=c(SVCOL[name]),isPro=name==='ProMix';
+    svg.appendChild(el('path',{d:arr.map((v,i)=>(i?'L':'M')+X(i)+' '+Y(v)).join(' '),fill:'none',stroke:col,'stroke-width':isPro?3:1.8,'stroke-dasharray':SVDASH[name]==='none'?'':SVDASH[name],opacity:isPro?1:.9,'stroke-linejoin':'round'}));
+    const lx=X(BATCH.length-1);svg.appendChild(Object.assign(el('text',{x:lx+5,y:Y(arr[arr.length-1])+3.5,fill:col,'font-size':10,'font-weight':isPro?700:500}),{textContent:name}));
+    arr.forEach((v,i)=>{const ci=el('circle',{cx:X(i),cy:Y(v),r:isPro?3.5:2.5,fill:col,stroke:c('surface'),'stroke-width':1.3});
+      ci.addEventListener('mousemove',e=>stip(e,`${name} b${BATCH[i]} · <b>${v}</b>`));ci.addEventListener('mouseleave',htip);svg.appendChild(ci);});});
+  // legend
+  document.getElementById('sv_legend').innerHTML=Object.keys(d).map(n=>`<span><i style="border-top:3px ${SVDASH[n]==='none'?'solid':'dashed'} ${c(SVCOL[n])}"></i>${n}</span>`).join('');
+}
+
+// ---------- BOPs grouped ----------
+function bopsChart(){
+  const svg=document.getElementById('bops_svg');svg.innerHTML='';
+  const W=560,rowH=38,m={l:130,r:40,t:10,b:8};const H=m.t+BOPS.length*rowH+m.b;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const xmax=256*1.02;const X=v=>m.l+v/xmax*(W-m.l-m.r);
+  BOPS.forEach((d,i)=>{const y=m.t+i*rowH;
+    svg.appendChild(Object.assign(el('text',{x:m.l-8,y:y+rowH/2+4,fill:c('ink2'),'font-size':11,'text-anchor':'end'}),{textContent:d[0]}));
+    [[d[1],c('bA'),0],[d[2],c('bB'),1]].forEach(([v,col,k])=>{const by=y+4+k*((rowH-10)/2);
+      const r=el('rect',{x:m.l,y:by,width:Math.max(X(v)-m.l,1),height:(rowH-12)/2,rx:2,fill:col,opacity:k?1:.85});
+      r.addEventListener('mousemove',e=>stip(e,`${d[0]} · ${k?'真实':'理论'} <b>${v}</b>`));r.addEventListener('mouseleave',htip);svg.appendChild(r);
+      svg.appendChild(Object.assign(el('text',{x:X(v)+4,y:by+(rowH-12)/4+3.5,fill:c('ink2'),'font-size':9.5,'font-weight':v!==(k?d[1]:d[2])&&k?700:400}),{textContent:v}));});});
+}
+
+// ---------- build-up ----------
+function buildChart(){
+  const svg=document.getElementById('build_svg');svg.innerHTML='';
+  const W=620,H=300,m={l:44,r:14,t:16,b:72};svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const ys=BUILD.map(d=>d[1]);let ymin=Math.min(...ys)-.5,ymax=Math.max(...ys)+.5;
+  const X=i=>m.l+i/(BUILD.length-1)*(W-m.l-m.r),Y=v=>m.t+(1-(v-ymin)/(ymax-ymin))*(H-m.t-m.b);
+  for(let i=0;i<=5;i++){const v=ymin+(ymax-ymin)*i/5,y=Y(v);svg.appendChild(el('line',{x1:m.l,y1:y,x2:W-m.r,y2:y,stroke:c('grid')}));
+    svg.appendChild(Object.assign(el('text',{x:m.l-6,y:y+3.5,fill:c('muted'),'font-size':10,'text-anchor':'end'}),{textContent:v.toFixed(1)}));}
+  svg.appendChild(el('path',{d:BUILD.map((d,i)=>(i?'L':'M')+X(i)+' '+Y(d[1])).join(' '),fill:'none',stroke:c('series'),'stroke-width':2.5}));
+  BUILD.forEach((d,i)=>{const dn=i>0&&d[1]<BUILD[i-1][1];const ci=el('circle',{cx:X(i),cy:Y(d[1]),r:4,fill:dn?c('good'):c('series'),stroke:c('surface'),'stroke-width':1.8});
+    ci.addEventListener('mousemove',e=>stip(e,`${d[0]} · <b>${d[1]}</b>`));ci.addEventListener('mouseleave',htip);svg.appendChild(ci);
+    svg.appendChild(Object.assign(el('text',{x:X(i),y:Y(d[1])-9,fill:c('ink2'),'font-size':9.5,'text-anchor':'middle','font-variant-numeric':'tabular-nums'}),{textContent:d[1]}));
+    const tx=el('text',{x:X(i),y:H-m.b+14,fill:c('ink2'),'font-size':9,'text-anchor':'end','transform':`rotate(-40 ${X(i)} ${H-m.b+14})`});tx.textContent=d[0];svg.appendChild(tx);});
+}
+
+// ---------- controls ----------
+function cur(id){return document.querySelector('#'+id+' button.on').dataset.v;}
+function wire(id,fn){document.querySelectorAll('#'+id+' button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('#'+id+' button').forEach(x=>x.classList.remove('on'));b.classList.add('on');fn();}));}
+function drawPPL(){const mt=cur('ppl_metric'),sz=cur('ppl_size');
+  let d=PPL[mt][sz].filter(x=>x[2]!==2);  // drop single ProMix point
+  const sw=PSWEEP[mt]&&PSWEEP[mt][sz];
+  if(sw){ sw.forEach(p=>d.push(["ProMix r="+p[0],p[1],p[2]===1?2:3])); }
+  else { const pm=PPL[mt][sz].find(x=>x[2]===2); if(pm)d.push(pm); }
+  bars('ppl_svg',d.slice(),{unit:''});
+  const sq=d.find(x=>x[0]==='SharQ');const ship=d.find(x=>x[2]===2);
+  document.getElementById('ppl_foot').textContent=`${sz} ${mt==='wiki'?'WikiText-2':'C4'} PPL`+(sw?` · ProMix 扫 ${sw.length} 个比例(r=1/8 发货=${ship?ship[1]:'—'}，深蓝)`:` · ProMix ${ship?ship[1]:'—'}`)+(sq?` · SharQ ${sq[1]}`:'');}
+function drawZS(){bars('zs_svg',ZS[cur('zs_size')],{higher:true});}
+function drawMMLU(){bars('mmlu_svg',MMLU[cur('mmlu_size')],{higher:true});}
+function renderAll(){
+  drawPPL();drawZS();drawMMLU();
+  curve('c_wiki',1,REF.wiki,'WikiText-2');curve('c_c4',2,REF.c4,'C4');
+  serveChart();bopsChart();buildChart();
+}
+wire('ppl_metric',drawPPL);wire('ppl_size',drawPPL);wire('zs_size',drawZS);wire('mmlu_size',drawMMLU);
+wire('sv_size',serveChart);wire('sv_metric',serveChart);
+document.getElementById('themeBtn').addEventListener('click',()=>{
+  document.documentElement.setAttribute('data-theme',th()==='dark'?'light':'dark');renderAll();});
+const sd=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+document.documentElement.setAttribute('data-theme',sd?'dark':'light');
+renderAll();
+</script>
+</body>
+</html>
