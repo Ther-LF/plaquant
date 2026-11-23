@@ -655,17 +655,26 @@ def _ceil_to_value(x: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
 
     For positive x. Used for block-scale rounding (round UP per spec Section 6).
     Falls back to max(values) if x exceeds any representable value.
+
+    Chunked over x: the (numel(x), V) comparison/masked tensors peaked at
+    ~17 GiB on 70B/14B-shaped scale tensors (CUDA OOM at low r where the
+    NVFP4 segment is largest). Processing x in fixed-size chunks is
+    bit-identical (each element's result is independent) with a <1 GiB peak.
     """
     values = values.to(x.device, dtype=x.dtype)
-    # idx of smallest value >= x; default to len(values)-1 if none satisfies
-    cmp = values.unsqueeze(0) >= x.unsqueeze(-1)  # (..., V)
-    has_geq = cmp.any(dim=-1)
-    # set values that aren't >= x to a large sentinel so argmin picks the right one
-    sentinel = torch.full_like(cmp, False)
-    masked = torch.where(cmp, values.expand_as(cmp), torch.full_like(cmp, float("inf"), dtype=values.dtype))
-    chosen = masked.min(dim=-1).values
-    chosen = torch.where(has_geq, chosen, values.max())
-    return chosen
+    flat = x.reshape(-1)
+    out = torch.empty_like(flat)
+    CHUNK = 4_000_000
+    vmax = values.max()
+    for i in range(0, flat.numel(), CHUNK):
+        xc = flat[i:i + CHUNK]
+        cmp = values.unsqueeze(0) >= xc.unsqueeze(-1)  # (chunk, V)
+        has_geq = cmp.any(dim=-1)
+        masked = torch.where(cmp, values.expand_as(cmp),
+                             torch.full_like(cmp, float("inf"), dtype=values.dtype))
+        chosen = masked.min(dim=-1).values
+        out[i:i + CHUNK] = torch.where(has_geq, chosen, vmax)
+    return out.reshape(x.shape)
 
 
 # ---------------------------------------------------------------------------
