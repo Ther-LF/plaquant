@@ -268,3 +268,48 @@ yaml.parser.ParserError: while parsing a block mapping
   in "/home/luofan/plaquant-densesweep/promix/configs/llama-3-70b-instruct-mxfp8-nvfp4-kv4.yaml", line 46, column 3
 expected <block end>, but found '<scalar>'
   in "/home/luofan/plaquant-densesweep/promix/configs/llama-3-70b-instruct-mxfp8-nvfp4-kv4.yaml", line 48, column 48
+Traceback (most recent call last):
+  File "/home/luofan/plaquant-densesweep/promix/scripts/rd_scale.py", line 316, in <module>
+    main()
+  File "/home/luofan/plaquant-densesweep/promix/scripts/rd_scale.py", line 196, in main
+    config = ptqmod.load_config(os.path.join(REPO, args.config))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/plaquant-densesweep/promix/eval/ptq.py", line 37, in load_config
+    return yaml.safe_load(f)
+           ^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/__init__.py", line 125, in safe_load
+    return load(stream, SafeLoader)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/__init__.py", line 81, in load
+    return loader.get_single_data()
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/constructor.py", line 49, in get_single_data
+    node = self.get_single_node()
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 36, in get_single_node
+    document = self.compose_document()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 55, in compose_document
+    node = self.compose_node(None, None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/composer.py", line 127, in compose_mapping_node
+    while not self.check_event(MappingEndEvent):
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/parser.py", line 98, in check_event
+    self.current_event = self.state()
+                         ^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/yaml/parser.py", line 438, in parse_block_mapping_key
+    raise ParserError("while parsing a block mapping", self.marks[-1],
+yaml.parser.ParserError: while parsing a block mapping
+  in "/home/luofan/plaquant-densesweep/promix/configs/llama-3-70b-instruct-mxfp8-nvfp4-kv4.yaml", line 46, column 3
+expected <block end>, but found '<scalar>'
+  in "/home/luofan/plaquant-densesweep/promix/configs/llama-3-70b-instruct-mxfp8-nvfp4-kv4.yaml", line 48, column 48
