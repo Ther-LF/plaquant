@@ -195,3 +195,8 @@ vs vLLM-NVFP4 0.88x; vs bf16 2.40x。Track B 线索: ours r=0 纯NVFP4 比 cuBLA
 ## NVFP4×Qwen3-14B 落地(2026-11-24)
 llm-compressor nvfp4 ckpt + bench_vllm 同协议: **wiki=8.898**(bf16 8.646, +0.25 合理)。
 ProMix 14B KV16 r=0.1=8.849 已低于它 → **r≥0.1 全程压 NVFP4**, 与 8B(9.90<10.07) 同构。跨架构+跨规模故事进一步加固。
+
+## GB10 单launch验证(2026-11-24)
+profiler 实抓 12 代表点: 每次 _gemm 恰好 1 个 CodesignFusedKernel(双 phase 同 kernel), 无两段式退化。
+sidecar: ours_gb10_uniform11.launch_verify.json (single_launch_verified: true)。
+Track B 素材: r=0 路径带 74us cast copy kernel(同 Pro6000 castfold 发现); GB10 上 splitk/smallm 窗口未触发(窗口按 Pro6000 调)。
