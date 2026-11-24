@@ -177,3 +177,10 @@ sanity-gate 过:wiki 低端单调下行 6.126→6.062→6.060→5.956(r0.25=5.99
 
 ## NVFP4×Qwen3-8B 落地(2026-11-23,表B Qwen列唯一可跑对手)
 llm-compressor NVFP4 ckpt + bench_vllm 同协议: **wiki=10.072**(bf16 9.725,+0.35 合理)。对比 ProMix Qwen8B 曲线: r=0.1 即 9.903<10.072,**r≥0.1 全程压 NVFP4**;r=0(10.92)略差于它=旋转无保护失配(与70B悬崖同机制,modelopt不旋转)。Qwen跨架构故事闭环: SharQ崩/ARC不可跑/NVFP4可跑但被压。
+
+## GB10 算子曲线落地(2026-11-24, Spark sub-agent)
+ours_gb10_uniform11.json: 18 shapes×2M×11r=396 点一次跑完(13min), cosine 全部≥0.9924, 无 OOM。
++ torch 对照锚点(torchfp4/fp8/bf16, 3B/8B)。GB10 中位比 Pro6000 慢 ~4.1x(2.0-10.4x);
+ProMix 混合 kernel 在 GB10 上对 fp16 中位 2.43x @r=1/8(最差 0.88x @70B down M8192, 超大K处 cuBLAS 反超)。
+**Track B 线索: 29 处 >2% 下凹集中在 K_high%128==64 的 r 点 — GB10 的 MXFP8 段对 128 对齐敏感(比 Pro6000 的 64-ring 更粗), 调优方向=配额对齐到 128。**
+数据: docs/rd_oppareto_data/{ours_gb10_uniform11,torch_gb10_m2048,torch_gb10_m8192}.json (commit 9a2ac19)
