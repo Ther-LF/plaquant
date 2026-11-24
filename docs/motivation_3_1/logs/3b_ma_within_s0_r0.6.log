@@ -1,0 +1,31 @@
+[run] 3b_ma_within_s0_r0.6 r_actual=0.6033 H=397824/659456 rep=raw
+Loading weights:   0%|          | 0/254 [00:00<?, ?it/s]Loading weights:  28%|██▊       | 71/254 [00:00<00:00, 705.92it/s]Loading weights:  56%|█████▌    | 142/254 [00:00<00:00, 681.73it/s]Loading weights:  83%|████████▎ | 211/254 [00:00<00:00, 674.64it/s]Loading weights: 100%|██████████| 254/254 [00:00<00:00, 657.40it/s]
+[transformers] [1mLlamaForCausalLM LOAD REPORT[0m from: /home/luofan/models/Llama-3.2-3B
+Key            | Status  | 
+---------------+---------+-
+lm_head.weight | MISSING | 
+
+Notes:
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+[rank0]:[W1124 18:02:31.899156720 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 3152019456 bytes (free: 3054370816, total: 101973819392).
+[rank0]:[W1124 18:02:32.984220874 CUDACachingAllocator.cpp:3933] memory allocation failed with OOM on device 0 while trying to allocate 3152019456 bytes (free: 3123576832, total: 101973819392).
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_m31.py", line 966, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_m31.py", line 956, in main
+[rank0]:     cmd_run(args)
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_m31.py", line 651, in cmd_run
+[rank0]:     qmodel, cfg = build_quant_model(mk, rep, alloc, cfg)
+[rank0]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_m31.py", line 414, in build_quant_model
+[rank0]:     model, cfg = build_float_model(mk, rep, cfg)
+[rank0]:                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_m31.py", line 116, in build_float_model
+[rank0]:     fuse_layer_norms(model)
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/quantize/fuse_norm.py", line 49, in fuse_layer_norms
+[rank0]:     fuse_ln_linear(model.model.norm, [model.lm_head])
+[rank0]:   File "/home/luofan/plaquant-metricsweep/promix/quantize/fuse_norm.py", line 16, in fuse_ln_linear
+[rank0]:     linear.weight.data = (W_ * layernorm.weight.double()).to(linear_dtype)
+[rank0]:                           ~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.94 GiB. GPU 0 has a total capacity of 94.97 GiB of which 2.91 GiB is free. Process 736448 has 45.60 GiB memory in use. Process 774143 has 32.51 GiB memory in use. Including non-PyTorch memory, this process has 13.93 GiB memory in use. Of the allocated memory 12.59 GiB is allocated by PyTorch, and 731.64 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+[rank0]:[W1124 18:02:32.511053370 ProcessGroupNCCL.cpp:1624] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
