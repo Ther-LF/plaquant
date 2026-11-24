@@ -115,13 +115,16 @@ def cosine(a, b):
 def dispatch_tag(mql, M):
     """Replicate MixedQuantLinear._gemm routing to label which path fires."""
     if mql.is_pure_nvfp4:
+        if (mql._cd_bias is not None and mql.out_dtype == torch.float16
+                and hasattr(mql._cd_bias, "single_nvfp4_gemm_prepacked_bias")):
+            return "single_phase_nvfp4_castfold"
         return "single_phase_nvfp4"
     skc = mql._splitk_cfg(M)
     if skc is not None:
         return f"splitk_cfg{skc[0]}_s{skc[1]}_d{skc[2]}"
     cfg = mql._smallm_cfg(M)
     if cfg is not None:
-        return "smallm_128x64"
+        return f"smallm_cfg{cfg}_128x64"
     if mql._cd_bias is not None:
         return "bias_castfold_128x128"
     return "fused_prepacked_128x128"

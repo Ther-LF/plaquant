@@ -349,6 +349,57 @@ static inline torch::TensorOptions u8opts(torch::Device dev) {
   return torch::TensorOptions().dtype(torch::kUInt8).device(dev);
 }
 
+// ---------------------------------------------------------------------------
+// KDA-GB10 round 2: tile-scheduler raster/swizzle control.
+// The static persistent scheduler's defaults (Heuristic raster, swizzle 1)
+// were implicitly tuned on 188-SM SM120; on 48-SM GB10 with LPDDR bandwidth
+// the default tile order thrashes DRAM on large grids (70B M=8192 measured
+// 2.6-3.5x slower than with swizzle, vs cuBLASLt 2-4x faster). Two layers:
+//   * env override (experiments): CD_SCHED_SWIZZLE (int, 0=off) and
+//     CD_SCHED_RASTER (0 heuristic / 1 AlongM / 2 AlongN), read once.
+//   * AUTO heuristic (shipping, GB10-only): applied ONLY when the device has
+//     <= 72 SMs (GB10=48; RTX Pro 6000=188 keeps its validated defaults) and
+//     no env override is set. From the r2/r2b probe grid (8 shapes x 3 M x
+//     {raster}x{swizzle}): swizzle 4 is a never-worse default (<=2% noise,
+//     up to 1.2x), swizzle 8 wins 1.2-3.5x exactly on big-grid big-B points:
+//     min(TM,TN)>=32 with N*K>=32Mi elems, or giant weights N*K>=100Mi.
+// Capture-safe: values depend only on (M,N,K, device), constant per launch.
+// ---------------------------------------------------------------------------
+static inline int cd_sched_swizzle() {
+  static int v = [] { const char* e = getenv("CD_SCHED_SWIZZLE"); return e ? atoi(e) : 0; }();
+  return v;
+}
+static inline int cd_sched_raster() {
+  static int v = [] { const char* e = getenv("CD_SCHED_RASTER"); return e ? atoi(e) : 0; }();
+  return v;
+}
+static inline int cd_sm_count() {
+  static int v = [] {
+    int dev = 0, sms = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess) return 0;
+    if (cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev) != cudaSuccess) return 0;
+    return sms;
+  }();
+  return v;
+}
+template <class SchedArgs>
+static inline void cd_apply_sched_env(SchedArgs& s, int Mi, int Ni, int Ki) {
+  int sw = cd_sched_swizzle();
+  int ro = cd_sched_raster();
+  if (sw == 0 && ro == 0 && cd_sm_count() > 0 && cd_sm_count() <= 72) {
+    // GB10 auto heuristic (see header comment).
+    int TM = (Mi + 127) / 128, TN = (Ni + 127) / 128;
+    int64_t nk = (int64_t)Ni * (int64_t)Ki;
+    sw = 4;
+    if ((std::min(TM, TN) >= 32 && nk >= (int64_t)32 << 20) || nk >= (int64_t)100 << 20)
+      sw = 8;
+  }
+  if (sw > 0) s.max_swizzle_size = sw;
+  using RO = decltype(s.raster_order);
+  if (ro == 1) s.raster_order = RO::AlongM;
+  else if (ro == 2) s.raster_order = RO::AlongN;
+}
+
 // ---- generic SF interleave (efficient by default; EFFICIENT=false -> old redundant) ----
 // SFB path: tile_atom_to_shape_SFB(make_shape(1,N,K,1)), rows=N.
 template <class BSConfig, int VEC, bool EFFICIENT>
@@ -585,6 +636,7 @@ static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, 
   arguments.K_high = Khi;
   arguments.epilogue = make_epi_args(D, Mi, Ni, alpha);
 
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo);
   static GemmDual gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;
@@ -656,6 +708,7 @@ torch::Tensor cd_single_nvfp4_gemm(torch::Tensor A, torch::Tensor SFA,
   arguments.K_high = 0;
   arguments.epilogue = make_epi_args(D, Mi, Ni, (float)alpha);
 
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Ki);
   static GemmSingle gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;
@@ -690,6 +743,7 @@ torch::Tensor cd_single_nvfp4_gemm_prepacked(torch::Tensor A, torch::Tensor phys
   arguments.K_high = 0;
   arguments.epilogue = make_epi_args(D, Mi, Ni, (float)alpha);
 
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Ki);
   static GemmSingle gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;

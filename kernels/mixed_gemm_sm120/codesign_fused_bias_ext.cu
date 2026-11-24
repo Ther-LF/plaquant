@@ -87,6 +87,7 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
     arguments.epilogue = epi_args;
   }
 
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo);
   static GemmDual gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;
@@ -94,7 +95,77 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
   return D;
 }
 
+// ---------------------------------------------------------------------------
+// KDA-GB10 round 1: SINGLE-PHASE NVFP4 (K_high==0) bias + cast fold. The pure-
+// NVFP4 route previously stored bf16 and paid a separate [M,N] `.to(fp16)`
+// round-trip (the r=0 74us direct_copy) — on bandwidth-bound GB10 that copy is
+// a large fraction of the whole GEMM. Same epilogue chain as the dual entry:
+//     D = half( float(bf16(acc_f32)) + float(bias[n]) )
+// bias-less layers pass a zero buffer (exact: every bf16 is an fp16).
+// GemmSingle here is FusedKernel<false> built with THIS module's fp16 bias
+// epilogue; the protected mainloop is byte-identical to the bf16 path.
+// ---------------------------------------------------------------------------
+torch::Tensor cd_single_nvfp4_gemm_prepacked_bias(torch::Tensor A, torch::Tensor physSFA,
+                                                  torch::Tensor B, torch::Tensor physSFB,
+                                                  c10::optional<torch::Tensor> bias_opt,
+                                                  int64_t M, int64_t N, int64_t K,
+                                                  double alpha = 1.0) {
+  TORCH_CHECK(K % 16 == 0, "K%16");
+  A = A.contiguous(); B = B.contiguous();
+  physSFA = physSFA.contiguous(); physSFB = physSFB.contiguous();
+  auto dev = A.device();
+  auto stream = at::cuda::getCurrentCUDAStream(dev.index());
+  int Mi=(int)M, Ni=(int)N, Ki=(int)K;
+
+  torch::Tensor bias_t;
+  torch::Tensor bias = bias_opt.has_value() ? *bias_opt : torch::Tensor();
+  if (bias.defined() && bias.numel() > 0) {
+    TORCH_CHECK(bias.scalar_type() == torch::kHalf, "bias must be fp16");
+    TORCH_CHECK(bias.numel() == N, "bias numel ", bias.numel(), " != N ", N);
+    bias_t = bias.contiguous();
+  } else {
+    bias_t = torch::zeros({N}, torch::TensorOptions().dtype(torch::kHalf).device(dev));
+  }
+
+  auto D = torch::empty({Mi, Ni}, torch::TensorOptions().dtype(torch::kHalf).device(dev));
+  auto nv_args = make_mainloop_args_pre<ForkNV, BSConfigNV>(A, physSFA, B, physSFB, Mi, Ni, Ki);
+
+  typename GemmSingle::Arguments arguments;
+  arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
+  arguments.problem_shape = {Mi, Ni, Ki, 1};
+  arguments.mainloop_nv = nv_args;
+  arguments.K_high = 0;
+  {
+    StrideC sC = cutlass::make_cute_packed_stride(StrideC{}, {Mi, Ni, 1});
+    StrideD sD = cutlass::make_cute_packed_stride(StrideD{}, {Mi, Ni, 1});
+    using ElementC = typename Epilogue::ElementC;
+    using ElementD = typename Epilogue::ElementD;
+    typename Epilogue::Arguments epi_args;
+    epi_args.thread.alpha = (float)alpha;
+    epi_args.thread.beta = 0.0f;
+    epi_args.thread.ptr_bias = reinterpret_cast<cutlass::half_t const*>(bias_t.data_ptr());
+    epi_args.thread.dBias = {_0{}, _1{}, 0};
+    epi_args.ptr_C = reinterpret_cast<ElementC const*>(D.data_ptr());
+    epi_args.dC = sC;
+    epi_args.ptr_D = reinterpret_cast<ElementD*>(D.data_ptr());
+    epi_args.dD = sD;
+    arguments.epilogue = epi_args;
+  }
+
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Ki);
+  static GemmSingle gemm;
+  static torch::Tensor ws_cache;
+  static bool checked = false;
+  run_with_cached_ws(gemm, arguments, dev, stream, ws_cache, checked, "single_bias");
+  return D;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("single_nvfp4_gemm_prepacked_bias", &cd_single_nvfp4_gemm_prepacked_bias,
+        "single-phase NVFP4 (K_high==0), fp16 out, bias + bf16-round + cast folded into the epilogue (KDA-GB10 r1)",
+        pybind11::arg("A"), pybind11::arg("physSFA"), pybind11::arg("B"), pybind11::arg("physSFB"),
+        pybind11::arg("bias"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"),
+        pybind11::arg("alpha") = 1.0);
   m.def("fused_gemm_prepacked_bias", &cd_fused_gemm_prepacked_bias,
         "dual-format fused GEMM, fp16 out, bias + bf16-round + cast folded into the epilogue; optional per-tensor epilogue alpha (two-level weight global)",
         pybind11::arg("A_lo"), pybind11::arg("physSFA_lo"), pybind11::arg("B_lo"), pybind11::arg("physSFB_lo"),

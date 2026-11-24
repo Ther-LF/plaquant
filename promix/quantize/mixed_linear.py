@@ -109,6 +109,47 @@ _SPLITK_TABLE = {
     (28672, 4096): [(8, 256, 0, 1, 0)],
 }
 
+# ---------------------------------------------------------------------------
+# KDA-GB10 r5 (target 2): GB10 (48-SM SM121) re-measured windows. The Pro6000
+# windows above are MISTUNED on GB10 — with 48 SMs the 128x128 grid already
+# fills the machine at small M, so cfg1 (128x64) LOSES 30-70% at M<=64 where
+# Pro6000 won 1.05-1.6x. Measured by /tmp/r5_smallm.py (graph-replay, r=1/8,
+# >=5%-win rule, docs/rd_oppareto_data/gb10_smallm_sweep.json):
+#   (3072,3072)  3B o     M128 cfg2 1.30x
+#   (4096,14336) 8B down  M256 cfg3 1.15x
+#   (3072,8192)  3B down  M64..128 stream-K 1.23-1.25x
+#   (4096,4096)  8B o     M8..32 sk-heuristic 1.05x, M256 1.12x
+#   (5120,3072)  3B qkv   M16..32 sk-heuristic 1.05x
+#   (4096,14336) 8B down  M1024 sk-heuristic 1.13x
+# Everything else: the shipping 128x128 castfold kernel is already best.
+# Selected automatically when the device has <=72 SMs (same gate as the
+# scheduler-swizzle heuristic); Pro6000 tables remain untouched.
+# ---------------------------------------------------------------------------
+_SMALLM_TABLE_GB10 = {
+    (3072, 3072): (128, 128, 2),     # (m_lo, m_hi, cfg)
+    (4096, 14336): (256, 256, 3),
+}
+_SPLITK_TABLE_GB10 = {
+    (3072, 8192): [(64, 128, 0, 1, 2)],
+    (4096, 4096): [(8, 32, 0, 1, 0), (256, 256, 0, 1, 0)],
+    (5120, 3072): [(16, 32, 0, 1, 0)],
+    (4096, 14336): [(1024, 1024, 0, 1, 0)],
+}
+
+
+def _low_sm_device():
+    """True on <=72-SM devices (GB10=48); Pro6000 (188) keeps its tables."""
+    global _LOW_SM
+    if _LOW_SM is None:
+        try:
+            _LOW_SM = torch.cuda.get_device_properties(0).multi_processor_count <= 72
+        except Exception:
+            _LOW_SM = False
+    return _LOW_SM
+
+
+_LOW_SM = None
+
 # vllm-perf r4 lever 1: Marlin W4A16 tensor-core small-M windows. Keyed by
 # (N, K); value = inclusive [m_lo, m_hi] window where the Marlin fp4 low-GEMM
 # + decode_gemv_w8a16_hi_add high-companion route beats the best W4A4 GEMM
@@ -243,6 +284,10 @@ class MixedQuantLinear(nn.Module):
         # single-phase NVFP4 GEMM (cd.single_nvfp4_gemm_prepacked), which reuses the
         # SAME tuned NVFP4 Phase-1 collective with Phase-2 skipped at compile time.
         self.is_pure_nvfp4 = (self.K_high == 0)
+        # KDA-GB10 r3: physical NVFP4 GEMM width (== K_low, or K_low+64 when the
+        # 128-alignment zero-pad is active in the packed weight). The GEMM and the
+        # qpf activation pack use K_low_pad; logical slicing/decode use K_low.
+        self.K_low_pad = int(getattr(packed, "K_low_pad", 0) or self.K_low)
         # K_low==0 (pure-MXFP8) has no single-phase MXFP8 real-kernel path -> refuse
         # clearly rather than silently serving a different split.
         if self.K_low == 0:
@@ -401,14 +446,19 @@ class MixedQuantLinear(nn.Module):
         if self.is_pure_nvfp4:
             x2d = x2d.contiguous()
             if self._qpf is not None:
-                a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low,
-                                                      row_stride=self.K, col_off=0)
+                a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low_pad,
+                                                      row_stride=self.K, col_off=0,
+                                                      K_valid=self.K_low)
                 return a_lo[0], a_lo[1], None, None
             x_lo = x2d[:, :self.K_low].contiguous()
             codes_lo, SFA_lo, _ = quantize_nvfp4_spec(x_lo.float())
-            a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low, True)
+            if self.K_low_pad != self.K_low:
+                pad = self.K_low_pad - self.K_low
+                codes_lo = torch.cat([codes_lo, torch.zeros(M, pad, dtype=codes_lo.dtype, device=codes_lo.device)], 1)
+                SFA_lo = torch.cat([SFA_lo, torch.zeros(M, pad // 16, dtype=SFA_lo.dtype, device=SFA_lo.device)], 1)
+            a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low_pad, True)
             return a_lo[0], a_lo[1], None, None
-        if self._qpfm is not None:
+        if self._qpfm is not None and self.K_low_pad == self.K_low:
             # LEVER 1 (pack fusion): one fused launch for BOTH the NVFP4 (low) and
             # MXFP8 (high) segments -> halves the pack launch count. Bit-exact to the
             # two-launch qpf path (same quant math, probe-verified torch.equal).
@@ -420,8 +470,9 @@ class MixedQuantLinear(nn.Module):
             # reading the low/high column slices of x2d IN PLACE (row_stride=K, col_off) —
             # no pre-slice or fp32-convert copies. fp16/bf16/fp32 all bit-exact.
             x2d = x2d.contiguous()
-            a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low,
-                                                  row_stride=self.K, col_off=0)
+            a_lo = self._qpf.quant_pack_float_fp4(x2d, M, self.N, self.K_low_pad,
+                                                  row_stride=self.K, col_off=0,
+                                                  K_valid=self.K_low)
             a_hi = self._qpf.quant_pack_float_fp8(x2d, M, self.N, self.K_high,
                                                   row_stride=self.K, col_off=self.K_low)
             return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
@@ -430,7 +481,11 @@ class MixedQuantLinear(nn.Module):
         x_hi = x2d[:, self.K_low:].contiguous()
         codes_lo, SFA_lo, _ = quantize_nvfp4_spec(x_lo.float())
         bytes_hi, SFA_hi, _ = quantize_mxfp8_spec(x_hi.float())
-        a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low, True)
+        if self.K_low_pad != self.K_low:
+            pad = self.K_low_pad - self.K_low
+            codes_lo = torch.cat([codes_lo, torch.zeros(M, pad, dtype=codes_lo.dtype, device=codes_lo.device)], 1)
+            SFA_lo = torch.cat([SFA_lo, torch.zeros(M, pad // 16, dtype=SFA_lo.dtype, device=SFA_lo.device)], 1)
+        a_lo = self._cd.quant_pack_fp4(codes_lo, SFA_lo, M, self.N, self.K_low_pad, True)
         a_hi = self._cd.quant_pack_fp8(bytes_hi, SFA_hi, M, self.N, self.K_high, True)
         return a_lo[0], a_lo[1], a_hi[0], a_hi[1]
 
@@ -440,6 +495,11 @@ class MixedQuantLinear(nn.Module):
         replay (gemm_probe) — see _SMALLM_TABLE. M is static per captured vLLM
         CUDA graph, so the branch is capture-safe (r1 pattern)."""
         if self._cd_sm is None:
+            return None
+        if _low_sm_device():
+            win = _SMALLM_TABLE_GB10.get((self.N, self.K))
+            if win is not None and win[0] <= M <= win[1]:
+                return win[2]
             return None
         win = _SMALLM_TABLE.get((self.N, self.K))
         if win is not None and win[0] <= M <= win[1]:
@@ -454,7 +514,8 @@ class MixedQuantLinear(nn.Module):
         if self._cd_sk is None or self.is_pure_nvfp4:
             return None
         mcap = _splitk_env_scale()
-        for m_lo, m_hi, cfg, splits, decomp in _SPLITK_TABLE.get((self.N, self.K), ()):
+        table = _SPLITK_TABLE_GB10 if _low_sm_device() else _SPLITK_TABLE
+        for m_lo, m_hi, cfg, splits, decomp in table.get((self.N, self.K), ()):
             if m_lo <= M <= min(m_hi, mcap):
                 return cfg, splits, decomp
         return None
@@ -465,11 +526,22 @@ class MixedQuantLinear(nn.Module):
         if self.is_pure_nvfp4:
             # Pure-NVFP4: single-phase NVFP4 GEMM (Phase-2 skipped at compile time),
             # reusing the fused kernel's tuned NVFP4 Phase-1. g_w rides the epilogue
-            # alpha exactly as in the dual path; bias is applied in torch (the
-            # single-phase entry has no bias-epilogue variant).
+            # alpha exactly as in the dual path.
+            # KDA-GB10 r1: when the bias/cast-fold ext carries the single-phase
+            # entry, fold the fp16 cast (+ bias) into the GEMM epilogue — same
+            # half(float(bf16(acc))+float(bias)) chain as the dual path, removes
+            # the [M,N] bf16->fp16 round-trip that dominated r=0 on
+            # bandwidth-bound GB10 (torch.equal-gated vs the two-step path).
+            if (self._cd_bias is not None and self.out_dtype == torch.float16
+                    and hasattr(self._cd_bias, "single_nvfp4_gemm_prepacked_bias")):
+                return self._cd_bias.single_nvfp4_gemm_prepacked_bias(
+                    A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                    self._bias_or_zero(A_lo.device),
+                    M, self.N, self.K_low_pad, self.g_w)
+            # Fallback: bf16 GEMM + torch cast/bias.
             D = self._cd.single_nvfp4_gemm_prepacked(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
-                M, self.N, self.K_low, self.g_w)
+                M, self.N, self.K_low_pad, self.g_w)
             D = D.to(self.out_dtype)
             if self.bias is not None:
                 D = D + self.bias.to(D.dtype)
@@ -480,7 +552,7 @@ class MixedQuantLinear(nn.Module):
             return self._cd_bias.fused_gemm_prepacked_bias(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                self.bias, M, self.N, self.K_low, self.K_high, self.g_w)
+                self.bias, M, self.N, self.K_low_pad, self.K_high, self.g_w)
         skc = self._splitk_cfg(M)
         cfg = self._smallm_cfg(M)
         if skc is not None:
@@ -491,7 +563,7 @@ class MixedQuantLinear(nn.Module):
             D = self._cd_sk.fused_gemm_prepacked_sk(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                M, self.N, self.K_low, self.K_high, self.g_w,
+                M, self.N, self.K_low_pad, self.K_high, self.g_w,
                 skc[0], skc[1], skc[2])
         elif cfg is not None:
             # vllm-perf r2 lever 1: small-M tile config (same math, same prepacked
@@ -500,7 +572,7 @@ class MixedQuantLinear(nn.Module):
             D = self._cd_sm.fused_gemm_prepacked_cfg(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                M, self.N, self.K_low, self.K_high, self.g_w, cfg)
+                M, self.N, self.K_low_pad, self.K_high, self.g_w, cfg)
         else:
             if self._cd_bias is not None:
                 # vllm-perf r5 lever 2 (cast fold): outside the r2/r3 windows
@@ -514,11 +586,11 @@ class MixedQuantLinear(nn.Module):
                     A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                     A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
                     self._bias_or_zero(A_lo.device),
-                    M, self.N, self.K_low, self.K_high, self.g_w)
+                    M, self.N, self.K_low_pad, self.K_high, self.g_w)
             D = self._cd.fused_gemm_prepacked(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                M, self.N, self.K_low, self.K_high, self.g_w,
+                M, self.N, self.K_low_pad, self.K_high, self.g_w,
             )
         D = D.to(self.out_dtype)
         if self.bias is not None:
@@ -572,6 +644,8 @@ class MixedQuantLinear(nn.Module):
         the (A_lo, pSFA_lo, A_hi, pSFA_hi) tuple for THIS Linear's N_gemm. Runs
         only the packed fused GEMM (plus the epilogue bias/cast when wired)."""
         A_lo, pSFA_lo, A_hi, pSFA_hi = packed
+        assert self.K_low_pad == self.K_low, \
+            "K_low 128-pad active: norm_pack producer does not pad yet (set PROMIX_KLOW_PAD=0)"
         M = A_hi.shape[0]
         return self._gemm(A_lo, pSFA_lo, A_hi, pSFA_hi, M)
 
@@ -583,6 +657,8 @@ class MixedQuantLinear(nn.Module):
         minus the fp32 [M, I] HBM round-trips."""
         in_shape = gate.shape
         I = in_shape[-1]
+        assert self.K_low_pad == self.K_low, \
+            "K_low 128-pad active: swiglu_pack producer does not pad yet (set PROMIX_KLOW_PAD=0)"
         g2d = gate.reshape(-1, I).contiguous()
         u2d = up.reshape(-1, I).contiguous()
         M = g2d.shape[0]
@@ -709,6 +785,8 @@ class MixedQuantLinear(nn.Module):
         allocation's down_proj) is allowed — both hadamard_pack entries
         TORCH_CHECK `K_high % 32 == 0 || K_high == 0` and emit an (M, 0) high
         pair that the single-phase _gemm ignores."""
+        if self.K_low_pad != self.K_low:
+            return False   # KDA-GB10 r3: hpk producers do not emit the 128-pad yet
         if self.K == 8192:
             return self._hpk is not None and hasattr(self._hpk, "hadamard_pack_mixed")
         if self.K == 14336:
@@ -737,6 +815,7 @@ class MixedQuantLinear(nn.Module):
     def can_gather_pack(self):
         """True iff forward_gather_pack is available (vllm-perf r3 lever 3)."""
         return (self._qpfm is not None and not self.is_pure_nvfp4
+                and self.K_low_pad == self.K_low
                 and hasattr(self._qpfm, "quant_pack_float_mixed_gather"))
 
     def forward_gather_pack(self, x, col_order_i32):

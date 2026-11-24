@@ -151,6 +151,13 @@ class PackedWeight:
     # dequantized reference (kernel numerics), for building the fake-quant ref
     W_deq: torch.Tensor            # (N, K) float32, cat([deq_lo, deq_hi], -1)
     bias: torch.Tensor = None      # (N,) or None
+    # KDA-GB10 r3: PHYSICAL NVFP4 contraction width of the packed GEMM buffers.
+    # == K_low normally; == K_low+64 when the 128-alignment pad is active
+    # (K_low%128==64 measured +11-19% on B-heavy shapes: packed A/B rows are
+    # only 64B-aligned and the NV phase ends on a half k-tile). The pad columns
+    # are zero codes + zero SF, contributing exactly 0.0 — bit-exact outputs.
+    # Logical split (x slicing, decode buffers) always uses K_low. 0 == K_low.
+    K_low_pad: int = 0
     # Round-6 two-level weight global: per-tensor FP32 g carried on the fused-GEMM
     # epilogue alpha (D = g*(A@B)). 1.0 = single-level (no epilogue scaling).
     g_w: float = 1.0
@@ -161,6 +168,20 @@ class PackedWeight:
     S_lo_dec: torch.Tensor = None  # (N, K_low/16) float32, NVFP4 block scale
     W_hi_dec: torch.Tensor = None  # (N, K_high) uint8, FP8 E4M3 bytes
     S_hi_dec: torch.Tensor = None  # (N, K_high/32) float32, MXFP8 block scale
+
+
+def klow_pad_enabled():
+    """KDA-GB10 r3: pad K_low 64->128 alignment. Default ON only on low-SM
+    devices (GB10=48; RTX Pro 6000=188 keeps validated behavior); override with
+    PROMIX_KLOW_PAD=0/1."""
+    import os
+    v = os.environ.get("PROMIX_KLOW_PAD", "")
+    if v in ("0", "1"):
+        return v == "1"
+    try:
+        return torch.cuda.get_device_properties(0).multi_processor_count <= 72
+    except Exception:
+        return False
 
 
 def split_k(K, high_fraction=0.125):
@@ -237,8 +258,22 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     # --- NVFP4 low/main segment (frozen GPTQ scale when available, else RTN) ---
     codes_lo, SFB_lo, deq_lo = quantize_nvfp4_spec(W_lo, frozen_scale=frozen_nvfp4_scale,
                                                    global_scale=global_scale)
-    W_lo_packed = nv.pack_fp4(codes_lo)
-    physSFB_lo = cd.prepack_sf_fp4_b(SFB_lo.contiguous(), N, K_low)
+    # KDA-GB10 r3: 128-alignment pad of the PHYSICAL NVFP4 GEMM buffers (see
+    # PackedWeight.K_low_pad). Zero codes + zero SF pad blocks -> exact 0.0
+    # contribution; activation side mirrors this via quant_pack_float_fp4's
+    # K_valid (zero pad blocks). Decode/W4A16 buffers below stay logical.
+    K_low_pad = K_low
+    if K_low % 128 == 64 and klow_pad_enabled():
+        K_low_pad = K_low + 64
+    if K_low_pad != K_low:
+        codes_pack = torch.cat(
+            [codes_lo, torch.zeros(N, K_low_pad - K_low, dtype=torch.uint8, device=dev)], 1)
+        SFB_pack = torch.cat(
+            [SFB_lo, torch.zeros(N, (K_low_pad - K_low) // 16, dtype=torch.uint8, device=dev)], 1)
+    else:
+        codes_pack, SFB_pack = codes_lo, SFB_lo
+    W_lo_packed = nv.pack_fp4(codes_pack)
+    physSFB_lo = cd.prepack_sf_fp4_b(SFB_pack.contiguous(), N, K_low_pad)
 
     # --- MXFP8 high segment (frozen GPTQ scale when available, else RTN) ---
     # K_high==0 (pure-NVFP4 Linear, e.g. rate-distortion low-budget): there is NO
@@ -272,7 +307,7 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     S_lo_dec = (SFB_lo.view(torch.float8_e4m3fn).float() * g).contiguous()
 
     return PackedWeight(
-        N=N, K=K, K_low=K_low, K_high=K_high,
+        N=N, K=K, K_low=K_low, K_high=K_high, K_low_pad=K_low_pad,
         W_lo_packed=W_lo_packed.contiguous(),
         physSFB_lo=physSFB_lo.contiguous(),
         W_hi_bytes=bytes_hi.contiguous(),

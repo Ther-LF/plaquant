@@ -200,3 +200,10 @@ ProMix 14B KV16 r=0.1=8.849 已低于它 → **r≥0.1 全程压 NVFP4**, 与 8B
 profiler 实抓 12 代表点: 每次 _gemm 恰好 1 个 CodesignFusedKernel(双 phase 同 kernel), 无两段式退化。
 sidecar: ours_gb10_uniform11.launch_verify.json (single_launch_verified: true)。
 Track B 素材: r=0 路径带 74us cast copy kernel(同 Pro6000 castfold 发现); GB10 上 splitk/smallm 窗口未触发(窗口按 Pro6000 调)。
+
+## KDA GB10 调优收官(2026-11-24, 6轮迭代, kda_gb10_log.md)
+验收达成: r=0 vs FP4 0.55→**0.95**(超Pro6000 0.81); r=1/8 vs FP8 1.32→**1.58**; r=1/2 1.08→1.22; 曲线单调平滑。
+正确性零损失: 396点 cosine 逐bit同调优前; 12点profiler复验单launch。
+四靶点: ①r=0 castfold entry(bit-exact, 1.4-1.9x) ②GB10专属smallm/splitk窗口表(按SM数切换)
+③128对齐根因=K_low补集对齐→pack零填充(70B down 1.16x) ④**scheduler swizzle heuristic**(48-SM大grid崩溃修复, 1.2-3.5x, 70B qkvo M8192 0.46→1.60)。
+遗留: 小K shape(1B gate_up)受100KB SMEM限制仅1.10x; 高r swizzle启发式可再传K_total; serve侧producer未支持K_low pad(已守卫)。

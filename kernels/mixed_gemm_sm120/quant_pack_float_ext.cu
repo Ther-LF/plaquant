@@ -177,10 +177,22 @@ __global__ void qpf8_kernel(uint8_t* __restrict__ data_out, uint8_t* __restrict_
 template <class TIn, class LayoutSF>
 __global__ void qpf4_kernel(uint8_t* __restrict__ data_out, uint8_t* __restrict__ sf_out,
                             const TIn* __restrict__ x, LayoutSF layout,
-                            int rows, int nblk, int K, int row_stride, int col_off) {
+                            int rows, int nblk, int K, int row_stride, int col_off,
+                            int K_valid) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= rows * nblk) return;
   int r = idx / nblk, b = idx % nblk;
+  // KDA-GB10 r3 (K_low 128-alignment pad): blocks beyond K_valid are PAD —
+  // emit zero codes + zero SF (contributes exactly 0.0 to the fp32 accum).
+  // The pad exists only so the packed row stride / k-tile count are 128-aligned
+  // (misaligned K_low measured +11-19% on B-heavy shapes).
+  if (b * 16 >= K_valid) {
+    sf_out[layout(make_coord(r, b * 16, 0))] = 0;
+    int obase_p = r * (K / 2) + b * 8;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) data_out[obase_p + j] = 0;
+    return;
+  }
   int base = r * row_stride + col_off + b * 16;
   float xf[16]; float bmax = 0.0f;
 #pragma unroll
@@ -208,7 +220,8 @@ __global__ void qpf4_kernel(uint8_t* __restrict__ data_out, uint8_t* __restrict_
 template <class LayoutSF, int FMT>
 static void launch_qpf(torch::Tensor x, uint8_t* data_out, uint8_t* sf_out,
                        LayoutSF layout, int rows, int nblk, int K, int row_stride, int col_off,
-                       cudaStream_t stream) {
+                       cudaStream_t stream, int K_valid = -1) {
+  if (K_valid < 0) K_valid = K;
   int tpb = 256;
   // fp8: one warp per block -> grid over rows*nblk warps. fp4: one thread per block.
   long units = (FMT == 8) ? (long)rows * nblk * 32 : (long)rows * nblk;
@@ -219,7 +232,7 @@ static void launch_qpf(torch::Tensor x, uint8_t* data_out, uint8_t* sf_out,
     if (FMT == 8)                                                                       \
       qpf8_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off); \
     else                                                                                \
-      qpf4_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off); \
+      qpf4_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off, K_valid); \
   } while (0)
   if (st == torch::kFloat32)      LAUNCH(float, x.data_ptr<float>());
   else if (st == torch::kFloat16) LAUNCH(half, reinterpret_cast<const half*>(x.data_ptr<at::Half>()));
@@ -234,8 +247,11 @@ static void launch_qpf(torch::Tensor x, uint8_t* data_out, uint8_t* sf_out,
 // (M, row_stride) activation and this segment is columns [col_off, col_off+K)
 // read in place (no pre-slice/convert copy) — the fast path used by MixedQuantLinear.
 std::vector<torch::Tensor> quant_pack_float_fp4(torch::Tensor x, int64_t M, int64_t N, int64_t K,
-                                                int64_t row_stride, int64_t col_off) {
+                                                int64_t row_stride, int64_t col_off,
+                                                int64_t K_valid) {
   TORCH_CHECK(x.is_cuda(), "x CUDA"); TORCH_CHECK(K % 16 == 0, "K%16 (NVFP4 block-16)");
+  if (K_valid < 0) K_valid = K;
+  TORCH_CHECK(K_valid % 16 == 0 && K_valid <= K, "K_valid%16, K_valid<=K");
   init_grids_once();
   x = x.contiguous();
   int rs = (row_stride < 0) ? (int)K : (int)row_stride;
@@ -248,7 +264,7 @@ std::vector<torch::Tensor> quant_pack_float_fp4(torch::Tensor x, int64_t M, int6
   auto sf_out = (nblk % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev))
                 : torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
   launch_qpf<decltype(layout_SFA), 4>(x, data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
-                                      layout_SFA, Mi, nblk, Ki, rs, co, stream);
+                                      layout_SFA, Mi, nblk, Ki, rs, co, stream, (int)K_valid);
   data_out = data_out.view({Mi, Ki / 2});
   return {data_out, sf_out};
 }
@@ -275,9 +291,11 @@ std::vector<torch::Tensor> quant_pack_float_fp8(torch::Tensor x, int64_t M, int6
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("quant_pack_float_fp4", &quant_pack_float_fp4,
-        "fused float->NVFP4 quantize+pack+interleaved-SF; returns {packed(M,K/2), physSFA}",
+        "fused float->NVFP4 quantize+pack+interleaved-SF; returns {packed(M,K/2), physSFA}. "
+        "K_valid<K emits zero codes/SF for pad blocks [K_valid,K) (128-alignment pad)",
         pybind11::arg("x"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"),
-        pybind11::arg("row_stride") = -1, pybind11::arg("col_off") = 0);
+        pybind11::arg("row_stride") = -1, pybind11::arg("col_off") = 0,
+        pybind11::arg("K_valid") = -1);
   m.def("quant_pack_float_fp8", &quant_pack_float_fp8,
         "fused float->MXFP8 quantize+bytes+interleaved-SF; returns {bytes(M,K), physSFA}",
         pybind11::arg("x"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"),
