@@ -95,26 +95,26 @@ def apply_group_rotations(model, alloc, mk, ratio, rot_seed):
         Rh = make_rotation(mk, name, ratio, "high", rot_seed, h) \
             if h > 0 else None
         W = w.module.weight.data
-        dev = W.device
+        dev = W.device          # NB: after fuse_basis the weights live on CPU
         dt = W.dtype
-        W64 = W.to(torch.float64)
+        W64 = W.to(DEV, torch.float64)   # rotate on GPU
         resid = 0.0
         if Rl is not None:
-            Rld = Rl.to(dev)
+            Rld = Rl.to(DEV)
             W64[:, :split] = W64[:, :split] @ Rld
             resid = max(resid, float((Rld @ Rld.T
                                       - torch.eye(split, dtype=torch.float64,
-                                                  device=dev)).abs().max()))
+                                                  device=DEV)).abs().max()))
         if Rh is not None:
-            Rhd = Rh.to(dev)
+            Rhd = Rh.to(DEV)
             W64[:, split:] = W64[:, split:] @ Rhd
             resid = max(resid, float((Rhd @ Rhd.T
                                       - torch.eye(h, dtype=torch.float64,
-                                                  device=dev)).abs().max()))
-        w.module.weight.data = W64.to(dt)
+                                                  device=DEV)).abs().max()))
+        w.module.weight.data = W64.to(dev, dt)
         w._m31_group_rot = (
-            Rl.to(dev, torch.float16) if Rl is not None else None,
-            Rh.to(dev, torch.float16) if Rh is not None else None,
+            Rl.to(DEV, torch.float16) if Rl is not None else None,
+            Rh.to(DEV, torch.float16) if Rh is not None else None,
             split,
         )
         tman[name] = dict(
@@ -168,10 +168,10 @@ def apply_act_rotation(x, rot):
     parts = []
     if split > 0:
         xl = x[..., :split]
-        parts.append(xl @ Rl.to(xl.dtype) if Rl is not None else xl)
+        parts.append(xl @ Rl.to(xl.device, xl.dtype) if Rl is not None else xl)
     if x.shape[-1] - split > 0:
         xh = x[..., split:]
-        parts.append(xh @ Rh.to(xh.dtype) if Rh is not None else xh)
+        parts.append(xh @ Rh.to(xh.device, xh.dtype) if Rh is not None else xh)
     return torch.cat(parts, dim=-1)
 
 
