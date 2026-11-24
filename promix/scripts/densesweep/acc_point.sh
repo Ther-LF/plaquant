@@ -16,7 +16,7 @@ cd $REPO
 
 echo "[acc_point] $TAG gpu=${CUDA_VISIBLE_DEVICES:-?} $(date)"
 if [ ! -f $OUT ]; then
-  if [ "$SIZE" = "70b" ]; then
+  if [[ "$SIZE" == 70b* ]]; then   # 70b and 70b_kv4 both need layer-offload
     DRIVER=promix/scripts/rd_scale.py; DONEMARK=RDSCALE_DONE
   else
     DRIVER=promix/scripts/rd_acctune.py; DONEMARK=ACCTUNE_DONE
@@ -26,7 +26,7 @@ if [ ! -f $OUT ]; then
     $VENV_PY $DRIVER --config $CFG_ACC --point $TAG \
       --substrate ring --ring_size 512 --alloc measured --budget_frac $R \
       --gptq_nsamples $GPTQ_N ${PD:+--percdamp $PD} --c4 \
-      --stats_cache $WORK/stats_${SIZE}_ring512.pt \
+      --stats_cache $WORK/stats_${SIZE%_kv4}_ring512.pt \
       --out $OUT > $WORK/logs/acc_${TAG}.log 2>&1
   grep -q $DONEMARK $WORK/logs/acc_${TAG}.log || {
     echo "[acc_point] FAILED $TAG (see logs/acc_${TAG}.log)"; rm -f $OUT; exit 1; }

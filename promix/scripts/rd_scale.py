@@ -48,6 +48,19 @@ sys.path.insert(0, os.path.join(REPO, "promix", "scripts"))
 
 import transformers
 
+# The layer-offload evaluator path (promix/eval/evaluator.py Catcher +
+# per-layer replay) only matches the transformers-4.x Llama internals;
+# under transformers>=5 (e.g. the drifted baselines venv, TF 5.17) the
+# same run dies mid-collect with a cryptic RoPE broadcast error
+# ('size of tensor a (num_heads) must match b (head_dim)') -- see
+# docs/rd_acctune_data/densesweep/log_70b_kv4.log. common.sh pins
+# VENV_PY=/usr/bin/python (TF 4.48.1); fail fast instead of crashing.
+if int(transformers.__version__.split('.')[0]) >= 5:
+    sys.exit(f'rd_scale: transformers {transformers.__version__} is not '
+             'supported (offload evaluator needs 4.x). Run with '
+             '/usr/bin/python (TF 4.48.1), see '
+             'promix/scripts/densesweep/common.sh VENV_PY.')
+
 from promix.utils import DEV, cleanup_memory
 from promix.eval import ptq as ptqmod
 from promix.eval.evaluator import evaluate_ppl

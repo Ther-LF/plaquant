@@ -37,6 +37,9 @@ size_knobs() {       # $1 = size -> sets CFG_SERVE CFG_ACC GPTQ_N PD WMSE LOADDE
     70b) CFG_SERVE=""   # 70B serving: plugin has no TP + disk-blocked (E2)
          CFG_ACC=promix/configs/llama-3-70b-instruct-mxfp8-nvfp4.yaml
          GPTQ_N=512; LOADDEV=cpu ;;
+    70b_kv4) CFG_SERVE=""  # 70B + NVFP4 KV cache (same offload lane as 70b)
+         CFG_ACC=promix/configs/llama-3-70b-instruct-mxfp8-nvfp4-kv4.yaml
+         GPTQ_N=512; LOADDEV=cpu ;;
     *) echo "unknown size $1" >&2; return 2 ;;
   esac
 }
