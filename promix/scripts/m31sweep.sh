@@ -11,7 +11,7 @@ set -u
 REPO=/home/luofan/plaquant-metricsweep
 PY=/home/luofan/baselines/venv/bin/python
 GPU=$1; LANE=$2; MODEL=$3; shift 3
-GRID="0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0"
+GRID="0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1"   # must match python %g formatting of run ids
 OUTD=$REPO/docs/motivation_3_1
 DATA=$OUTD/data
 FAIL=$OUTD/failures.csv
