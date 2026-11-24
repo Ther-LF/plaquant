@@ -191,3 +191,7 @@ torch_gb10_ext_m{2048,8192}.json + vllm_gb10_ext_m{2048,8192}.json: 18 shapes×2
 FP8→cutlass3x_sm120 ue8m0xe4m3; vLLM→flashinfer CUTLASS Sm120 BlockScaled; bf16=cuBLAS nvjet(仅参考锚点)。
 GB10 @r=1/8 vs baseline(中位): **vs 纯FP8 1.31x 快**(主胜点, 精度相当区间); vs 纯FP4 0.77x(精度换速度对角点);
 vs vLLM-NVFP4 0.88x; vs bf16 2.40x。Track B 线索: ours r=0 纯NVFP4 比 cuBLASLt NVFP4 慢 1.82x — SM121 未调优。
+
+## NVFP4×Qwen3-14B 落地(2026-11-24)
+llm-compressor nvfp4 ckpt + bench_vllm 同协议: **wiki=8.898**(bf16 8.646, +0.25 合理)。
+ProMix 14B KV16 r=0.1=8.849 已低于它 → **r≥0.1 全程压 NVFP4**, 与 8B(9.90<10.07) 同构。跨架构+跨规模故事进一步加固。
