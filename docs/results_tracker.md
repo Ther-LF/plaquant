@@ -184,3 +184,10 @@ ours_gb10_uniform11.json: 18 shapes×2M×11r=396 点一次跑完(13min), cosine 
 ProMix 混合 kernel 在 GB10 上对 fp16 中位 2.43x @r=1/8(最差 0.88x @70B down M8192, 超大K处 cuBLAS 反超)。
 **Track B 线索: 29 处 >2% 下凹集中在 K_high%128==64 的 r 点 — GB10 的 MXFP8 段对 128 对齐敏感(比 Pro6000 的 64-ring 更粗), 调优方向=配额对齐到 128。**
 数据: docs/rd_oppareto_data/{ours_gb10_uniform11,torch_gb10_m2048,torch_gb10_m8192}.json (commit 9a2ac19)
+
+## GB10 kernel 级 baseline 返工落地(2026-11-24, 同 Pro6000 协议)
+torch_gb10_ext_m{2048,8192}.json + vllm_gb10_ext_m{2048,8192}.json: 18 shapes×2M, method 字段与 Pro6000 一致。
+**kernel 证据(torch.profiler, backend 字段)**: FP4=_scaled_mm_v2→cuBLASLt→cutlass3x_sm120 block_scaled ue4m3xe2m1;
+FP8→cutlass3x_sm120 ue8m0xe4m3; vLLM→flashinfer CUTLASS Sm120 BlockScaled; bf16=cuBLAS nvjet(仅参考锚点)。
+GB10 @r=1/8 vs baseline(中位): **vs 纯FP8 1.31x 快**(主胜点, 精度相当区间); vs 纯FP4 0.77x(精度换速度对角点);
+vs vLLM-NVFP4 0.88x; vs bf16 2.40x。Track B 线索: ours r=0 纯NVFP4 比 cuBLASLt NVFP4 慢 1.82x — SM121 未调优。
