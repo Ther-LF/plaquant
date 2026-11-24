@@ -1,0 +1,200 @@
+{
+ "single_launch_verified": true,
+ "verified_on": "DGX Spark GB10 (SM121), torch 2.14.0+cu130, torch.profiler, 10 calls/point",
+ "evidence_kernel": "cutlass::device_kernel<codesign::CodesignFusedKernel<..., CodesignBlockScaledMma, ...>> \u2014 ONE GEMM kernel per _gemm call at every probed point; no second GEMM launch, no separate combine/add kernel",
+ "dispatch_tags_in_curve": {
+  "bias_castfold_128x128": 360,
+  "single_phase_nvfp4": 36
+ },
+ "note_r0_path": "single_phase_nvfp4 (r=0) rows additionally launch one at::native elementwise direct_copy kernel per call (not a GEMM; e.g. 3B qkvo M=2048: 74us copy vs 158us gemm) \u2014 overhead lead for the r=0 path on GB10",
+ "probed_points": [
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 2048,
+   "r": 0.0,
+   "K_high": 0,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 158.1
+    },
+    {
+     "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, s...",
+     "count_per_call": 1.0,
+     "us_per_call": 73.9
+    }
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 2048,
+   "r": 0.125,
+   "K_high": 384,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 165.1
+    }
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 2048,
+   "r": 0.5,
+   "K_high": 1536,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 211.6
+    }
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 8192,
+   "r": 0.0,
+   "K_high": 0,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 609.7
+    },
+    {
+     "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, s...",
+     "count_per_call": 1.0,
+     "us_per_call": 447.7
+    }
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 8192,
+   "r": 0.125,
+   "K_high": 384,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 667.3
+    }
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "qkvo",
+   "M": 8192,
+   "r": 0.5,
+   "K_high": 1536,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 807.5
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 2048,
+   "r": 0.0,
+   "K_high": 0,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 4749.7
+    },
+    {
+     "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, s...",
+     "count_per_call": 1.0,
+     "us_per_call": 270.1
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 2048,
+   "r": 0.125,
+   "K_high": 3584,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 4980.3
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 2048,
+   "r": 0.5,
+   "K_high": 14336,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 6344.6
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 8192,
+   "r": 0.0,
+   "K_high": 0,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 42595.7
+    },
+    {
+     "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, s...",
+     "count_per_call": 1.0,
+     "us_per_call": 1160.7
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 8192,
+   "r": 0.125,
+   "K_high": 3584,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 46556.7
+    }
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 8192,
+   "r": 0.5,
+   "K_high": 14336,
+   "kernels": [
+    {
+     "name": "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScaledMmaILi4ELi3ENS4_IJNS3_1CILi1EEESA_SA_EEENS6_51KernelTmaWarpSpecializedCooperati...",
+     "count_per_call": 1.0,
+     "us_per_call": 57148.7
+    }
+   ]
+  }
+ ]
+}
