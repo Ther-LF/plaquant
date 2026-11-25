@@ -1,0 +1,66 @@
+{
+  "task": "motivation 3.1 (M31)",
+  "date": "2026-11-25",
+  "code_commit": "d7e5164242ed9540a69ebb9b11cf48f8cd5408b9",
+  "models": {
+    "3b": "/home/luofan/models/Llama-3.2-3B",
+    "8b": "/home/luofan/models/llama-3-8b"
+  },
+  "model_config_sha": {
+    "3b": "c0a6833b9da6e99a",
+    "8b": "f39827328c0284ab"
+  },
+  "eligible": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj"
+  ],
+  "o_proj": "excluded from allocation AND quantization (fp16 in all configs); reason: per-head PCA path only exists in AV representation",
+  "shared_input_note": "q/k/v (and gate/up) share inputs but masks are independent per projection; scored strategies coincide by construction, RND independent per projection",
+  "kv": "fp16 (KV16)",
+  "lm_head": "fp16",
+  "formats": {
+    "main": "nvfp4 blk16 (two-level E4M3 scale, act-MSE search steps=3 fast)",
+    "high": "mxfp8 blk32 (E8M0, weight-A2)"
+  },
+  "feasible_quota": "F_l={h: h%32==0, (d-h)%16==0}; within h=nearest to r*d (tie smaller); across: prefix-increment 32-chunk greedy at same H",
+  "packing": "[unselected asc | selected asc] column permutation applied to activations and weight columns; block scales recomputed on final layout",
+  "score_defs": {
+    "rnd": "fixed randperm priority per model/module/seed (md5-derived)",
+    "ss": "sum x^2 / N",
+    "ma": "sum |x| / N",
+    "av": "centered variance of Z=XU on PCA rep (clamped at 0); basis is UNCENTERED second moment X^T X, 1pct damping, eigh ascending; down_proj rep = online Hadamard"
+  },
+  "fit": "wikitext2-train 512x2048 seed0 window sequence; score collection = first 2 windows (4096 tokens, all projections same token positions); GPTQ = first 128 windows (prefix subset)",
+  "heldout": "32x2048 wikitext2-train windows, seed 31001, rejected overlap with the 512 fit windows; offsets recorded per run json",
+  "ppl": "wiki test full (seqlen2048, equal windows => window-mean == token-mean NLL), C4 val 256 windows seed0; input sha in run jsons",
+  "gptq": {
+    "nsamples": 128,
+    "percdamp": 0.01,
+    "w_clip": true,
+    "act_order": false,
+    "env_defaults": "PROMIX_ACT_MSE=1 steps3 fast, PROMIX_WEIGHT_MSE=1 steps3, PROMIX_WEIGHT_2LEVEL=1 (metricsweep main-curve protocol)"
+  },
+  "seeds": {
+    "assignment_seed": "RND channel priority only (0/1/2)",
+    "fit_seed": 0,
+    "torch_seed": 0
+  },
+  "error_metric": "E_l=SSE/(ENERGY+1e-12) on teacher inputs, float64 accumulation; mean/std over eligible layers ddof=0 (between-layer spread)",
+  "artifacts": {
+    "U-wikitext-512-Llama-3.2-3B.bin": "3a402945c1d33f8b",
+    "U-wikitext-512-llama-3-8b.bin": "f64553201ce8733c",
+    "R-high-0.125-low-0.0-sparse-0.0-Llama-3.2-3B.bin": "e2976a5b5469f5be",
+    "R-high-0.125-low-0.0-sparse-0.0-llama-3-8b.bin": "d936683f1bcb85c4"
+  },
+  "scores_files": {
+    "3b_pca.pt": "b10c777fb2884de3",
+    "8b_pca.pt": "427f85119edcc45c",
+    "3b_raw.pt": "3de0264f19eea02e",
+    "8b_raw.pt": "0b3847d6f08ad61e"
+  },
+  "allocations_note": "allocations.jsonl stores per-module h + ids_sha256 + score_summary; full stable channel ids reproducible from scores/*.pt + deterministic tie rule via rd_m31.py alloc --dump (sha-verifiable)"
+}
