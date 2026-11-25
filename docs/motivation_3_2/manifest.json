@@ -1,0 +1,109 @@
+{
+  "task": "motivation 3.2 (M32)",
+  "date": "2026-11-25",
+  "code_commit": "f38a8b74231c96e56ecf0b94eb682fc888da20c3",
+  "inherits_m31_manifest": {
+    "models": {
+      "3b": "/home/luofan/models/Llama-3.2-3B",
+      "8b": "/home/luofan/models/llama-3-8b"
+    },
+    "model_config_sha": {
+      "3b": "c0a6833b9da6e99a",
+      "8b": "f39827328c0284ab"
+    },
+    "eligible": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "o_proj": "excluded from allocation AND quantization (fp16 in all configs); reason: per-head PCA path only exists in AV representation",
+    "kv": "fp16 (KV16)",
+    "lm_head": "fp16",
+    "formats": {
+      "main": "nvfp4 blk16 (two-level E4M3 scale, act-MSE search steps=3 fast)",
+      "high": "mxfp8 blk32 (E8M0, weight-A2)"
+    },
+    "fit": "wikitext2-train 512x2048 seed0 window sequence; score collection = first 2 windows (4096 tokens, all projections same token positions); GPTQ = first 128 windows (prefix subset)",
+    "heldout": "32x2048 wikitext2-train windows, seed 31001, rejected overlap with the 512 fit windows; offsets recorded per run json",
+    "ppl": "wiki test full (seqlen2048, equal windows => window-mean == token-mean NLL), C4 val 256 windows seed0; input sha in run jsons",
+    "gptq": {
+      "nsamples": 128,
+      "percdamp": 0.01,
+      "w_clip": true,
+      "act_order": false,
+      "env_defaults": "PROMIX_ACT_MSE=1 steps3 fast, PROMIX_WEIGHT_MSE=1 steps3, PROMIX_WEIGHT_2LEVEL=1 (metricsweep main-curve protocol)"
+    },
+    "error_metric": "E_l=SSE/(ENERGY+1e-12) on teacher inputs, float64 accumulation; mean/std over eligible layers ddof=0 (between-layer spread)",
+    "artifacts": {
+      "U-wikitext-512-Llama-3.2-3B.bin": "3a402945c1d33f8b",
+      "U-wikitext-512-llama-3-8b.bin": "f64553201ce8733c",
+      "R-high-0.125-low-0.0-sparse-0.0-Llama-3.2-3B.bin": "e2976a5b5469f5be",
+      "R-high-0.125-low-0.0-sparse-0.0-llama-3-8b.bin": "d936683f1bcb85c4"
+    },
+    "scores_files": {
+      "3b_pca.pt": "b10c777fb2884de3",
+      "8b_pca.pt": "427f85119edcc45c",
+      "3b_raw.pt": "3de0264f19eea02e",
+      "8b_raw.pt": "0b3847d6f08ad61e"
+    }
+  },
+  "mask": "frozen M31 AV-within allocation (scores/{3b,8b}_pca.pt + deterministic top-h, ties->lower channel id); Direct and Rotated share the SAME mask per (model, ratio); per-ratio alloc_hash in run jsons; direct_reuse_verification_{3b,8b}.json: all_match=True (alloc_hash + representation + recipe vs the M31 runs, not just PPL)",
+  "conditions": {
+    "direct": "M31 av_within runs reused for E/PPL; A/magnitude measured by stats32 on the float PCA twin",
+    "rotated": "per-Linear blockdiag(R_low,R_high) on packed layout; R=float64 Gaussian->QR->diag-sign; weights V_g R_g in fp64 on GPU; activations Z_g R_g at runtime in fp16 (common compute dtype); explicit reference implementation, non-zero overhead"
+  },
+  "rotation_seed": "md5(m32:{model}:{module}:r{ratio:g}:{group}:rot{rotation_seed}) -> torch.Generator",
+  "ring_r1": false,
+  "reused_old_R_matrices": false,
+  "ratios": "0.1..0.9 target (actual quotas as in M31); r=0/1 single-format contrasts live in M31 runs, not labeled as two-group mixed",
+  "seeds": "rotation_seed 0 main; 1,2 at r in {0.1,0.5,0.9}; fit seed 0; Direct not duplicated per seed",
+  "stats": {
+    "A": "SSE/(ENERGY+1e-12) float64 on teacher Z-prime per group; layer-equal mean/std ddof=0, H and L separate",
+    "magnitude": "abs quantiles p50/90/99/99.9 (reservoir<=200k per module-group, seed 320001) + exact max; block max/RMS (blk16/32) quantiles (reservoir<=100k) + zero-block count; group ENERGY for Direct/Rotated energy-ratio check; representative modules layers {2,L//2,L-3} x {q_proj,down_proj} with 101-point quantile curves"
+  },
+  "equivalence": {
+    "3b_r0.5_rot0": {
+      "model": "3b",
+      "ratio": 0.5,
+      "rotation_seed": 0,
+      "actual_ratio": 0.5,
+      "ortho_residual_fp64_max": 7.327471962526033e-15,
+      "group_energy_ratio_min": 0.9999874620574386,
+      "group_energy_ratio_max": 1.0000116879626983,
+      "layer_output_floor_mean": 9.345400935143747e-08,
+      "layer_output_floor_std": 6.242789123441459e-08,
+      "logits_max_abs_diff": 1.11865234375,
+      "logits_cos": 0.9999920725822449,
+      "wiki_ppl_rotated_noquant": 7.811954975128174,
+      "wiki_ppl_float_pca": 7.811863899230957,
+      "ppl_delta": 9.107589721679688e-05,
+      "compute_dtype": "fp16 runtime (fp64 construction)",
+      "note": "rotated model here has quantization OFF"
+    },
+    "8b_r0.5_rot0": {
+      "model": "8b",
+      "ratio": 0.5,
+      "rotation_seed": 0,
+      "actual_ratio": 0.5,
+      "ortho_residual_fp64_max": 9.880984919163893e-15,
+      "group_energy_ratio_min": 0.9999878654256891,
+      "group_energy_ratio_max": 1.0000088262762448,
+      "layer_output_floor_mean": 8.29129716267797e-08,
+      "layer_output_floor_std": 5.478414240187097e-08,
+      "logits_max_abs_diff": 1.85546875,
+      "logits_cos": 0.9999937415122986,
+      "wiki_ppl_rotated_noquant": 6.1343278884887695,
+      "wiki_ppl_float_pca": 6.134542942047119,
+      "ppl_delta": -0.00021505355834960938,
+      "compute_dtype": "fp16 runtime (fp64 construction)",
+      "note": "rotated model here has quantization OFF"
+    }
+  },
+  "direct_stats_sha": {
+    "8b_direct_stats.json": "871675b940d9477e",
+    "3b_direct_stats.json": "531c99e019485cac"
+  }
+}
