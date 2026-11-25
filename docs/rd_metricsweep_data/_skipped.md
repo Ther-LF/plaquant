@@ -117,3 +117,6 @@
 | qwen3-32b | kv4 | 0.8 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-32b_kv4_r0.8.log |
 | qwen3-32b | kv4 | 0.9 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-32b_kv4_r0.9.log |
 | qwen3-32b | kv4 | 1.0 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-32b_kv4_r1.0.log |
+| qwen3-32b | kv16 | 0.0 | ppl | rc=1 CUDA out of memory |
+| qwen3-32b | kv16 | 0.1 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-32b_kv16_r0.1.log |
+| qwen3-32b | kv4 | 0.0 | ppl | rc=1 see /home/luofan/plaquant-metricsweep/docs/rd_metricsweep_data/log_qwen3-32b_kv4_r0.0.log |
