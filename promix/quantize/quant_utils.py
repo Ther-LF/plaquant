@@ -799,22 +799,42 @@ def _weight_two_level_mxfp8_eff(Wblk, bmax, g):
 def _next_lower_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     """Per-element, the largest grid value strictly below `sc` (or `sc` itself if
     none is lower). `grid` is 1D ascending. Matches the CUDA byte-decrement over
-    the full E4M3 positive representable set (sorted==byte order)."""
-    g = grid.view(*([1] * sc.dim()), -1)
-    masked = torch.where(g < sc.unsqueeze(-1), g, torch.full_like(g, -1.0))
-    best = masked.max(dim=-1).values
-    return torch.where(best < 0, sc, best)
+    the full E4M3 positive representable set (sorted==byte order).
+
+    Chunked over sc: the broadcast (numel, V) torch.where output peaked at
+    ~25 GiB on 32B eval-batch activation block scales (CUDA OOM in the wiki
+    eval segment, sibling of the _ceil_to_value fix). Fixed-size chunks are
+    bit-identical (each element's result is independent) with a <1 GiB peak.
+    """
+    flat = sc.reshape(-1)
+    out = torch.empty_like(flat)
+    g = grid.view(1, -1)
+    neg = torch.full_like(g, -1.0)
+    CHUNK = 2_000_000
+    for i in range(0, flat.numel(), CHUNK):
+        xc = flat[i:i + CHUNK]
+        masked = torch.where(g < xc.unsqueeze(-1), g, neg)
+        best = masked.max(dim=-1).values
+        out[i:i + CHUNK] = torch.where(best < 0, xc, best)
+    return out.reshape(sc.shape)
 
 
 def _next_higher_grid(sc: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     """Per-element, the smallest grid value strictly above `sc` (or `sc` itself
     if none is higher). `grid` is 1D ascending. Upward twin of
-    `_next_lower_grid` (rd-acctune lever 4, PROMIX_ACT_MSE_STEPS_UP)."""
-    g = grid.view(*([1] * sc.dim()), -1)
-    masked = torch.where(g > sc.unsqueeze(-1), g,
-                         torch.full_like(g, float("inf")))
-    best = masked.min(dim=-1).values
-    return torch.where(torch.isinf(best), sc, best)
+    `_next_lower_grid` (rd-acctune lever 4, PROMIX_ACT_MSE_STEPS_UP); chunked
+    the same way (bit-identical, bounds the (numel, V) broadcast)."""
+    flat = sc.reshape(-1)
+    out = torch.empty_like(flat)
+    g = grid.view(1, -1)
+    inf = torch.full_like(g, float("inf"))
+    CHUNK = 2_000_000
+    for i in range(0, flat.numel(), CHUNK):
+        xc = flat[i:i + CHUNK]
+        masked = torch.where(g > xc.unsqueeze(-1), g, inf)
+        best = masked.min(dim=-1).values
+        out[i:i + CHUNK] = torch.where(torch.isinf(best), xc, best)
+    return out.reshape(sc.shape)
 
 
 def _mse_best_scale(blk: torch.Tensor, cands, max_fmt: float,
