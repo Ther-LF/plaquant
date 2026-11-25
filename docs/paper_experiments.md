@@ -50,7 +50,7 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 | Llama-3-70B   | KV16 11/11✅(r0.0悬崖29.4) · KV4 4/11🔄(r0.4=5.892≈KV16 5.884; r0.3被OOM杀待补, 链在r0.5) | KV16 11/11✅(r0.0 c4=41.7) | ⬜(下游需offload-lmeval,另立项) | ⬜ |
 | Qwen3-8B      | KV16 11/11✅(r0.7 artifact) · KV4 11/11✅(平台区wiggle) | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ |
 | Qwen3-14B     | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅ | KV16 11/11✅ · KV4 11/11✅(lim25) | KV16 11/11✅ · KV4 11/11✅(lim25) |
-| Qwen3-32B     | 🔄 basis产物NaN(layer≥32协方差溢出)返工中, lane暂停; r0.0/0.1旧skip待清 | 🔄 | 🔄 | 🔄 |
+| Qwen3-32B     | 🔄 根因=ckpt损坏已修, 双KV lane重启(GPU0/1, 过Layer0 cholesky) | 🔄 | 🔄 | 🔄 |
 
 ### 跟踪表 B — 对手覆盖(每格 = 该对手×模型 的 4 指标;✅全测 / 部分列指标 / ⬜待跑 / — 不适用)
 > 标记:✅=4指标全(wiki/C4/0-shot/MMLU) · PPL✓=wiki(+C4) · 论文值=INT4无通路引论文 · ⬜待跑 · —不适用

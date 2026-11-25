@@ -207,3 +207,9 @@ Track B 素材: r=0 路径带 74us cast copy kernel(同 Pro6000 castfold 发现)
 四靶点: ①r=0 castfold entry(bit-exact, 1.4-1.9x) ②GB10专属smallm/splitk窗口表(按SM数切换)
 ③128对齐根因=K_low补集对齐→pack零填充(70B down 1.16x) ④**scheduler swizzle heuristic**(48-SM大grid崩溃修复, 1.2-3.5x, 70B qkvo M8192 0.46→1.60)。
 遗留: 小K shape(1B gate_up)受100KB SMEM限制仅1.10x; 高r swizzle启发式可再传K_total; serve侧producer未支持K_low pad(已守卫)。
+
+## 32B basis NaN 根治(2026-11-25): 根因=模型checkpoint损坏
+Qwen3-32B 本地模型 8 个 shard 损坏(Aug11 补下载批次, layer32 起权重 NaN/Inf, absmax 3.9e36)——不是 basis.py 溢出。
+已重下+sha256 逐一验证; basis.py 加载后加非有限权重 fail-fast gate(+14行)。重跑产物全有限, 正交性 7.4e-15。
+两条 32B lane 重启并通过 Layer0 cholesky(旧崩溃点)。**同根因波及: NVFP4×Qwen3-32B 的 PPL=NaN 需用修复后模型重跑。**
+TODO: latches/models/* 其它模型 sha256 对账(Aug11 批次可能还有雷)。
