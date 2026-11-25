@@ -556,9 +556,11 @@ def cmd_equiv32(args):
     errs, groups_rot, _ = layer_errors32(fmodel, rmodel, cfg, tok, alloc, mk,
                                          rotated=True, ratio=r, rot_seed=rs,
                                          rep_modules=rep_mods)
+    cleanup_memory()
     _, groups_dir, _ = layer_errors32(fmodel, None, cfg, tok, alloc, mk,
                                       rotated=False, ratio=r, rot_seed=rs,
                                       rep_modules=rep_mods)
+    cleanup_memory()
     emean, estd = m31.layer_error_stats(errs)
     energy_ratios = []
     for n in groups_rot:
@@ -574,7 +576,7 @@ def cmd_equiv32(args):
     logit_maxdiff = float((lf - lr).abs().max())
     logit_cos = float(torch.nn.functional.cosine_similarity(
         lf.reshape(-1), lr.reshape(-1), dim=0))
-    del fmodel
+    del fmodel, lf, lr
     cleanup_memory()
     bs = args.batch_size or (8 if mk == "8b" else cfg["eval"]["batch_size"])
     ppl_rot = m31.eval_wiki(rmodel, cfg, tok, batch_size=bs)["ppl"]
