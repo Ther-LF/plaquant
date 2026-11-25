@@ -18,7 +18,7 @@ mkdir -p $OUTD
 [ -f "$SKIP" ] || echo "| tag | KV | r | metric | reason |" > "$SKIP"
 cd $REPO
 export HF_ENDPOINT=https://hf-mirror.com HF_HOME=/home/luofan/hf_cache PYTHONPATH=$REPO
-export MASTER_ADDR=127.0.0.1 MASTER_PORT=$((29500 + GPU))   # unique per-GPU port — parallel sweeps must not share torch.distributed 29500
+export MASTER_ADDR=127.0.0.1 MASTER_PORT=${MASTER_PORT:-$((29500 + GPU))}   # unique per-GPU port — parallel sweeps must not share torch.distributed 29500
 # KV: kv16 = KV cache bf16 (default); kv4 = KV cache 4-bit (use the -kv4.yaml config, labels outputs _kv4)
 # MODE: ppl = wiki+C4 only (fast core curve); full = +MMLU+0shot (slow downstream)
 if [ "$MODE" = "ppl" ]; then EVALFLAGS="--c4"; REQ="('c4' in d)"; else EVALFLAGS="--c4 --mmlu --zeroshot${LIM:+ --limit $LIM}${BS:+ --batch_size $BS}"; REQ="('c4' in d and 'mmlu_5shot' in d and 'zeroshot' in d)"; fi
