@@ -231,3 +231,7 @@ Direct下L组误差留在PCA低方差(不重要)方向; 整组随机旋转使误
 ② quant_utils.py _apply_fp_format 统一入口: fake_quantize 临时量 ~15-20×输入, 32B eval 激活一次 ~20GB → 按行 2^26/块分块(368eff0) + 32B config eval bs16→8
 回归: 新旧 torch.equal 全过; 8B r0.0 端到端重跑与历史 json 逐位一致。eval 峰值 95GB+ → 73-78GB。
 **32B 首点落地**: kv16 r0.0=8.511/11.919, kv4=8.521/11.943(kv4略差✅, 无NaN, ~2h10m/点)。双 lane 续跑 r0.1-1.0。
+
+## ProMix×Qwen3-32B r0.1 落地(2026-11-25)
+kv16 r0.1 wiki=7.793 — **< NVFP4 对手 8.000**: "r≥0.1 压 NVFP4" 在 Qwen 8B/14B/32B 三尺寸全部成立, 跨架构×跨规模故事完整。
+r0.0→r0.1 降幅 8.511→7.793(首格FP8保护效应, 与各模型模式一致)。
