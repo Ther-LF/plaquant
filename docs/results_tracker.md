@@ -225,3 +225,9 @@ Direct下L组误差留在PCA低方差(不重要)方向; 整组随机旋转使误
 低r时L组含大量次重要方向→泄漏代价>幅度收益; 高r时L组只剩真尾部+H组absmax改善→净赚。
 论文叙事: 局部量化误差大小不是全部, **误差落在哪个子空间才关键** — PCA表示+按方差分组的价值所在。
 论文用法: Direct / 整组Rotated(M32) / ring512块对角(块1正式曲线) 构成旋转粒度谱, 三线同图。
+
+## 32B eval-OOM 根治(2026-11-25): 两处位级等价分块修复
+① quant_utils.py:804 _next_lower/higher_grid: ACT_MSE 搜索把 52.4M blocks×127 grid 广播成 26.6GB → 按元素 2M/块分块(3330df6)
+② quant_utils.py _apply_fp_format 统一入口: fake_quantize 临时量 ~15-20×输入, 32B eval 激活一次 ~20GB → 按行 2^26/块分块(368eff0) + 32B config eval bs16→8
+回归: 新旧 torch.equal 全过; 8B r0.0 端到端重跑与历史 json 逐位一致。eval 峰值 95GB+ → 73-78GB。
+**32B 首点落地**: kv16 r0.0=8.511/11.919, kv4=8.521/11.943(kv4略差✅, 无NaN, ~2h10m/点)。双 lane 续跑 r0.1-1.0。
