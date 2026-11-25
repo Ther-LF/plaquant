@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Okabe-Ito (CVD-safe), fixed assignment — never cycled
 C = dict(rnd="#8C8C8C", ss="#0072B2", ma="#E69F00", av="#009E73")
+MK = dict(rnd="D", ss="o", ma="s", av="^")  # distinguish overlapping curves
 LBL = dict(rnd="Random", ss="Squared-sum", ma="Mean-abs",
            av="Act-variance (PCA repr.)")
 MODELS = {"3b": "Llama-3.2-3B", "8b": "Llama-3-8B"}
@@ -105,15 +106,17 @@ def fig_a(rows, lerr):
                     continue
                 xs = [a["x"] for a in agg]
                 axw.plot(xs, [a["wiki"] for a in agg], color=C[strat], lw=1.6,
-                         label=LBL[strat])
+                         marker=MK[strat], ms=3.5, label=LBL[strat])
                 axw.fill_between(xs, [a["wiki_lo"] for a in agg],
                                  [a["wiki_hi"] for a in agg],
                                  color=C[strat], alpha=0.18, lw=0)
-                axc.plot(xs, [a["c4"] for a in agg], color=C[strat], lw=1.6)
+                axc.plot(xs, [a["c4"] for a in agg], color=C[strat], lw=1.6,
+                         marker=MK[strat], ms=3.5)
                 axc.fill_between(xs, [a["c4_lo"] for a in agg],
                                  [a["c4_hi"] for a in agg],
                                  color=C[strat], alpha=0.18, lw=0)
-                axe.plot(xs, [a["e"] for a in agg], color=C[strat], lw=1.6)
+                axe.plot(xs, [a["e"] for a in agg], color=C[strat], lw=1.6,
+                         marker=MK[strat], ms=3.5)
                 axe.fill_between(xs, [a["e"] - a["e_std"] for a in agg],
                                  [a["e"] + a["e_std"] for a in agg],
                                  color=C[strat], alpha=0.18, lw=0)
@@ -123,12 +126,12 @@ def fig_a(rows, lerr):
                     continue
                 xs = [x for x, _ in pts]
                 axw.plot(xs, [r["wiki_ppl"] for _, r in pts], color=C[strat],
-                         lw=1.6, label=LBL[strat])
+                         lw=1.6, marker=MK[strat], ms=3.5, label=LBL[strat])
                 axc.plot(xs, [r["c4_ppl"] for _, r in pts], color=C[strat],
-                         lw=1.6)
+                         lw=1.6, marker=MK[strat], ms=3.5)
                 e = [r["error_mean_layers"] for _, r in pts]
                 sd = [r["error_std_layers"] for _, r in pts]
-                axe.plot(xs, e, color=C[strat], lw=1.6)
+                axe.plot(xs, e, color=C[strat], lw=1.6, marker=MK[strat], ms=3.5)
                 axe.fill_between(xs, [a - b for a, b in zip(e, sd)],
                                  [a + b for a, b in zip(e, sd)],
                                  color=C[strat], alpha=0.18, lw=0)
