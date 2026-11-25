@@ -235,3 +235,9 @@ Direct下L组误差留在PCA低方差(不重要)方向; 整组随机旋转使误
 ## ProMix×Qwen3-32B r0.1 落地(2026-11-25)
 kv16 r0.1 wiki=7.793 — **< NVFP4 对手 8.000**: "r≥0.1 压 NVFP4" 在 Qwen 8B/14B/32B 三尺寸全部成立, 跨架构×跨规模故事完整。
 r0.0→r0.1 降幅 8.511→7.793(首格FP8保护效应, 与各模型模式一致)。
+
+## M31+M32 Motivation 双任务收官(2026-11-25)
+M31: 198/198 逻辑配置+4浮点control, 图 motivation-allocation-{within,across,diag} 落盘。
+核心: ①通道选择重要(RND 低r大劣化且 seed 方差 8.85-19.77 巨大) ②SS≈MA(≤0.005) ③**MA-across 灾难**(未归一化分数把预算全给 hidden-stream, down_proj≈0, PPL 15.7-18.1>r=0; 且层均E反而降=指标背离,等权均值掩盖关键层) ④AV表示: 3B纯FP4端点大胜(10.65 vs 14.33)但混合点略差——照报。
+M32: 36+12 全落点, 图 motivation-representation-* 落盘。四类指标: 旋转收 H 组尾部(max 29→11.8), A差<1%, E略降, **PPL交叉**(r≤0.2差+0.1, r≥0.7好-0.08, seeds一致)——"E降PPL升"背离实锤=误差子空间论点的数据。
+等价性 gate 全过(正交残差 9.9e-15, logits cos≥0.999992, Direct复用 all_match)。注意: o_proj 固定FP16被排除, 绝对PPL不可与块1直比。
