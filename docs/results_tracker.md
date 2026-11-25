@@ -213,3 +213,6 @@ Qwen3-32B 本地模型 8 个 shard 损坏(Aug11 补下载批次, layer32 起权�
 已重下+sha256 逐一验证; basis.py 加载后加非有限权重 fail-fast gate(+14行)。重跑产物全有限, 正交性 7.4e-15。
 两条 32B lane 重启并通过 Layer0 cholesky(旧崩溃点)。**同根因波及: NVFP4×Qwen3-32B 的 PPL=NaN 需用修复后模型重跑。**
 TODO: latches/models/* 其它模型 sha256 对账(Aug11 批次可能还有雷)。
+
+## NVFP4×Qwen3-32B 落地(2026-11-25)
+修复 ckpt 后重跑: **wiki=8.000**(此前 NaN=量化了损坏模型)。待 ProMix 32B 曲线出 r0.1 对照(预期延续 8B/14B 的 r≥0.1 压制模式)。
