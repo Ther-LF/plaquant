@@ -91,3 +91,5 @@
 | qwen3-14b | kv4 | 0.9 | ppl | rc=1 CUDA out of memory |
 | qwen3-14b | kv16 | 0.9 | full | rc=1 CUDA out of memory |
 | qwen3-14b | kv16 | 0.9 | ppl | rc=1 CUDA out of memory |
+| qwen3-32b | kv16 | 0.0 | ppl | rc=1 CUDA out of memory |
+| qwen3-32b | kv4 | 0.0 | ppl | rc=1 CUDA out of memory |
