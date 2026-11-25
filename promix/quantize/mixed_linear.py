@@ -129,6 +129,25 @@ _SMALLM_TABLE_GB10 = {
     (3072, 3072): (128, 128, 2),     # (m_lo, m_hi, cfg)
     (4096, 14336): (256, 256, 3),
 }
+# ---------------------------------------------------------------------------
+# KDA-GB10 round 10: ForgeKernel-evolved kernel (fk_smallk_ext) windows.
+# Measured (curve protocol, eager AND graph-replay medians, wins >=3% on every
+# r probed, r in {1/8, 1/2}; /tmp/fk_gate2.py 2026-11-26):
+#   (8192,2048)  1B gate_up M8192: 1.21x (r=1/8) / 1.12x (r=1/2)
+#   (2048,2048)  1B qkvo    M2048: 1.21x / 1.21x (graph 1.13x)
+#   (3072,8192)  3B down    M2048: 1.06x / 1.09x
+# Hard exclusions (measured losses): 3B down M8192 0.30x, 3B gate_up M8192
+# 0.85-0.98x, 1B gate_up M2048 0.94x — the kernel wins exactly where the
+# output-write stream dominates and the K/tile count is short.
+# Kernel constraints: K_high % 128 == 0, K_high >= 128, K_low_pad % 128 == 0,
+# K_low_pad >= 128, M % 128 == 0, N % 128 == 0 (checked in _fk_cfg).
+# ---------------------------------------------------------------------------
+_FK_TABLE_GB10 = {
+    (8192, 2048): (8192, 1 << 30),   # (m_lo, m_hi) inclusive
+    (2048, 2048): (2048, 2048),
+    (3072, 8192): (2048, 2048),
+}
+
 _SPLITK_TABLE_GB10 = {
     (3072, 8192): [(64, 128, 0, 1, 2)],
     (4096, 4096): [(8, 32, 0, 1, 0), (256, 256, 0, 1, 0)],
@@ -241,7 +260,7 @@ def _splitk_env_scale():
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
-                 cd_sm=None, cd_sk=None):
+                 cd_sm=None, cd_sk=None, cd_fk=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -338,6 +357,11 @@ class MixedQuantLinear(nn.Module):
         # [NV|MX] k-tile domain across CTAs and reduces once. Routed by the
         # measured _SPLITK_TABLE windows.
         self._cd_sk = cd_sk
+        # KDA-GB10 round 10: ForgeKernel-evolved small-K/output-bound GEMM ext
+        # (fk_smallk_ext). Routed by the measured _FK_TABLE_GB10 windows
+        # (GB10-only via _low_sm_device); consumes the SAME packed codes and
+        # physical SF buffers as the codesign entries (run_prepacked).
+        self._cd_fk = cd_fk
         # vllm-perf r4 lever 1: Marlin W4A16 small-M route state (MarlinLow from
         # promix.vllm_integ.marlin_w4a16, attached by the vLLM plugin via
         # attach_marlin). Routed by the measured _MARLIN_TABLE windows; takes
@@ -520,6 +544,21 @@ class MixedQuantLinear(nn.Module):
                 return cfg, splits, decomp
         return None
 
+    def _fk_cfg(self, M):
+        """KDA-GB10 round 10: route to the ForgeKernel-evolved kernel inside
+        the measured _FK_TABLE_GB10 windows (GB10-only). Capture-safe: the
+        branch depends only on (N, K, M, K_high) — static per captured graph."""
+        if self._cd_fk is None or self.is_pure_nvfp4 or not _low_sm_device():
+            return None
+        win = _FK_TABLE_GB10.get((self.N, self.K))
+        if win is None or not (win[0] <= M <= win[1]):
+            return None
+        if (self.K_high % 128 != 0 or self.K_high < 128
+                or self.K_low_pad % 128 != 0 or self.K_low_pad < 128
+                or M % 128 != 0 or self.N % 128 != 0):
+            return None
+        return True
+
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
@@ -546,6 +585,16 @@ class MixedQuantLinear(nn.Module):
             if self.bias is not None:
                 D = D + self.bias.to(D.dtype)
             return D
+        if self._fk_cfg(M):
+            # KDA-GB10 round 10: ForgeKernel-evolved kernel — whole-tile smem
+            # staging + one bulk TMA store group left in flight across tile
+            # boundaries (write/mainloop overlap). Single launch, fp16 out,
+            # bias + alpha in the epilogue; measured 1.06-1.21x inside its
+            # windows, cosine measured equal-or-better (no bf16 round-trip).
+            return self._cd_fk.run_prepacked(
+                A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
+                self._bias_or_zero(A_lo.device), self.g_w)
         if self.bias_in_epilogue and self._cd_bias is not None and self.bias is not None:
             # A REAL bias: the epilogue fold wins everywhere (removes the cast
             # AND the bias add; r26 lever A, bit-identical by construction).

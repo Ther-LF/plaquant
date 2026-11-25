@@ -1,0 +1,70 @@
+{
+ "rows": [
+  {
+   "model": "1B",
+   "shape": "qkvo",
+   "M": 2048,
+   "K_high": 256,
+   "dispatch": "fk_smallk_single",
+   "n_kernels": 1,
+   "kernels": [
+    "promix_gemm_kernel(CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, GemmParams)"
+   ]
+  },
+  {
+   "model": "1B",
+   "shape": "gate_up",
+   "M": 8192,
+   "K_high": 256,
+   "dispatch": "fk_smallk_single",
+   "n_kernels": 1,
+   "kernels": [
+    "promix_gemm_kernel(CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, GemmParams)"
+   ]
+  },
+  {
+   "model": "1B",
+   "shape": "gate_up",
+   "M": 8192,
+   "K_high": 1024,
+   "dispatch": "fk_smallk_single",
+   "n_kernels": 1,
+   "kernels": [
+    "promix_gemm_kernel(CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, GemmParams)"
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "down",
+   "M": 2048,
+   "K_high": 1024,
+   "dispatch": "fk_smallk_single",
+   "n_kernels": 1,
+   "kernels": [
+    "promix_gemm_kernel(CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, GemmParams)"
+   ]
+  },
+  {
+   "model": "3B",
+   "shape": "gate_up",
+   "M": 8192,
+   "K_high": 384,
+   "dispatch": "other",
+   "n_kernels": 1,
+   "kernels": [
+    "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScale"
+   ]
+  },
+  {
+   "model": "70B",
+   "shape": "down",
+   "M": 8192,
+   "K_high": 21504,
+   "dispatch": "other",
+   "n_kernels": 1,
+   "kernels": [
+    "_ZN7cutlass13device_kernelIN8codesign19CodesignFusedKernelIN4cute5tupleIJiiiiEEENS_4gemm10collective22CodesignBlockScale"
+   ]
+  }
+ ]
+}

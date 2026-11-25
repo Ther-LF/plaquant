@@ -383,16 +383,30 @@ static inline int cd_sm_count() {
   return v;
 }
 template <class SchedArgs>
-static inline void cd_apply_sched_env(SchedArgs& s, int Mi, int Ni, int Ki) {
+static inline void cd_apply_sched_env(SchedArgs& s, int Mi, int Ni, int Ki, int Khi = 0) {
   int sw = cd_sched_swizzle();
   int ro = cd_sched_raster();
   if (sw == 0 && ro == 0 && cd_sm_count() > 0 && cd_sm_count() <= 72) {
-    // GB10 auto heuristic (see header comment).
+    // GB10 auto heuristic (see header comment). Ki = the K the scheduler tiles
+    // (K_low for the dual kernel, full K for single-phase); Khi = the MXFP8
+    // segment ridden by the dual kernel's Phase 2 (0 for single-phase).
     int TM = (Mi + 127) / 128, TN = (Ni + 127) / 128;
-    int64_t nk = (int64_t)Ni * (int64_t)Ki;
+    // KDA-GB10 round 7: weight-stream key counts the MXFP8 segment double
+    // (2 bytes per fp4-equivalent element). The old N*K_low key under-counted
+    // MX-dominant points (Q14B/Q8B down r>=3/4 M8192 measured 6-9% off their
+    // best swizzle). The legacy giant-weight branch (nk >= 100Mi) keeps the
+    // old key: its M<=2048 small-grid points were validated on N*K_low only.
+    int64_t nk  = (int64_t)Ni * (int64_t)Ki;
+    int64_t nkw = (int64_t)Ni * ((int64_t)Ki + 2 * (int64_t)Khi);
     sw = 4;
-    if ((std::min(TM, TN) >= 32 && nk >= (int64_t)32 << 20) || nk >= (int64_t)100 << 20)
+    if ((std::min(TM, TN) >= 32 && nkw >= (int64_t)32 << 20) || nk >= (int64_t)100 << 20)
       sw = 8;
+    // KDA-GB10 round 7: L2 window cap. One swizzle-8 group streams 8 N-tiles
+    // of B = 8*128 rows x (K_low/2 + K_high) bytes. Measured on GB10 (24MB
+    // L2): windows <= ~22MB keep winning at swizzle 8 (70B down r<=1/2); at
+    // >= ~25.7MB swizzle 4 wins 9-22% (70B down r>=3/4 M8192). Cap at 24MB.
+    if (sw == 8 && (int64_t)8 * 128 * ((int64_t)Ki / 2 + (int64_t)Khi) > ((int64_t)24 << 20))
+      sw = 4;
   }
   if (sw > 0) s.max_swizzle_size = sw;
   using RO = decltype(s.raster_order);
@@ -636,7 +650,7 @@ static torch::Tensor run_dual_pre(torch::Tensor A_lo, torch::Tensor physSFA_lo, 
   arguments.K_high = Khi;
   arguments.epilogue = make_epi_args(D, Mi, Ni, alpha);
 
-  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo);
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo, Khi);
   static GemmDual gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;

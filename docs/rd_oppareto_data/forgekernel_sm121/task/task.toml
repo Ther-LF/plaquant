@@ -1,0 +1,20 @@
+# promix_dualphase_gemm — NVFP4+MXFP8 dual-segment fused GEMM on GB10 (SM 12.1).
+# Reference = the shipping CUTLASS-based codesign fused kernel, called through the
+# installed promix tree on the GPU host. Source mode: the teacher may read the
+# kernel's source under reference/src.
+
+[task]
+language = "cuda"
+arch     = "sm121"
+
+[reference]
+run    = "reference/run.py:run"
+source = "reference/src"
+
+[target]
+ratio  = 1.15
+timing = "e2e"   # the reference ext host-syncs each eager call (capture-safe barrier); the amortized device window is invalid for it, e2e is symmetric
+
+[budget]
+hours    = 3
+max_meta = 2

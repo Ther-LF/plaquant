@@ -24,7 +24,7 @@ sys.path.insert(0, REPO); sys.path.insert(0, KERN)
 os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
 
 from promix.eval.full_network_realkernel import load_kernels  # noqa: E402
-from promix.vllm_integ.kernels import load_smallm, load_splitk, load_cd_bias  # noqa: E402
+from promix.vllm_integ.kernels import load_smallm, load_splitk, load_cd_bias, load_fk_smallk  # noqa: E402
 from promix.quantize.weight_pack import pack_weight_mixed  # noqa: E402
 from promix.quantize.mixed_linear import MixedQuantLinear  # noqa: E402
 
@@ -52,6 +52,11 @@ SHAPES = [
     ("70B", "qkvo",    8192, 8192),
     ("70B", "gate_up", 28672, 8192),
     ("70B", "down",    8192, 28672),
+    # compute-bound square suite (M=N=K; run with --ms equal to the size)
+    ("SQ4096",  "square", 4096, 4096),
+    ("SQ8192",  "square", 8192, 8192),
+    ("SQ10240", "square", 10240, 10240),
+    ("SQ16384", "square", 16384, 16384),
 ]
 
 R_GRID = [0.0, 1 / 32, 1 / 16, 1 / 12, 1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2,
@@ -119,6 +124,8 @@ def dispatch_tag(mql, M):
                 and hasattr(mql._cd_bias, "single_nvfp4_gemm_prepacked_bias")):
             return "single_phase_nvfp4_castfold"
         return "single_phase_nvfp4"
+    if mql._fk_cfg(M):
+        return "fk_smallk_single"
     skc = mql._splitk_cfg(M)
     if skc is not None:
         return f"splitk_cfg{skc[0]}_s{skc[1]}_d{skc[2]}"
@@ -154,7 +161,7 @@ def main():
         r_grid = [float(eval(x)) for x in args.rs.split(",")]
 
     nv, mx, cd, qpf = load_kernels()
-    cd_sm, cd_sk, cd_bias = load_smallm(), load_splitk(), load_cd_bias()
+    cd_sm, cd_sk, cd_bias, cd_fk = load_smallm(), load_splitk(), load_cd_bias(), load_fk_smallk()
     print(f"kernels loaded (cd_sm={cd_sm is not None} cd_sk={cd_sk is not None} "
           f"cd_bias={cd_bias is not None})", flush=True)
 
@@ -170,7 +177,8 @@ def main():
                 K_low = K - K_high
                 packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd)
                 mql = MixedQuantLinear(packed, nv, mx, cd, qpf=qpf,
-                                       cd_bias=cd_bias, cd_sm=cd_sm, cd_sk=cd_sk)
+                                       cd_bias=cd_bias, cd_sm=cd_sm, cd_sk=cd_sk,
+                                       cd_fk=cd_fk)
                 A_lo, pSFA_lo, A_hi, pSFA_hi = mql.pack_only(x)
 
                 def gemm():

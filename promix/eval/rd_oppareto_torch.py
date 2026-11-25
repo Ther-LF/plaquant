@@ -41,6 +41,11 @@ SHAPES = [
     ("70B", "qkvo",    8192, 8192),
     ("70B", "gate_up", 28672, 8192),
     ("70B", "down",    8192, 28672),
+    # compute-bound square suite (M=N=K; run with --m equal to the size)
+    ("SQ4096",  "square", 4096, 4096),
+    ("SQ8192",  "square", 8192, 8192),
+    ("SQ10240", "square", 10240, 10240),
+    ("SQ16384", "square", 16384, 16384),
 ]
 
 
@@ -129,11 +134,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--m", type=int, default=8192)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--shapes", default="",
+                    help="comma list of model:shape filters, e.g. SQ8192:square")
     args = ap.parse_args()
     M = args.m
+    shapes = SHAPES
+    if args.shapes:
+        want = set(args.shapes.split(","))
+        shapes = [s_ for s_ in SHAPES if f"{s_[0]}:{s_[1]}" in want]
 
     rows = []
-    for mdl, name, N, K in SHAPES:
+    for mdl, name, N, K in shapes:
         torch.manual_seed(0)
         W = (torch.randn(N, K, device=DEV) * 0.08)
         x = torch.randn(M, K, device=DEV)

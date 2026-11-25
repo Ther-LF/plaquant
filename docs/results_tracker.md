@@ -241,3 +241,13 @@ M31: 198/198 逻辑配置+4浮点control, 图 motivation-allocation-{within,acro
 核心: ①通道选择重要(RND 低r大劣化且 seed 方差 8.85-19.77 巨大) ②SS≈MA(≤0.005) ③**MA-across 灾难**(未归一化分数把预算全给 hidden-stream, down_proj≈0, PPL 15.7-18.1>r=0; 且层均E反而降=指标背离,等权均值掩盖关键层) ④AV表示: 3B纯FP4端点大胜(10.65 vs 14.33)但混合点略差——照报。
 M32: 36+12 全落点, 图 motivation-representation-* 落盘。四类指标: 旋转收 H 组尾部(max 29→11.8), A差<1%, E略降, **PPL交叉**(r≤0.2差+0.1, r≥0.7好-0.08, seeds一致)——"E降PPL升"背离实锤=误差子空间论点的数据。
 等价性 gate 全过(正交残差 9.9e-15, logits cos≥0.999992, Direct复用 all_match)。注意: o_proj 固定FP16被排除, 绝对PPL不可与块1直比。
+
+## KDA-2 (ForgeKernel 轮) 收官(2026-11-26, kda_gb10_log.md Round 7-11)
+验收尺=gap-to-theory(cuBLASLt FP4/FP8 线性插值)。基线: GB10 中位 1.080(最差1.519) vs Pro6000 1.109(最差1.889)。
+合入: ①swizzle v2(MX双字节key+24MB L2上限): 70B down r=3/4 gap 1.52→1.14 ②**ForgeKernel 进化 kernel fk_smallk_ext.cu**:
+短K shape 输出写占81-87%流量→整块smem staging+bulk TMA store 跨tile在飞; 1B qkvo M2048 gap 1.21-1.29→0.98-1.04;
+blocked SF 布局与 prepack 物理布局 torch.equal→run_prepacked 直吃 physSF, 1 launch 可 graph。亏损点硬排除(窗口路由 _FK_TABLE_GB10)。
+v2 全曲线: 总中位 1.081, 最差 1.360, cosine 回退 0, 全点单 launch 复验。
+方阵套件(双平台 4096-16384+baseline): GB10 16384 gap 0.99(大K到理论线, 肉在短K); P6 16384 抬高 1.13-1.27(巨网格swizzle嫌疑+共卡噪声, caveat)。
+ForgeKernel SM121 全链路跑通(harness在Mac+ssh评测, hw_kb/sm121 开树, SASS 级 recon 报告 fk_sm121_recon_report.md); v1 四个硬限制已绕过可报 upstream。
+剩余空间(Round 11): K_high 128-pad 解锁 r=1/32/1/12 列(预期→~1.1)、3B gu M8192 下一代进化、r=1 deep-MX stage、NCU 解封、P6 巨网格复测。

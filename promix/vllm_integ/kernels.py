@@ -33,6 +33,14 @@ def act_mse_cflags():
             f"-DPROMIX_ACT_MSE_STEPS_UP={steps_up}"]
 
 
+def _std_flag():
+    """torch >= 2.13 headers require C++20 (GB10 torch 2.14); older torch
+    (Pro6000 2.11) keeps c++17 so its build caches stay byte-stable."""
+    import torch
+    v = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+    return "-std=c++20" if v >= (2, 13) else "-std=c++17"
+
+
 def load_kernels():
     """Returns (cd, qpf). Cached per process."""
     if "cd" in _cache:
@@ -48,7 +56,7 @@ def load_kernels():
     inc = [KERN, os.path.join(CUTLASS, "include"),
            os.path.join(CUTLASS, "tools/util/include"),
            os.path.join(CUTLASS, "examples/common")]
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    flags = [_std_flag(), "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     cd = load(name="codesign_fused_ext",
               sources=[os.path.join(KERN, "codesign_fused_ext.cu")],
               extra_include_paths=inc, extra_cuda_cflags=flags, verbose=False)
@@ -60,7 +68,7 @@ def load_kernels():
     return cd, qpf
 
 
-def _load_ext(key, fname, extra_flags=(), with_inc=True):
+def _load_ext(key, fname, extra_flags=(), with_inc=True, extra_ldflags=()):
     """Generic cached JIT load sharing load_kernels' build env."""
     if key in _cache:
         return _cache[key]
@@ -69,11 +77,12 @@ def _load_ext(key, fname, extra_flags=(), with_inc=True):
     inc = [KERN, os.path.join(CUTLASS, "include"),
            os.path.join(CUTLASS, "tools/util/include"),
            os.path.join(CUTLASS, "examples/common")] if with_inc else []
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    flags = [_std_flag(), "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     mod = load(name=fname.replace(".cu", ""),
                sources=[os.path.join(KERN, fname)],
                extra_include_paths=inc,
-               extra_cuda_cflags=flags + list(extra_flags), verbose=False)
+               extra_cuda_cflags=flags + list(extra_flags),
+               extra_ldflags=list(extra_ldflags) or None, verbose=False)
     _cache[key] = mod
     return mod
 
@@ -145,6 +154,26 @@ def load_cd_bias():
     return _load_ext("cdb", "codesign_fused_bias_ext.cu")
 
 
+def load_fk_smallk():
+    """KDA-GB10 round 10: ForgeKernel-evolved dual-phase fused GEMM
+    (fk_smallk_ext) for the GB10 small-K / output-write-bound window. Its
+    structural win is the epilogue: the whole output tile is staged in smem and
+    one bulk TMA store group is left in flight ACROSS tile boundaries, so the
+    DRAM write stream overlaps the next tile's mainloop (the recon-measured
+    failure mode of the shipping kernel at these shapes was a serialized
+    write + mainloop sum). Same packed-code inputs and physical SF layout as
+    every codesign entry (run_prepacked). Only built/used on <=72-SM SM12x
+    devices via the measured _FK_TABLE_GB10 windows in mixed_linear.
+    Disabled via PROMIX_FK=0; a failed build (non-SM12x toolchain) returns
+    None and the shipping routes are untouched."""
+    if os.environ.get("PROMIX_FK", "1") == "0":
+        return None
+    try:
+        return _load_ext("fk", "fk_smallk_ext.cu", extra_ldflags=["-lcuda"])
+    except Exception:
+        return None
+
+
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
     the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).
@@ -173,7 +202,7 @@ def load_decode_gemv():
         return _cache["dg"]
     load_kernels()  # ensures TORCH_CUDA_ARCH_LIST / TORCH_EXTENSIONS_DIR are set
     from torch.utils.cpp_extension import load
-    flags = ["-std=c++17", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
+    flags = [_std_flag(), "--expt-relaxed-constexpr", "--expt-extended-lambda", "-O3"]
     dg = load(name="decode_gemv_ext",
               sources=[os.path.join(KERN, "decode_gemv_ext.cu")],
               extra_cuda_cflags=flags, verbose=False)

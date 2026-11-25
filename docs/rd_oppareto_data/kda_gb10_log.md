@@ -205,3 +205,194 @@ GB10 now MEETS OR EXCEEDS Pro6000's relative levels at the comparable points
   path unaffected; wire pads before GB10 serve integration).
 - Marlin/decode-GEMV window tables are still Pro6000-measured (decode regime,
   out of scope here).
+
+# ============ KDA round 2 (ForgeKernel phase) ============
+
+## Round 7 — metric switch: gap-to-theory (2026-11-25)
+
+New acceptance metric (replaces vs-FP8 ratios): per (shape, M, r)
+  t_theory(r) = t_cuBLASLt_fp4 * (K_low/K) + t_cuBLASLt_fp8 * (K_high/K)
+(two-point linear interpolation of the local kernel-level baselines,
+torch_gb10_ext_m*.json), gap = gemm_ms / t_theory, target -> 1.0.
+
+Post-round-6 tuned curve (ours_gb10_uniform11_tuned.json), 396 points:
+GB10 overall median gap **1.080** (worst 1.519); Pro6000 same-method
+(ours_uniform11_ext vs torch_ext_m*) median **1.109** (worst 1.889) — GB10
+median already at/below the Pro6000 reference level.
+
+Worst GB10 points (the new target list):
+1. 70B down M8192 r=3/4: 1.52 (swizzle heuristic mis-pick — round 8)
+2. 1B/3B gate_up M8192, ALL r: 1.26-1.38 (small-K structural; ForgeKernel target)
+3. r=1 column median 1.16 (all-but-one-ring; MX-dominant)
+4. 1B/3B qkvo M2048 low-r: ~1.27-1.29 (small grid + small K)
+
+## Round 8 — swizzle heuristic v2: MX-weighted key + L2 window cap
+
+Probes (CD_SCHED_SWIZZLE sweep, median-of-50 eager, idle GB10):
+- 70B down M8192 r=3/4: sw4 26.97ms vs sw8 32.97 (auto picked 8) — sw4 wins 22%.
+- 70B down r=3/8, r=1/2 / Q14B down r=3/4, r=1 / 8B down r=3/4: sw8 wins 5-9%
+  (auto at r=1 points picked 4 via the N*K_low key — wrong direction).
+- Boundary: one swizzle-8 group streams 8*128 B-rows x (K_low/2+K_high) bytes;
+  windows <= ~22MB keep winning at sw8, >= ~25.7MB flip to sw4 => GB10 L2
+  (24MB) window cap.
+
+Shipping change (codesign_fused_ext.cu `cd_apply_sched_env`, one definition,
+included by the bias ext; all single-phase sites unchanged via Khi=0 default):
+- tile-parallel branch key now nkw = N*(K_low + 2*K_high) (MXFP8 counts
+  double — bytes); legacy giant-weight branch (>=100Mi) keeps N*K_low (its
+  M<=2048 validation was on that key).
+- new L2 cap: if sw==8 and 8*128*(K_low/2+K_high) > 24MiB -> sw=4.
+M2048 entirely unaffected (min(TM,TN)<32 and legacy key unchanged).
+
+Verified (8 affected M8192 points, auto vs per-point best + old curve):
+| point | old ms | new ms | old gap | new gap |
+|---|---|---|---|---|
+| 8B  down r=3/4 | 5.72 | 5.25 | 1.026 | 0.941 |
+| 8B  down r=1   | 7.38 | 6.63 | 1.145 | 1.028 |
+| Q8B down r=3/4 | 5.03 | 4.41 | 1.069 | 0.938 |
+| Q8B down r=1   | 6.19 | 5.41 | 1.143 | 0.999 |
+| Q14B down r=3/4| 9.18 | 8.51 | 0.990 | 0.918 |
+| Q14B down r=1  |11.35 |10.82 | 1.058 | 1.009 |
+| 70B down r=3/4 |36.04 |27.01 | 1.519 | **1.138** |
+| 70B down r=1   |32.43 |33.57 | 1.197 | 1.239 (config unchanged — session noise; sw4 both) |
+Cosines identical per point. Swizzle is schedule-only (round-2 bit-exact gate
+covers the mechanism); worst tracked point now 1.24.
+
+## Round 9 — compute-bound square suite (M=N=K)
+
+New SQUARE shapes in rd_oppareto_ours.py / rd_oppareto_torch.py:
+SQ4096/8192/10240/16384, same 11-r grid, same timing protocol. Data:
+{torch,ours}_{gb10,p6}_sq*.json.
+
+GB10 square gap medians: 4096: **1.173**, 8192: 1.086, 10240: 1.035,
+16384: **0.990** (sub-1: the single fused launch beats the 2-kernel baseline
+interpolation). Pro6000 (GPU4 of a box with 4 GPUs at 98-100% util — numbers
+carry co-tenant noise): 4096: 1.138, 8192: 1.048, 10240: 1.012, 16384: 1.199.
+
+Readings:
+- The GB10 mainloop is at/beyond theory once K is large — the compute-bound
+  regime is closed. The remaining meat is **short K** (4096 squares: 1.15-1.21
+  at every r; 1B/3B gate_up K=2048-3072: 1.26-1.38), i.e. per-tile pipeline
+  fill/drain + prologue (K/128 = 16-24 iters/tile), not MMA throughput.
+- Pro6000 sq16384 is elevated at ALL r (1.13-1.27, growing with r) — the
+  giant-grid tile-order issue (GB10 round 2) plausibly exists on 188 SMs too;
+  the sm_count<=72 gate keeps the GB10 heuristic off there. Follow-up for the
+  Pro6000 lane (re-measure on an idle box first).
+- Pro6000 r=0 squares (1.17-1.24) are a stale-branch artifact: the oppareto
+  worktree used for baselines lacks the round-1 castfold (dispatch tag
+  `single_phase_nvfp4`, not `_castfold`) — closes when the GB10 rounds merge.
+
+## Round 10 — ForgeKernel (OpenBMB) on SM121: setup, run, and the merged kernel
+
+### Availability verdict (SM121 / this environment)
+- Spark cannot reach GitHub; ForgeKernel cloned on the driver Mac and mirrored
+  to spark:~/ForgeKernel. The harness NEEDS the Claude Code CLI on the driver
+  (Spark has no CLI/key), so the working topology is: forge 0.1.0 on the Mac
+  (uv venv py3.12), FK_DELIVERY=ssh -> spark-gb10, REMOTE_WORKDIR=~/fk_remote,
+  REMOTE_ENV_FILE sets PATH/CUTLASS_DIR/TORCH_CUDA_ARCH_LIST=12.1a.
+- hw_kb/cuda/sm121/ opened (officially only sm90/sm100 exist): index.md +
+  transcribed methodology entries (gpu_probe_ladder, smem_traffic_triage).
+- v1 harness limits hit (worked around in the task definition):
+  1. judge definition dims must be literal ints or axis names — packed dims
+     (k_lo/2, k_lo/16) must be added as explicit axes in shapes.json;
+  2. no uint8 dtype — byte tensors travel as int8 bit patterns;
+  3. the device gate window refuses a host-bound reference: our ext's
+     deliberate per-call cudaStreamSynchronize (capture-safe barrier) makes
+     host_enqueue == device in their amortized window -> use timing="e2e";
+  4. random "legal" inputs overflowed fp16 -> legal scale ranges tightened.
+- NCU is blocked on the Spark (RmProfilingAdminOnly=1, ERR_NVGPUCTRPERM): runs
+  degrade to CUPTI timings + SASS. Unblocking NCU (admin) would unlock
+  ForgeKernel's stall/timeline pricing — worth doing for round 3.
+- 5 run attempts total; #5 ran the full loop in budget (3h, teacher+student
+  claude-opus-5-5 via the local CLI). Task: tasks/promix_dualphase_gemm
+  (dual-phase GEMM, our codesign_fused_bias kernel as source-mode reference;
+  shapes gu1b_r8 / gu1b_r2 / gu3b_r8, all m=n=8192).
+
+### What the teacher's GPU recon certified (docs/rd_oppareto_data/fk_sm121_recon_report.md)
+- Full SASS/launch anatomy of our shipping kernel on GB10 (persistent 48-CTA,
+  384 threads = 1 producer + 2 cooperative MMA WGs, setmaxnreg 40/232,
+  88064B smem, OMMA.SF E2M1 4X / QMMA.SF E4M3 E8 atoms, 35 blocking
+  rendezvous per tile).
+- **The small-K failure mode: SERIALIZED output-write + mainloop.** The fp16
+  output (134MB at m=n=8192) is 81-87% of compulsory traffic; single-phase
+  K=128..512 is FLAT at 0.685ms = the pure 8192^2 fp16 write (196GB/s).
+  Measured GEMM sits near write+compute SUM (1.44 vs serialized 1.51ms),
+  because the cooperative epilogue drains the TMA store to <=1 outstanding
+  subtile before the next tile's mainloop.
+- GB10 numbers: L2 = 24MiB confirmed; DRAM write 197GB/s, copy 223GB/s;
+  phase-switch cost is a tile-order effect, not intrinsic.
+
+### The evolved kernel and the merge (fk_smallk_ext.cu)
+Student result (4 iterations, 1 kept; e2e geomean 1.146x our reference):
+hand-written persistent dual-phase kernel, same macro-structure, two real
+changes: (1) **whole-tile smem staging + ONE bulk TMA store group left in
+flight across the tile boundary** (cp.async.bulk.wait_group.read only at the
+next tile's epilogue entry) -> the write stream overlaps the next mainloop;
+(2) NV 3-stage/MX 2-stage pipeline + k-step j+1 fragment loads issued before
+k-step j MMAs across tile/segment boundaries. Its blocked SF layout came out
+torch.equal to our prepack_sf_* physical layout, so the merge entry
+(run_prepacked) consumes the pipeline's physSF buffers directly: steady state
+is ONE kernel launch (torch.profiler: exactly 1), CUDA-graph capturable.
+Added at merge: epilogue alpha (g_w) + run_prepacked; constraint: K_high%128==0.
+
+Hard gates:
+- cosine_vs_fp32 per point +1.2e-6..+1.6e-6 vs shipping (no bf16 round-trip
+  in its epilogue) — equal-or-better, PASS.
+- single launch PASS; graph replay PASS (eager/graph speedups agree).
+- routed ONLY inside measured windows (_FK_TABLE_GB10 in mixed_linear.py,
+  gated by _low_sm_device): (8192,2048) M>=8192; (2048,2048) M=2048;
+  (3072,8192) M=2048. Measured losses excluded: 3B down M8192 0.30x(!),
+  3B gate_up M8192 0.85-0.98x, 1B gate_up M2048 0.94x.
+
+Curve effect (vs ours_gb10_uniform11_tuned, same protocol):
+- 1B qkvo M2048 (worst-list #4): gap 1.21-1.29 -> **0.98-1.04** (1.19-1.26x)
+- 1B gate_up M8192 (worst-list #2): gap 1.28-1.36 -> **1.03-1.16** at the
+  KH%128==0 r points (1.10-1.26x); r=1/32, 1/12 (KH 64/192) and r=1 (1984)
+  stay on the shipping kernel (kernel constraint).
+- 3B down M2048: gap 1.01-1.09 -> 0.94-1.01 (1.06-1.10x)
+- every out-of-window point: unchanged (<=2% session noise), cos identical.
+
+Build note: torch >= 2.13 needs -std=c++20 (the Spark-only hotfix in
+full_network_realkernel.py was formalized: _std_flag()/version-select in
+promix/vllm_integ/kernels.py + full_network_realkernel.py; Pro6000 torch 2.11
+keeps c++17 so its build caches stay byte-stable).
+
+## Round 11 — v2 curve + residuals
+
+`ours_gb10_uniform11_tuned_v2.json` (full 18 model shapes + SQ squares x
+{2048,8192} x 11r through the shipping dispatch, rounds 8+10 merged) +
+`ours_gb10_uniform11_tuned_v2.launch_verify.json` (6 points incl. 4 fk-routed:
+ALL exactly 1 kernel per _gemm).
+
+Gap-to-theory vs the previous tuned curve (396 model-shape points):
+- overall median 1.089 -> **1.081**, worst 1.519 -> **1.360**
+- r=1 column median 1.163 -> **1.116** (round-8 swizzle v2)
+- fk-window shapes: see round 10 (worst-list #2/#4 closed to ~1.0-1.16)
+- cosine regressions: **0** (fk points are +1e-6 BETTER)
+- squares (round 9) re-confirmed at/near 1.0 for >=8192.
+
+Remaining space (next round's targets, in value order):
+1. **K_high 128-pad** (mirror of round 3's K_low pad): the new worst points are
+   exactly the KH%128!=0 columns on fk-window shapes (r=1/32 KH=64, r=1/12
+   KH=192: gaps 1.28-1.36) — zero-padding the HIGH segment to 128 would make
+   them fk-eligible (the kernel requires KH%128==0); expected ~1.05-1.15 by
+   neighbor interpolation. Needs quant_pack_float_fp8 K_valid + PackedWeight
+   K_high_pad + serve-producer wiring (same checklist as round 3).
+2. **3B gate_up M8192** (K=3072, all r, 1.26-1.36): fk kernel as-evolved LOSES
+   there (0.85-0.98x) — one more ForgeKernel generation (self_evolve promotes
+   the merged kernel as the next reference) with gu3b-weighted shapes, or a
+   tile-walk/stage retune of fk_smallk for 24-k-tile problems.
+3. r=1 end (K_low=64 ring): median 1.12 — deep-MX stage variants (nv2mx3 etc.)
+   never probed (round 4a covered nv-deep only); /tmp/probe_stages.py staged
+   on the Spark for a future session.
+4. NCU unblock on the Spark (RmProfilingAdminOnly=1) — unlocks ForgeKernel's
+   stall/timeline pricing for generation 2.
+5. Pro6000 sq16384 all-r elevation (round 9) — giant-grid swizzle on 188 SMs,
+   re-measure on an idle box.
+
+ForgeKernel assets kept: driver install + run artifacts at ~/ForgeKernel (Mac,
+moved out of /tmp), spark:~/ForgeKernel mirror; task + sm121 KB archived under
+docs/rd_oppareto_data/forgekernel_sm121/ (hw_kb/cuda/sm121 opened upstream-style
+with index + 2 methodology entries; mechanism entries still to be earned by a
+run that certifies probes on SM121 — this run's candidates sit in its gap queue,
+see fk_sm121_recon_report.md).

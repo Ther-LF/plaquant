@@ -87,7 +87,7 @@ torch::Tensor cd_fused_gemm_prepacked_bias(torch::Tensor A_lo, torch::Tensor phy
     arguments.epilogue = epi_args;
   }
 
-  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo);
+  cd_apply_sched_env(arguments.scheduler, Mi, Ni, Klo, Khi);
   static GemmDual gemm;
   static torch::Tensor ws_cache;
   static bool checked = false;
