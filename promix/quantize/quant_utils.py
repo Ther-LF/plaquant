@@ -74,19 +74,40 @@ def assert_quant_format(bits):
     return True
 
 
+# Row-chunk budget for _apply_fp_format: the fake_quantize_* helpers allocate
+# ~15-20x the input in fp32/int64 temporaries (MSE scale search + element
+# rounding); on 32B eval activations (16384 x 25600) that transient stack OOMs
+# next to the ~65 GiB resident model. Leading dims are independent rows
+# (quantization acts along the last dim only), so row-chunking is
+# bit-identical. 2**26 elems/chunk bounds per-call transients to a few GiB.
+_FP_CHUNK_ELEMS = 2 ** 26
+
+
 def _apply_fp_format(x, fmt):
     """Dispatch a tensor segment through the spec-derived fake quantizer.
 
     Used by ActQuantizer.forward when bits / high_bits / low_bits are string
     FP format identifiers. Block-alignment is checked inside the underlying
     fake_quantize_* helper (it asserts shape[-1] % block_size == 0 with a
-    clear error message).
+    clear error message). Large inputs are processed in row chunks
+    (bit-identical; see _FP_CHUNK_ELEMS above).
     """
     if fmt == "mxfp8":
-        return fake_quantize_mxfp8(x)
-    if fmt == "nvfp4":
-        return fake_quantize_nvfp4(x)
-    raise ValueError(f"Unsupported FP format identifier: {fmt!r}")
+        fn = fake_quantize_mxfp8
+    elif fmt == "nvfp4":
+        fn = fake_quantize_nvfp4
+    else:
+        raise ValueError(f"Unsupported FP format identifier: {fmt!r}")
+    k = max(int(x.shape[-1]), 1)
+    rows = x.numel() // k
+    rows_per_chunk = max(_FP_CHUNK_ELEMS // k, 1)
+    if rows <= rows_per_chunk:
+        return fn(x)
+    flat = x.reshape(rows, k)
+    out = torch.empty_like(flat)
+    for i in range(0, rows, rows_per_chunk):
+        out[i:i + rows_per_chunk] = fn(flat[i:i + rows_per_chunk])
+    return out.reshape(x.shape)
 
 
 # MXFP8 / NVFP4 hardware block sizes (docs/specs/spec-mxfp8-nvfp4.md).
