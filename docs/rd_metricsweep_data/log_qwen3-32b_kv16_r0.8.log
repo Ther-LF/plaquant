@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 279, in <module>
+    main()
+  File "/home/luofan/plaquant-metricsweep/promix/scripts/rd_mmlu.py", line 203, in main
+    ptqmod.init_distributed_for_ptq_main_if_needed()
+  File "/home/luofan/plaquant-metricsweep/promix/eval/ptq.py", line 347, in init_distributed_for_ptq_main_if_needed
+    torch.distributed.init_process_group(
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py", line 83, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py", line 97, in wrapper
+    func_return = func(*args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/distributed_c10d.py", line 1892, in init_process_group
+    store, rank, world_size = next(rendezvous_iterator)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/rendezvous.py", line 280, in _env_rendezvous_handler
+    store = _create_c10d_store(
+            ^^^^^^^^^^^^^^^^^^^
+  File "/home/luofan/baselines/venv/lib/python3.12/site-packages/torch/distributed/rendezvous.py", line 199, in _create_c10d_store
+    return TCPStore(
+           ^^^^^^^^^
+torch.distributed.DistNetworkError: The server socket has failed to listen on any local network address. port: 29500, useIpv6: false, code: -98, name: EADDRINUSE, message: address already in use
