@@ -1,0 +1,18 @@
+{
+ "cell": "competitors.arcquant.llama3-70b.mmlu",
+ "value_mmlu_micro": 77.47,
+ "groups": {
+  "mmlu": 0.7747368421052632,
+  "mmlu_stem": 0.7305263157894737,
+  "mmlu_other": 0.7876923076923077,
+  "mmlu_social_sciences": 0.81,
+  "mmlu_humanities": 0.7938461538461539
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (n=1425), batch_size=8 — lim25 large-model protocol",
+ "harness": "rd_peers70b_lmeval.py = rd_peers70b.py 70B-safe flow (CPU-resident load, as-shipped ARCQuant reorder_model_llama NVFP4 with the cached 70B reorder_index/select_num calib artifacts from the committed peers70b round, real agemm SM120 kernels) + HFLM lm-eval; packed model fit a SINGLE 96GB card (45.0 GiB, placement=single_gpu), venv_acl44",
+ "wiki_repro": {"measured": 6.183373, "committed": 6.1834, "gate": "PASS (same-invocation, before lm-eval)"},
+ "timing": "quantize + wiki gate 94s + MMLU 406s + 0-shot 54s — total ~25 min",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/arc_70b_down.json"
+}
