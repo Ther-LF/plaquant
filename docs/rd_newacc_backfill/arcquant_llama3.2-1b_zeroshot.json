@@ -1,0 +1,43 @@
+{
+ "cell": "competitors.arcquant.llama3.2-1b.zeroshot",
+ "harness": "promix/scripts/rd_newacc_peer.py (as-shipped quantization via peer's own model_utils, peer's own GPTQ-standard eval_ppl loop / lm-eval HFLM in peer's pinned venv)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/hf_cache/hub/models--unsloth--Llama-3.2-1B-Instruct/snapshots/5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+ "quant": "NVFP4",
+ "raw_server_path": "/home/luofan/accmatrix/backfill/arc_1b_zs.json",
+ "lm_eval_version": "0.4.5",
+ "value_zeroshot_avg6": 56.15,
+ "per_task": {
+  "piqa": {
+   "acc": 0.721436343852013,
+   "acc_norm": 0.7181719260065288
+  },
+  "arc_easy": {
+   "acc": 0.6548821548821548,
+   "acc_norm": 0.5972222222222222
+  },
+  "arc_challenge": {
+   "acc": 0.31399317406143346,
+   "acc_norm": 0.3506825938566553
+  },
+  "hellaswag": {
+   "acc": 0.42939653455486954,
+   "acc_norm": 0.574586735710018
+  },
+  "winogrande": {
+   "acc": 0.5911602209944752,
+   "acc_norm": null
+  },
+  "lambada_openai": {
+   "acc": 0.5373568794876771,
+   "acc_norm": null
+  }
+ },
+ "protocol": "0-shot 6-task piqa/arc_easy/arc_challenge/hellaswag/winogrande/lambada_openai, AVG6 = mean of acc_norm (acc for winogrande/lambada_openai), rd_metrics convention, full tasks",
+ "wiki_repro": {
+  "measured": 15.2236,
+  "committed": 15.22,
+  "abs_diff": 0.0036
+ }
+}
