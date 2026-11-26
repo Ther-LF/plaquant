@@ -1,0 +1,138 @@
+{
+  "_meta": {
+    "date": "2026-11-26",
+    "purpose": "Exact effective bits/element (weights, activations, avg) for the accuracy-vs-bits Pareto plot. All scale / zero-point / outlier / residual / metadata overheads included. 'measured' = read from code buffers or checkpoint tensors; 'paper-config' = from the method's documented setup only.",
+    "conventions": [
+      "w_bits / a_bits are per ORIGINAL weight/activation element of the quantized Linear layers (params-weighted across all Linears of the model where allocation varies per Linear).",
+      "Per-tensor FP32/BF16 globals amortize to <1e-4 bits/elem and are noted in formulas but not added numerically.",
+      "Interleaved scale-factor layout padding (CUTLASS 128-row atoms) is excluded as deployment padding, noted where measured.",
+      "tier: w4a4 = same-layer W4A4 comparison group; weight-only = W4A16 (different Pareto marker); fp8 = W8A8; ref = bf16 anchor."
+    ]
+  },
+  "promix": {
+    "tier": "w4a4",
+    "formula_w": "eff_w(r) = (1-r)*(4 + 8/16) + r*(8 + 8/32) + 32/(N*K) = 4.5 + 3.75*r  [r = K_high/K, FP8-channel fraction; NVFP4: FP4 E2M1 elem + E4M3 micro-scale per 16; MXFP8: FP8 E4M3 elem + E8M0 scale per 32; +32 bits/tensor two-level global g_w (negligible)]",
+    "formula_a": "eff_a(r) = 4.5 + 3.75*r  [same block-scale density; activation path is single-level (no global): quant_utils.fake_quantize_nvfp4/mxfp8]",
+    "formula_avg": "eff_avg(r) = 4.5 + 3.75*r",
+    "source": "promix/quantize/weight_pack.py:146-170 (PackedWeight: W_lo_packed N*K_low/2 uint8, physSFB_lo K_low/16 E4M3 bytes, W_hi_bytes N*K_high uint8, physSFB_hi K_high/32 E8M0 bytes, g_w scalar); promix/quantize/quant_utils.py:1066-1180 (fake_quantize_mxfp8/nvfp4, MXFP8_BLOCK=32 NVFP4_BLOCK=16 at :113-115); two-level global quant_utils.py:762-817",
+    "r_table": {
+      "r_nominal": [0.0, 0.03125, 0.0625, 0.08333, 0.125, 0.1875, 0.25, 0.375, 0.5, 0.75, 1.0],
+      "eff_bits": [4.5, 4.6172, 4.7344, 4.8125, 4.9688, 5.2031, 5.4375, 5.9062, 6.375, 7.3125, 8.25],
+      "note": "r=1 is served as all-but-one-ring (K_low=64) and K_high snaps to 64-rings (rd_oppareto_ours.py:snap_khigh), so exact per-shape r differs slightly from nominal; formula uses exact r = K_high/K."
+    },
+    "kv4_bits_per_elem": {
+      "head_dim_128": 5.4375,
+      "head_dim_64": 6.375,
+      "formula": "per-head [main NVFP4 | high MXFP8] with high rounded UP to 32 (quant_utils.kv_fp_high_length mode='up'): hd=128 -> (96*4.5 + 32*8.25)/128 = 5.4375; hd=64 -> (32*4.5 + 32*8.25)/64 = 6.375. NOT merged into the main w/a axes."
+    },
+    "notes": [
+      "rd_oppareto_ours.py:140 eff_bits(K_low,K_high) = (4.5*K_low + 8.25*K_high)/K is CORRECT to <1e-5 bits: the only omission is the per-tensor FP32 two-level global g_w (32/(N*K) ~ 3e-6..8e-6 bits/elem) and the per-Linear input had_K metadata; no fix needed.",
+      "[implementation duplication, excluded] PackedWeight additionally keeps a decode-GEMV copy (W_lo_dec/S_lo_dec fp32 per-16 = +2 bits, W_hi_dec/S_hi_dec fp32 per-32 = +1 bit, weight_pack.py:167-170). Same information re-packed for the M=1 path; the format cost is the fused pack, so Pareto uses single-copy bits.",
+      "[excluded] K_low_pad +64 zero columns fires only on low-SM devices (GB10), weight_pack.py:173-183."
+    ]
+  },
+  "nvfp4_modelopt_llmcompressor": {
+    "tier": "w4a4",
+    "w_bits": 4.5,
+    "a_bits": 4.5,
+    "avg_bits": 4.5,
+    "formula": "w: 4 (E2M1 packed 2/byte) + 8/16 (E4M3 weight_scale per 16) + 2*32/(N*K) (weight_global_scale + input_global_scale FP32 [1]) = 4.5000; a: dynamic NVFP4 = 4 + 8/16 + static per-tensor input_global_scale = 4.5",
+    "source": "measured from safetensors headers of /home/luofan/baselines/quant/Qwen3-8B-NVFP4 and unsloth--Llama-3.2-3B-nvfp4: weight_packed U8 (N,K/2), weight_scale F8_E4M3 (N,K/16), *_global_scale F32 [1]; quantized-linear bits/elem = 4.5000 exact (6.95e9 elems, Qwen3-8B)",
+    "discrepancy": "tracker value 4.56 came from total checkpoint GB / total params (includes bf16 embeddings/norms/lm_head); per quantized weight element it is exactly 4.500"
+  },
+  "arcquant": {
+    "tier": "w4a4",
+    "w_bits": {"llama-3.2-1b-instruct": 5.2204, "llama-3.2-3b": 5.1214, "llama-3-8b": 5.1362},
+    "a_bits": {"llama-3.2-1b-instruct": 5.2204, "llama-3.2-3b": 5.1214, "llama-3-8b": 5.1362},
+    "avg_bits": {"llama-3.2-1b-instruct": 5.2204, "llama-3.2-3b": 5.1214, "llama-3-8b": 5.1362},
+    "formula": "per Linear: 4.5*(K+S)/K, S = adaptive residual channel count (method's own accounting, ARCQuant utilize.py:554/560). Weights: top-S channels DUPLICATED along K, all NVFP4 (E2M1 + UE4M3 per 16 = 4.5) + per-tensor FP32 global (quantize.py:291, negligible). Activations: NVFP4(x) concat NVFP4(residual error on S columns) (quantize.py:312-341) -> same (K+S)/K expansion. Params-weighted over all Linears.",
+    "source": "measured: saved/*_average_bits_wikitext2_max.pt params-weighted on server (3B: 5.1214, min 4.535/max 5.8125, S mean 385; 8B: 5.1362, S mean 483; 1B(hash 5a8abab4): 5.2204, K inferred 2048/8192 matches 1B). Formula verified at ARCQuant/utilize.py:554-576; quantize code model/quantize.py:287-341, 145-171",
+    "discrepancy": "tracker 5.12/5.14/5.22 CONFIRMED (5.1214/5.1362/5.2204)"
+  },
+  "sharq": {
+    "tier": "w4a4",
+    "w_bits": 4.75,
+    "a_bits": 7.5,
+    "avg_bits": 6.125,
+    "formula": "w: 4 (single shared E2M1 payload, K/2 bytes/row) + 8/32 (UE4M3 sparse-view scale per 32) + 8/16 (dense-view scale: the SAME per-32 values physically DUPLICATED into a per-16 buffer) + per-tensor FP32 global = 4.75 physical (4.25 if dedup counted once). a (asymptotic, measured 7.5625 at M=2048,K=4096 incl. +128-row SFA padding): 2:4-compressed sparse backbone 2.0 (E2M1 on K/2 kept) + sparse metadata E 0.5 + sparse SFA 0.5 + dense NVFP4 residual 4.0 + residual SFA 0.5 = 7.5 + per-tensor FP32 global",
+    "source": "measured: sharq_ops.get_fused_sparse_residual_buffer_sizes(2048,4096,4096) -> a_comp 2.0 / E 0.5 / SFA 0.53125 / Q_res 4.0 / SF_res 0.53125 bits/elem (SharQ/kernels/src/bindings.cpp:243-253, include/sparse_nvfp4.h:117-151). Weight: kernels/src/shared_weight_nvfp4.cu:20-111 (quantize_w32_shared_kernel + duplicate_sfb32_to_dense_sfb16_kernel); model/quantize.py:149-211",
+    "discrepancy": "tracker '~4.5 (†)' understates: physical weight storage is 4.75 (dup dense SFB), and the activation stream is 7.5 bits/elem (two full streams + sparsity metadata) — the † caveat is now quantified"
+  },
+  "micromix": {
+    "tier": "w4a4",
+    "w_bits": {"llama-3.2-3b": 5.2256, "llama-3-8b": 5.18},
+    "a_bits": {"llama-3.2-3b": 5.2256, "llama-3-8b": 5.18},
+    "avg_bits": {"llama-3.2-3b": 5.2256, "llama-3-8b": 5.18},
+    "formula": "per Linear: (4*p4 + 6*p6 + 8*p8)/K + 8/32, channels split into MXFP4 (E2M1) / MXFP6 (E3M2, physically 6-bit packed: 'KS = AS.size(1)*4/3' bindings.cpp:69) / MXFP8 (E4M3), each with UE8M0 scale per 32. p6/p8 are per-Linear calibrated counts; same split applies to weights and activations (shared reorder index). Params-weighted.",
+    "source": "measured: saved/{Llama-3.2-3B,llama-3-8b}_p{6,8}_num_wikitext2.pt params-weighted on server (3B elem-only 4.9756 +0.25 scale = 5.2256; 8B 4.93 +0.25 = 5.18). Element types mgemm/src/gemm.cu:13-19 (cutlass::mx_float{4,6,8}_t); FP6 6-bit packing mgemm/src/bindings.cpp:69",
+    "discrepancy": "tracker 5.23/5.18 CONFIRMED"
+  },
+  "resq_coquant": {
+    "tier": "w4a4",
+    "w_bits": {"1B": 4.5124, "3B": 4.5088, "8B": 4.5063},
+    "a_bits": {"1B": 4.5248, "3B": 4.5176, "8B": 4.5126},
+    "avg_bits": {"1B": 4.5186, "3B": 4.5132, "8B": 4.5094},
+    "formula": "w: 7/8*INT4 + 1/8*INT8 + 2 per-output-channel FP16 scales (main+high segments, sym, GPTQ+w_clip) = 4.5 + 32/K; a: per-token asym 2 segments (scale+zero FP16 each) = 4.5 + 64/K; KV: INT4 asym per-head (k/v_groupsize = head_dim) = 4 + 32/head_dim. Params-weighted.",
+    "source": "config: CoQuant/fake_quant/0_eval_ptq_4bit.sh (--w_bits 4 --a_bits 4 --high_bits 8 --high_fraction 0.125 --w_clip --a_asym --k_asym --v_asym) on server; segment quantizer structure promix/quantize/quant_utils.py:314-419 (scale/zero per token per segment). [假设] scale dtype FP16 (ResQ fake-quant keeps scales in model dtype; a real INT kernel would store FP16/FP32 — ±16/K bits at most).",
+    "discrepancy": "tracker '~4.6' -> precise 4.51 (w)"
+  },
+  "atom": {
+    "tier": "w4a4",
+    "w_bits": {"1B": 4.267, "3B": 4.2075, "8B": 4.1666},
+    "a_bits": {"1B": 4.3295, "3B": 4.27, "8B": 4.2291},
+    "avg_bits": {"1B": 4.2983, "3B": 4.2388, "8B": 4.1979},
+    "formula": "per Linear (K=d_in): w = 4*(1-128/K) + 8*(128/K) + 16/(128*2) [INT4 g128 scale, channel_group=2] + (16/128)*(128/K) [keeper INT8 scale] = 4.0625 + 528/K; a = same keeper mix with per-token g128 FP16 scales = 4.125 + 528/K. KV INT4 asym per-head. Params-weighted.",
+    "source": "paper-config + repo RESULTS: /home/luofan/baselines/peers/atom/RESULTS.md §2 (its own bits formula, keeper=128 INT8, group-128, channel_group=2, --a_sym --w_sym, kv_cache INT4). [假设] activation scale dtype FP16; Atom fake-quant does not materialize them.",
+    "discrepancy": "tracker '~4.3' -> per-model 4.17-4.27 (w)"
+  },
+  "quarot": {
+    "tier": "w4a4",
+    "w_bits": {"1B": 4.0062, "3B": 4.0044, "8B": 4.0032},
+    "a_bits": {"1B": 4.0062, "3B": 4.0044, "8B": 4.0032},
+    "avg_bits": {"1B": 4.0062, "3B": 4.0044, "8B": 4.0032},
+    "formula": "w: INT4 GPTQ per-output-channel symmetric (group_size=-1, w_clip) = 4 + 16/K; a: INT4 per-token symmetric = 4 + 16/K; KV INT4 per-token sym. Params-weighted.",
+    "source": "as-run config /home/luofan/baselines/peers/quarot/RESULTS.md:44-59 (--rotate --w_bits 4 --a_bits 4 --k_bits 4 --v_bits 4 --w_clip). [假设] FP16 scale storage.",
+    "discrepancy": "tracker '4.0' -> 4.003-4.006 (rounding-level only)"
+  },
+  "spinquant": {
+    "tier": "w4a4",
+    "w_bits": {"1B": 4.0062, "3B": 4.0044, "8B": 4.0032},
+    "a_bits": {"1B": 4.0124, "3B": 4.0088, "8B": 4.0063},
+    "avg_bits": {"1B": 4.0093, "3B": 4.0066, "8B": 4.0048},
+    "formula": "w: INT4 GPTQ per-output-channel sym (w_groupsize=-1, w_clip) = 4 + 16/K; a: INT4 per-token ASYM (--a_asym: FP16 scale + zero) = 4 + 32/K; KV: INT4 asym per-head group=head_dim = 4 + 32/hd (4.5 @hd64, 4.25 @hd128). Params-weighted.",
+    "source": "as-run config /home/luofan/baselines/peers/spinquant/RESULTS.md:16-18, run_eval.sh:8-18. [假设] FP16 scale/zero storage.",
+    "discrepancy": "tracker '4.0' -> 4.003-4.012"
+  },
+  "gptq_w4a16": {
+    "tier": "weight-only",
+    "w_bits": 4.125,
+    "a_bits": 16.0,
+    "avg_bits": 10.0625,
+    "formula": "w: 4 (INT4, 8/int32 word in weight_packed) + 16/128 (BF16 weight_scale per group-128) = 4.125; symmetric — NO zero-point tensor in checkpoint. a: bf16 (W4A16 tier, separate Pareto marker).",
+    "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-gptq_w4a16 down_proj = weight_packed I32 (3072,1024) [=3072x8192 4-bit], weight_scale BF16 (3072,64) [g128]; suffixes contain no zero_point"
+  },
+  "awq_w4a16": {
+    "tier": "weight-only",
+    "w_bits": 4.125,
+    "a_bits": 16.0,
+    "avg_bits": 10.0625,
+    "formula": "identical compressed-tensors layout to GPTQ ckpt: INT4 g128 + BF16 scale, symmetric (no zero-point tensor) = 4 + 16/128 = 4.125",
+    "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-awq_w4a16 (weight_packed I32 (3072,1024), weight_scale BF16 (3072,64)). Note: classic AWQ is asym (+4/128 zeros = 4.156); OUR evaluated ckpt is the symmetric compressed-tensors re-pack."
+  },
+  "fp8_w8a8": {
+    "tier": "fp8",
+    "w_bits": 8.004,
+    "a_bits": 8.008,
+    "avg_bits": 8.006,
+    "formula": "w: FP8 E4M3 + per-output-channel BF16 weight_scale = 8 + 16/K (measured 8.0044 at 3B); a: dynamic per-token FP8 = 8 + 32/K [假设 FP32 token scale; ckpt has no input_scale -> vLLM dynamic]",
+    "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-fp8 (weight F8_E4M3 (3072,8192), weight_scale BF16 (3072,1)); quantized-linear bits/elem = 8.0044"
+  },
+  "bf16": {
+    "tier": "ref",
+    "w_bits": 16.0,
+    "a_bits": 16.0,
+    "avg_bits": 16.0,
+    "formula": "bf16 anchor",
+    "source": "definition"
+  }
+}
