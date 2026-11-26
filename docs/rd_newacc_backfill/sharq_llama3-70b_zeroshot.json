@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.sharq.llama3-70b.zeroshot",
+ "value_zeroshot_avg6": 78.00,
+ "per_task": {
+  "piqa": {"acc": 0.88, "acc_norm": 0.84},
+  "arc_easy": {"acc": 0.8, "acc_norm": 0.72},
+  "arc_challenge": {"acc": 0.52, "acc_norm": 0.6},
+  "hellaswag": {"acc": 0.6, "acc_norm": 0.84},
+  "winogrande": {"acc": 0.84, "acc_norm": null},
+  "lambada_openai": {"acc": 0.84, "acc_norm": null}
+ },
+ "protocol": "0-shot 6-task AVG6 (acc_norm for piqa/arc/hellaswag, acc for winogrande/lambada), limit=25 per task (n=150) — lim25 large-model protocol",
+ "harness": "rd_peers70b_lmeval.py (as-shipped SharQ fused kernels, single-GPU resident packed model) + HFLM lm-eval, venv_acl44",
+ "wiki_repro": {"measured": 5.769288, "committed": 5.7693, "gate": "PASS (same-invocation)"},
+ "sanity_flag": "78.00 > bf16-70B lim25 76.67 — the recurring n=150 lim25 noise (FP8/GPTQ landed 78.00 too); MMLU n=1425 ordering sane (78.53 < 80.63 bf16)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/sharq_70b_down.json"
+}

@@ -1,0 +1,18 @@
+{
+ "cell": "competitors.sharq.llama3-70b.mmlu",
+ "value_mmlu_micro": 78.53,
+ "groups": {
+  "mmlu": 0.7852631578947369,
+  "mmlu_stem": 0.7263157894736842,
+  "mmlu_other": 0.7938461538461539,
+  "mmlu_social_sciences": 0.8433333333333334,
+  "mmlu_humanities": 0.8092307692307692
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (n=1425), batch_size=8 — lim25 large-model protocol (same as bf16/FP8/GPTQ 70B cells)",
+ "harness": "rd_peers70b_lmeval.py = rd_peers70b.py 70B-safe flow (CPU-resident load, as-shipped SharQ quantize_model_llama quant_type=SHARQ extra_fusion=False, real fused sharq_ops SM120 kernels) + rd_newacc_peer-style HFLM lm-eval; packed model 39.9 GiB fit a SINGLE 96GB card (placement=single_gpu), venv_acl44",
+ "wiki_repro": {"measured": 5.769288, "committed": 5.7693, "abs_diff": 0.00001, "gate": "PASS (same-invocation, before lm-eval)"},
+ "timing": "quantize 144s + wiki gate 100s (layer-offload) + MMLU 490s + 0-shot 51s — total ~30 min (vs 4-8h pre-estimate; feasibility concern retired)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/sharq_70b_down.json"
+}
