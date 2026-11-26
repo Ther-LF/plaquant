@@ -1,0 +1,23 @@
+{
+ "cell": "competitors.sharq.llama3.2-1b.mmlu",
+ "harness": "promix/scripts/rd_newacc_peer.py (as-shipped quantization via peer's own model_utils, peer's own GPTQ-standard eval_ppl loop / lm-eval HFLM in peer's pinned venv)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/hf_cache/hub/models--unsloth--Llama-3.2-1B-Instruct/snapshots/5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+ "quant": "SHARQ",
+ "raw_server_path": "/home/luofan/accmatrix/backfill/sharq_1b_mmlu.json",
+ "lm_eval_version": "0.4.5",
+ "value_mmlu_micro": 42.89,
+ "mmlu_macro": 43.83,
+ "groups": {
+  "mmlu": 0.4288562882780231,
+  "mmlu_humanities": 0.39574920297555793,
+  "mmlu_other": 0.47859671709044094,
+  "mmlu_social_sciences": 0.47513812154696133,
+  "mmlu_stem": 0.3840786552489692
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), reported = lm-eval 'mmlu' group acc (micro average), rd_metrics convention \u2014 same setting as our 1B metricsweep curve",
+ "wiki_repro": {
+  "note": "wiki gate reproduced in the paired run of the same quantized path (see sibling cell file)"
+ }
+}
