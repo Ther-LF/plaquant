@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.gptq_w4a16.llama3-70b.mmlu",
+ "value_mmlu_micro": 79.09,
+ "groups": {
+  "mmlu": 0.7908771929824562,
+  "mmlu_stem": 0.7368421052631579,
+  "mmlu_other": 0.7938461538461539,
+  "mmlu_social_sciences": 0.86,
+  "mmlu_humanities": 0.803076923076923
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (n=1425), batch_size auto — lim25 large-model protocol (same as bf16/FP8 70B cells)",
+ "harness": "lm-eval 0.4.13 vllm backend (gpu_memory_utilization=0.85, max_model_len=4096), single 96GB card",
+ "quant": "GPTQ W4A16 group128 (llm-compressor, wikitext 256x2048 calib; ckpt in /dev/shm, reproducible)",
+ "wiki_repro": {"measured": 5.6789, "note": "trust gate = same-ckpt same-session ppl run (gptq_llama3-70b_ppl.json); first GPTQ-70B measurement"},
+ "sanity": "ordering bf16 80.63 > FP8 80.35 > GPTQ 79.09 (all lim25) — monotone with bits",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/gptq_70b_mmlu/"
+}

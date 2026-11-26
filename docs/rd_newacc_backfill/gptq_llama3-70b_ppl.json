@@ -1,0 +1,16 @@
+{
+ "cell": "competitors.gptq_w4a16.llama3-70b.{wiki,c4}",
+ "value_wiki": 5.6789,
+ "value_c4": 10.0810,
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, '\\n\\n'.join, non-overlapping 2048-token chunks, token-pooled exp(mean NLL) (committed scoreboard protocol; vLLM prompt_logprobs, bench_vllm convention)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (verbatim promix/eval/data.py:get_c4 eval protocol)"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py — vLLM prompt_logprobs PPL, single 96GB card",
+ "quant": "GPTQ W4A16 group128 sym (llm-compressor 0.14.0.1 GPTQModifier, dampening_frac 0.01, ignore lm_head; wikitext-2 train calib 256x2048 — same recipe/calib as the committed 1B/3B/8B gptq ckpts). Ckpt built this session on CPU-resident model + sequential GPU onloading (quantize 3614s, 1 GPU); saved to /dev/shm (disk full), 37 GiB, reproducible via /home/luofan/accmatrix/backfill70b/quantize_70b.py",
+ "sanity": "bf16 5.316/9.204 -> +0.363/+0.877; 8B gptq was +0.38 wiki vs its bf16 — scale-consistent",
+ "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct -> GPTQ W4A16",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/gptq_70b_ppl.json"
+}
