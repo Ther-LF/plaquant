@@ -1,0 +1,16 @@
+{
+ "cell": "competitors.awq_w4a16.llama3-70b.{wiki,c4}",
+ "value_wiki": 5.8972,
+ "value_c4": 9.6558,
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, '\\n\\n'.join, non-overlapping 2048-token chunks, token-pooled exp(mean NLL) (committed scoreboard protocol; vLLM prompt_logprobs, bench_vllm convention)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (verbatim promix/eval/data.py:get_c4 eval protocol)"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py — vLLM prompt_logprobs PPL, single 96GB card",
+ "quant": "AWQ W4A16 group128 (llm-compressor 0.14.0.1 new-API AWQModifier offload_device=cpu + QuantizationModifier W4A16, ignore lm_head; wikitext-2 train calib 128x2048 — REDUCED from the small-model 256x2048: 256-sample AWQ smoothing OOMs a single 96GB card at 70B even with cpu offload; deviation recorded). Ckpt saved /dev/shm (disk full), 37 GiB, reproducible via /home/luofan/accmatrix/backfill70b/quantize_70b.py",
+ "sanity": "GPTQ/AWQ pattern matches 8B exactly: GPTQ better wiki (5.679<5.897), AWQ better C4 (9.656<10.081) — same inversion as 8B (6.52/9.65 vs 6.73/9.64)",
+ "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct -> AWQ W4A16",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU7, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/awq_70b_ppl.json"
+}

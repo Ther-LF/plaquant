@@ -100,9 +100,10 @@
    "llama3-70b": {
     "wiki": 6.183,
     "c4": 10.05,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/rd_peers70b.md (raw docs/rd_peers70b_data/70b_arcquant.json)"
+    "mmlu": 77.47,
+    "zeroshot": 71.33,
+    "source": "docs/rd_peers70b.md (raw docs/rd_peers70b_data/70b_arcquant.json); downstream docs/rd_newacc_backfill/arcquant_llama3-70b_{mmlu,zeroshot}.json",
+    "note": "downstream lim25 (11-27, as-shipped agemm kernels single-GPU, wiki gate 6.1834 bit-exact)"
    },
    "qwen3-8b": {
     "wiki": null,
@@ -601,12 +602,12 @@
     "note": "wiki realigned 2026-11-26 to absolute vLLM protocol (measured 6.7312; old scoreboard value 6.59 was the misaligned pipeline-PPL/older convention)"
    },
    "llama3-70b": {
-    "wiki": null,
-    "c4": null,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": null,
-    "note": "not run"
+    "wiki": 5.8972,
+    "c4": 9.6558,
+    "mmlu": 79.79,
+    "zeroshot": 75.33,
+    "source": "docs/rd_newacc_backfill/awq_llama3-70b_{ppl,mmlu,zeroshot}.json",
+    "note": "ckpt built 11-27 (llm-compressor AWQ W4A16 g128; calib 128x2048 reduced from 256 \u2014 256-sample AWQ smoothing OOMs 96GB at 70B, deviation recorded); downstream lim25 vllm backend; GPTQ/AWQ wiki-C4 inversion matches 8B pattern"
    },
    "qwen3-8b": {
     "wiki": null,

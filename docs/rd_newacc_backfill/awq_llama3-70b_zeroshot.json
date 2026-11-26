@@ -1,0 +1,20 @@
+{
+ "cell": "competitors.awq_w4a16.llama3-70b.zeroshot",
+ "value_zeroshot_avg6": 75.33,
+ "per_task": {
+  "piqa": {"acc,none": 0.88, "acc_norm,none": 0.8},
+  "arc_easy": {"acc,none": 0.76, "acc_norm,none": 0.72},
+  "arc_challenge": {"acc,none": 0.64, "acc_norm,none": 0.64},
+  "hellaswag": {"acc,none": 0.64, "acc_norm,none": 0.8},
+  "winogrande": {"acc,none": 0.72, "acc_norm,none": null},
+  "lambada_openai": {"acc,none": 0.84, "acc_norm,none": null}
+ },
+ "protocol": "0-shot 6-task AVG6 (acc_norm for piqa/arc/hellaswag, acc for winogrande/lambada), limit=25 per task (n=150) — lim25 large-model protocol",
+ "harness": "lm-eval 0.4.13 vllm backend, single 96GB card",
+ "quant": "AWQ W4A16 group128 (llm-compressor, wikitext 128x2048 calib)",
+ "wiki_repro": {"measured": 5.8972, "note": "same-ckpt same-session gate"},
+ "note": "75.33 < bf16 lim25 76.67 (sane); n=150 noise band +-3.5pp applies as for all lim25 0-shot 70B cells",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU7, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/awq_70b_zs/"
+}

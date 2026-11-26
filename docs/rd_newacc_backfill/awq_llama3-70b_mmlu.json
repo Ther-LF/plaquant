@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.awq_w4a16.llama3-70b.mmlu",
+ "value_mmlu_micro": 79.79,
+ "groups": {
+  "mmlu": 0.7978947368421052,
+  "mmlu_stem": 0.7473684210526316,
+  "mmlu_other": 0.8092307692307692,
+  "mmlu_social_sciences": 0.8466666666666667,
+  "mmlu_humanities": 0.8153846153846154
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (n=1425), batch_size auto — lim25 large-model protocol",
+ "harness": "lm-eval 0.4.13 vllm backend (gpu_memory_utilization=0.85, max_model_len=4096), single 96GB card",
+ "quant": "AWQ W4A16 group128 (llm-compressor, wikitext 128x2048 calib — reduced from 256, see awq_llama3-70b_ppl.json)",
+ "wiki_repro": {"measured": 5.8972, "note": "trust gate = same-ckpt same-session ppl run; first AWQ-70B measurement"},
+ "sanity": "79.79 < bf16 80.63; AWQ MMLU > GPTQ MMLU (79.79 > 79.09) while GPTQ wins wiki — consistent with the 8B pattern (AWQ 63.34 > GPTQ 62.60)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU7, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/awq_70b_mmlu/"
+}
