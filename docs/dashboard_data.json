@@ -689,10 +689,10 @@
    "llama3.2-1b": {
     "wiki": 13.16,
     "c4": 18.52,
-    "mmlu": null,
+    "mmlu": 46.05,
     "zeroshot": 59.33,
-    "source": "docs/rd_newpeers_accuracy.md bridge; 0-shot docs/rd_metrics_report.md (via docs/rd_mmlu_report.md)",
-    "note": "1B bf16 MMLU never run (results_tracker.md: '1B/13B MMLU' residual gap)"
+    "source": "docs/rd_newpeers_accuracy.md bridge; 0-shot docs/rd_metrics_report.md (via docs/rd_mmlu_report.md); mmlu docs/rd_newacc_backfill/bf16_llama3.2-1b_mmlu.json (2026-11-26 backfill, full 57-subtask, wiki gate 13.1569 vs 13.16)",
+    "note": "1B bf16 MMLU measured 2026-11-26 (closed the results_tracker residual gap)"
    },
    "llama3.2-3b": {
     "wiki": 7.81,
@@ -733,12 +733,12 @@
     "note": "downstream with limit=25 per subtask (lim25 protocol)"
    },
    "qwen3-32b": {
-    "wiki": null,
-    "c4": null,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": null,
-    "note": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+    "wiki": 7.6102,
+    "c4": 10.7808,
+    "mmlu": 83.65,
+    "zeroshot": 66.0,
+    "source": "docs/rd_newacc_backfill/bf16_qwen3-32b.json (2026-11-26 backfill)",
+    "note": "downstream with limit=25 per subtask (lim25 protocol, same as qwen3-8b/14b bf16 anchors)"
    }
   }
  },
@@ -6004,32 +6004,12 @@
    "reason": "not run"
   },
   {
-   "where": "competitors.bf16.llama3.2-1b.mmlu",
-   "reason": "1B bf16 MMLU never run (results_tracker.md: '1B/13B MMLU' residual gap)"
-  },
-  {
    "where": "competitors.bf16.llama3-70b.mmlu",
    "reason": "70B bf16 downstream not run (NVFP4 proxy only)"
   },
   {
    "where": "competitors.bf16.llama3-70b.zeroshot",
    "reason": "70B bf16 downstream not run (NVFP4 proxy only)"
-  },
-  {
-   "where": "competitors.bf16.qwen3-32b.wiki",
-   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
-  },
-  {
-   "where": "competitors.bf16.qwen3-32b.c4",
-   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
-  },
-  {
-   "where": "competitors.bf16.qwen3-32b.mmlu",
-   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
-  },
-  {
-   "where": "competitors.bf16.qwen3-32b.zeroshot",
-   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
   },
   {
    "where": "ours_downstream.qwen3-32b.kv16",

@@ -1,0 +1,68 @@
+{
+ "cell": "competitors.bf16.qwen3-32b.{wiki,c4,mmlu,zeroshot}",
+ "value_wiki": 7.6102,
+ "value_c4": 10.7808,
+ "value_mmlu": 83.65,
+ "value_zeroshot": 66.0,
+ "mmlu_groups": {
+  "mmlu_stem": 0.8315789473684211,
+  "mmlu_other": 0.84,
+  "mmlu_social_sciences": 0.86,
+  "mmlu_humanities": 0.8184615384615385,
+  "mmlu": 0.8364912280701754
+ },
+ "zeroshot_per_task": {
+  "piqa": {
+   "acc": 0.8,
+   "acc_norm": 0.8
+  },
+  "arc_easy": {
+   "acc": 0.88,
+   "acc_norm": 0.8
+  },
+  "arc_challenge": {
+   "acc": 0.52,
+   "acc_norm": 0.48
+  },
+  "hellaswag": {
+   "acc": 0.52,
+   "acc_norm": 0.64
+  },
+  "winogrande": {
+   "acc": 0.68,
+   "acc_norm": null
+  },
+  "lambada_openai": {
+   "acc": 0.56,
+   "acc_norm": null
+  }
+ },
+ "protocol": "wiki/C4 = committed metricsweep evaluator protocol (bf16 full-forward, non-overlapping 2048 chunks / get_c4 256x2048 seed0); downstream = MMLU 5-shot + 0-shot AVG6 with limit=25/subtask batch 8 (lim25 protocol, identical to committed qwen3-8b/14b bf16 anchors)",
+ "harness": "promix/scripts/rd_mmlu.py --alloc none --c4 --mmlu --zeroshot --limit 25 --batch_size 8",
+ "model": "/home/luofan/latches/models/Qwen3-32B (repaired ckpt)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/qwen3-32b_bf16.json",
+ "meta": {
+  "point": "qwen3-32b_bf16",
+  "model": "/home/luofan/latches/models/Qwen3-32B",
+  "substrate": "ring",
+  "ring_size": 512,
+  "alloc": "none",
+  "gptq_nsamples": 128,
+  "percdamp": 0.01,
+  "act_mse_steps": 3,
+  "act_mse_steps_up": 0,
+  "weight_mse_steps": 3,
+  "lm_eval_batch_size": 8,
+  "limit": 25,
+  "zs_tasks": [
+   "piqa",
+   "arc_easy",
+   "arc_challenge",
+   "hellaswag",
+   "winogrande",
+   "lambada_openai"
+  ]
+ }
+}

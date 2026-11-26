@@ -1,0 +1,45 @@
+{
+ "cell": "competitors.bf16.llama3.2-1b.mmlu",
+ "value_mmlu": 46.05,
+ "groups": {
+  "mmlu_stem": 0.40120520139549637,
+  "mmlu_other": 0.5175410363694882,
+  "mmlu_social_sciences": 0.5125121871953201,
+  "mmlu_humanities": 0.42848034006376196,
+  "mmlu": 0.46047571571001283
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), reported = lm-eval 'mmlu' group acc (micro), rd_metrics HF-harness convention \u2014 same harness as committed bf16 3B/8B MMLU (rd_mmlu.py --alloc none, lm-eval 0.4.x HFLM bs16)",
+ "harness": "promix/scripts/rd_mmlu.py --alloc none --mmlu --batch_size 16 (plaquant-metricsweep clone, baselines/venv)",
+ "model": "unsloth/Llama-3.2-1B-Instruct",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "wiki_repro": {
+  "measured": 13.1569,
+  "committed": 13.16,
+  "abs_diff": 0.0031,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/bf16_1b_mmlu.json",
+ "meta": {
+  "point": "1b_bf16_mmlu",
+  "model": "unsloth/Llama-3.2-1B-Instruct",
+  "substrate": "ring",
+  "ring_size": 512,
+  "alloc": "none",
+  "gptq_nsamples": 512,
+  "percdamp": 0.01,
+  "act_mse_steps": 3,
+  "act_mse_steps_up": 0,
+  "weight_mse_steps": 3,
+  "lm_eval_batch_size": 16,
+  "limit": null,
+  "zs_tasks": [
+   "piqa",
+   "arc_easy",
+   "arc_challenge",
+   "hellaswag",
+   "winogrande",
+   "lambada_openai"
+  ]
+ }
+}
