@@ -1,0 +1,46 @@
+{
+ "cell": "competitors.gptq_w4a16.llama3-8b.c4",
+ "value_c4": 9.6477,
+ "wiki_measured": 6.5254,
+ "wiki_repro": {
+  "measured": 6.5254,
+  "committed": 6.52,
+  "abs_diff": 0.0054,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "bench_vllm convention (add_special_tokens=False, 2048 chunks, token-pooled)",
+  "c4": "get_c4 256x2048 seed0 verbatim"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py (vLLM prompt_logprobs)",
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/ref_llama_3_8b_gptq_w4a16_ppl.json",
+ "raw": {
+  "meta": {
+   "model": "/home/luofan/baselines/quant/unsloth--llama-3-8b-gptq_w4a16",
+   "gpu": "5",
+   "time": "2026-11-26 10:05:48",
+   "seqlen": 2048,
+   "c4_seed": 0
+  },
+  "wikitext": {
+   "ppl": 6.525369989291384,
+   "nll": -541376.9870526154,
+   "scored_tokens": 288627,
+   "chunks": 141,
+   "missing_logprob_slots": 0,
+   "seconds": 17.167168140411377
+  },
+  "c4": {
+   "ppl": 9.647655892853685,
+   "nll": -1187831.18082818,
+   "scored_tokens": 524032,
+   "chunks": 256,
+   "missing_logprob_slots": 0,
+   "seconds": 31.088406801223755
+  }
+ },
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/baselines/quant/unsloth--llama-3-8b-gptq_w4a16",
+ "quant": "GPTQ W4A16 (vLLM gptq_marlin ckpt)"
+}

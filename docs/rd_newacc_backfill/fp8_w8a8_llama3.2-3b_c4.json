@@ -1,0 +1,46 @@
+{
+ "cell": "competitors.fp8_w8a8.llama3.2-3b.c4",
+ "value_c4": 10.5117,
+ "wiki_measured": 7.88,
+ "wiki_repro": {
+  "measured": 7.88,
+  "committed": 7.88,
+  "abs_diff": 0.0,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "bench_vllm convention (add_special_tokens=False, 2048 chunks, token-pooled)",
+  "c4": "get_c4 256x2048 seed0 verbatim"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py (vLLM prompt_logprobs)",
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/ref_llama_3_2_3b_fp8_ppl.json",
+ "raw": {
+  "meta": {
+   "model": "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-fp8",
+   "gpu": "4",
+   "time": "2026-11-26 11:05:09",
+   "seqlen": 2048,
+   "c4_seed": 0
+  },
+  "wikitext": {
+   "ppl": 7.879950306637257,
+   "nll": -595818.9497463377,
+   "scored_tokens": 288627,
+   "chunks": 141,
+   "missing_logprob_slots": 0,
+   "seconds": 6.480755090713501
+  },
+  "c4": {
+   "ppl": 10.511745850959883,
+   "nll": -1232781.760816151,
+   "scored_tokens": 524032,
+   "chunks": 256,
+   "missing_logprob_slots": 0,
+   "seconds": 12.368617296218872
+  }
+ },
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/baselines/quant/unsloth--Llama-3.2-3B-fp8",
+ "quant": "FP8 W8A8 (llm-compressor fp8 ckpt)"
+}
