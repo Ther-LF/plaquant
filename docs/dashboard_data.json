@@ -1,0 +1,6139 @@
+{
+ "_meta": {
+  "generated": "2026-11-26",
+  "generator": "built by Claude from committed docs/ data (see per-section _source/source fields)",
+  "models": [
+   "llama3.2-1b",
+   "llama3.2-3b",
+   "llama3-8b",
+   "llama3-70b",
+   "qwen3-8b",
+   "qwen3-14b",
+   "qwen3-32b"
+  ],
+  "metrics": {
+   "wiki": "WikiText-2 PPL (lower better)",
+   "c4": "C4 PPL",
+   "mmlu": "MMLU 5-shot acc % (micro)",
+   "zeroshot": "0-shot 6-task avg acc %"
+  },
+  "protocol": "wikitext-2-raw-v1 test, 2048-token non-overlapping chunks, bf16 base; C4 QuaRot-standard 256x2048; lm-eval 0.4.5; RTX Pro 6000 SM120 (docs/baselines_on_hardware.md)"
+ },
+ "competitors": {
+  "sharq": {
+   "llama3.2-1b": {
+    "wiki": 14.79,
+    "c4": 20.96,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_newpeers_accuracy.md"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.39,
+    "c4": 11.29,
+    "mmlu": 53.42,
+    "zeroshot": 66.64,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/sharq_3b_zs.json)"
+   },
+   "llama3-8b": {
+    "wiki": 6.68,
+    "c4": 9.58,
+    "mmlu": 62.87,
+    "zeroshot": 71.89,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/sharq_8b_zs.json)"
+   },
+   "llama3-70b": {
+    "wiki": 5.769,
+    "c4": 9.659,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md (raw docs/rd_peers70b_data/70b_sharq.json)"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/results_tracker.md 2026-11-23 + server /home/luofan/accmatrix/sharq_qwen8b.json",
+    "note": "as-shipped ran but numerically collapsed: wiki 42803.9 / c4 27499.5 (Llama-specific pipeline does not transfer to Qwen3 QK-Norm); recorded as unusable"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not applicable: SharQ Qwen3 pipeline collapsed at 8B, 14B not attempted"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not applicable: same as 14B"
+   }
+  },
+  "arcquant": {
+   "llama3.2-1b": {
+    "wiki": 15.22,
+    "c4": 20.79,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_newpeers_accuracy.md"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.54,
+    "c4": 11.55,
+    "mmlu": 52.64,
+    "zeroshot": 66.14,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/arc_3b_zs.json)"
+   },
+   "llama3-8b": {
+    "wiki": 6.81,
+    "c4": 9.79,
+    "mmlu": 62.19,
+    "zeroshot": 71.47,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/arc_8b_zs.json)"
+   },
+   "llama3-70b": {
+    "wiki": 6.183,
+    "c4": 10.05,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md (raw docs/rd_peers70b_data/70b_arcquant.json)"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/results_tracker.md 2026-11-23",
+    "note": "not runnable: requires precomputed Llama-only reorder index artifacts (FileNotFoundError on Qwen3)"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not applicable: Llama-only artifacts"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not applicable: Llama-only artifacts"
+   }
+  },
+  "nvfp4": {
+   "llama3.2-1b": {
+    "wiki": 15.65,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_newpeers_accuracy.md (committed baselines)"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.63,
+    "c4": null,
+    "mmlu": 52.63,
+    "zeroshot": 66.16,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md (raw docs/rd_mmlu_data/nv_3b_mmlu_results.json); 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/nv_3b_zs_results.json)"
+   },
+   "llama3-8b": {
+    "wiki": 6.87,
+    "c4": null,
+    "mmlu": 62.34,
+    "zeroshot": 71.48,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/nv_8b_zs_results.json)"
+   },
+   "llama3-70b": {
+    "wiki": 5.928,
+    "c4": 9.746,
+    "mmlu": 78.99,
+    "zeroshot": 77.94,
+    "source": "docs/rd_scale_data/70b_nvfp4_ppl.json; downstream docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/nv_70b_{mmlu,zs}_results.json)"
+   },
+   "qwen3-8b": {
+    "wiki": 10.07,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/results_tracker.md 2026-11-23 (raw server /home/luofan/accmatrix/nvfp4_qwen8b_ppl.json)"
+   },
+   "qwen3-14b": {
+    "wiki": 8.898,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/results_tracker.md 2026-11-24 (llm-compressor ckpt + bench_vllm)"
+   },
+   "qwen3-32b": {
+    "wiki": 8.0,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/results_tracker.md 2026-11-25 (rerun after repaired checkpoint; earlier NaN = corrupted model shards)"
+   }
+  },
+  "micromix": {
+   "llama3.2-1b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_newpeers_accuracy.md",
+    "note": "not applicable: method has no 1B configuration"
+   },
+   "llama3.2-3b": {
+    "wiki": 9.05,
+    "c4": 12.28,
+    "mmlu": 49.79,
+    "zeroshot": 65.14,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_3b_{mmlu,zs}.json)",
+    "note": "kernels fail own --validate on CUDA 13 -> pessimistic bound"
+   },
+   "llama3-8b": {
+    "wiki": 7.39,
+    "c4": 10.56,
+    "mmlu": 59.12,
+    "zeroshot": 70.63,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_8b_{mmlu,zs}.json)",
+    "note": "same CUDA-13 kernel mis-validation caveat"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md",
+    "note": "skipped by design: no SmoothQuant act-scale generator shipped + kernels mis-validate on CUDA 13"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run (paper_experiments.md tableB blank)"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "coquant": {
+   "llama3.2-1b": {
+    "wiki": 16.64,
+    "c4": 23.32,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_newpeers_accuracy.md",
+    "note": "wa_cov (own criterion); no a_cov 1B run"
+   },
+   "llama3.2-3b": {
+    "wiki": 9.18,
+    "c4": 12.82,
+    "mmlu": 50.26,
+    "zeroshot": 64.24,
+    "source": "docs/rd_newpeers_accuracy.md (a_cov control = ResQ criterion); mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_3b_{mmlu,zs}.json)",
+    "note": "a_cov variant; wa_cov variant = 9.5552/13.2484"
+   },
+   "llama3-8b": {
+    "wiki": 7.35,
+    "c4": 10.79,
+    "mmlu": 59.81,
+    "zeroshot": 68.81,
+    "source": "docs/rd_newpeers_accuracy.md (a_cov); mmlu docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_8b_mmlu.json); 0-shot computed from server /home/luofan/accmatrix/coq_8b_zs.json (AVG6, rd_metrics convention)",
+    "note": "a_cov variant; wa_cov = 7.6908/11.1848; 0-shot cell landed on server only, never harvested to repo"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run (tableB '-')"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "quarot": {
+   "llama3.2-1b": {
+    "wiki": 22.11,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13 (same-protocol measured, W4A4KV4)"
+   },
+   "llama3.2-3b": {
+    "wiki": 10.72,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13 (with 24-head o_proj Hadamard fix)"
+   },
+   "llama3-8b": {
+    "wiki": 8.65,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13",
+    "note": "rd_accuracy_matrix.md 'peer RESULTS' lists an alternate run: 26.00/11.23/8.86"
+   },
+   "llama3-70b": {
+    "wiki": 6.66,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md SS5 cite-only (QuaRot paper App A.8 Tab.11, Llama-3-70B base, NOT our protocol)",
+    "note": "paper value, base model, not comparable in absolute terms"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run (tableB blank)"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "spinquant": {
+   "llama3.2-1b": {
+    "wiki": 16.14,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-14 (learned rotation, Cayley-SGD)"
+   },
+   "llama3.2-3b": {
+    "wiki": 9.25,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-14 (learned rotation)"
+   },
+   "llama3-8b": {
+    "wiki": 7.88,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-14 (Hadamard; learned rotation not trained at 8B — too slow single-GPU)"
+   },
+   "llama3-70b": {
+    "wiki": 5.5,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md SS5 cite-only (SpinQuant paper Tab.5, Llama-3-70B base, NOT our protocol)",
+    "note": "paper value"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "atom": {
+   "llama3.2-1b": {
+    "wiki": 18.4,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13 Atom supplement (same-protocol measured)"
+   },
+   "llama3.2-3b": {
+    "wiki": 9.699,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13 Atom supplement"
+   },
+   "llama3-8b": {
+    "wiki": 7.57,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_accuracy_matrix.md (peer RESULTS; scoreboard had 8B still running)"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md",
+    "note": "paper has no Llama-3-70B (only Llama-1-65B 3.53->3.89); cite-only, no comparable number"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "resq": {
+   "llama3.2-1b": {
+    "wiki": 15.98,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13 (same-protocol measured, W4A4KV4, hf=0.125)"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.71,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13"
+   },
+   "llama3-8b": {
+    "wiki": 7.06,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md round-13"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run (tableB '-')"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "gptq_w4a16": {
+   "llama3.2-1b": {
+    "wiki": 14.22,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group",
+    "note": "1B used pipeline-PPL protocol, not aligned with other rows"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.2,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group / docs/vllm_final_fiveway.md SS2"
+   },
+   "llama3-8b": {
+    "wiki": 6.52,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group / docs/vllm_final_fiveway.md SS2"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run (tableB blank)"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "awq_w4a16": {
+   "llama3.2-1b": {
+    "wiki": 14.53,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group",
+    "note": "1B protocol caveat as GPTQ"
+   },
+   "llama3.2-3b": {
+    "wiki": 8.35,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group (~8.35)",
+    "note": "vllm_final_fiveway.md AWQ-Marlin absolute-protocol value is 8.48"
+   },
+   "llama3-8b": {
+    "wiki": 6.59,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/scoreboard.md reference group",
+    "note": "vllm_final_fiveway.md AWQ-Marlin value is 6.73"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "fp8_w8a8": {
+   "llama3.2-1b": {
+    "wiki": 13.3,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/baselines_on_hardware.md L83"
+   },
+   "llama3.2-3b": {
+    "wiki": 7.88,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/vllm_final_fiveway.md SS2 (absolute vLLM protocol)"
+   },
+   "llama3-8b": {
+    "wiki": 6.191,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/vllm_final_fiveway.md SS2"
+   },
+   "llama3-70b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-8b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-14b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "not run"
+   }
+  },
+  "bf16": {
+   "llama3.2-1b": {
+    "wiki": 13.16,
+    "c4": 18.52,
+    "mmlu": null,
+    "zeroshot": 59.33,
+    "source": "docs/rd_newpeers_accuracy.md bridge; 0-shot docs/rd_metrics_report.md (via docs/rd_mmlu_report.md)",
+    "note": "1B bf16 MMLU never run (results_tracker.md: '1B/13B MMLU' residual gap)"
+   },
+   "llama3.2-3b": {
+    "wiki": 7.81,
+    "c4": 10.43,
+    "mmlu": 56.11,
+    "zeroshot": 68.11,
+    "source": "docs/rd_newpeers_accuracy.md bridge; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_metrics_report.md"
+   },
+   "llama3-8b": {
+    "wiki": 6.14,
+    "c4": 8.89,
+    "mmlu": 65.28,
+    "zeroshot": 73.33,
+    "source": "docs/rd_newpeers_accuracy.md bridge; mmlu docs/rd_mmlu_report.md; 0-shot docs/rd_metrics_report.md"
+   },
+   "llama3-70b": {
+    "wiki": 5.316,
+    "c4": 9.204,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": "docs/rd_peers70b.md committed rd_scale bridge (raw docs/rd_scale_data/70b_bf16_bridge.json)",
+    "note": "70B bf16 downstream not run (NVFP4 proxy only)"
+   },
+   "qwen3-8b": {
+    "wiki": 9.725,
+    "c4": 13.3,
+    "mmlu": 77.68,
+    "zeroshot": 65.33,
+    "source": "docs/rd_metricsweep_data/qwen3-8b_bf16.json",
+    "note": "downstream with limit=25 per subtask (lim25 protocol)"
+   },
+   "qwen3-14b": {
+    "wiki": 8.646,
+    "c4": 12.01,
+    "mmlu": 80.63,
+    "zeroshot": 66.0,
+    "source": "docs/rd_metricsweep_data/qwen3-14b_bf16.json",
+    "note": "downstream with limit=25 per subtask (lim25 protocol)"
+   },
+   "qwen3-32b": {
+    "wiki": null,
+    "c4": null,
+    "mmlu": null,
+    "zeroshot": null,
+    "source": null,
+    "note": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+   }
+  }
+ },
+ "bits": {
+  "_meta": {
+   "date": "2026-11-26",
+   "purpose": "Exact effective bits/element (weights, activations, avg) for the accuracy-vs-bits Pareto plot. All scale / zero-point / outlier / residual / metadata overheads included. 'measured' = read from code buffers or checkpoint tensors; 'paper-config' = from the method's documented setup only.",
+   "conventions": [
+    "w_bits / a_bits are per ORIGINAL weight/activation element of the quantized Linear layers (params-weighted across all Linears of the model where allocation varies per Linear).",
+    "Per-tensor FP32/BF16 globals amortize to <1e-4 bits/elem and are noted in formulas but not added numerically.",
+    "Interleaved scale-factor layout padding (CUTLASS 128-row atoms) is excluded as deployment padding, noted where measured.",
+    "tier: w4a4 = same-layer W4A4 comparison group; weight-only = W4A16 (different Pareto marker); fp8 = W8A8; ref = bf16 anchor."
+   ]
+  },
+  "promix": {
+   "tier": "w4a4",
+   "formula_w": "eff_w(r) = (1-r)*(4 + 8/16) + r*(8 + 8/32) + 32/(N*K) = 4.5 + 3.75*r  [r = K_high/K, FP8-channel fraction; NVFP4: FP4 E2M1 elem + E4M3 micro-scale per 16; MXFP8: FP8 E4M3 elem + E8M0 scale per 32; +32 bits/tensor two-level global g_w (negligible)]",
+   "formula_a": "eff_a(r) = 4.5 + 3.75*r  [same block-scale density; activation path is single-level (no global): quant_utils.fake_quantize_nvfp4/mxfp8]",
+   "formula_avg": "eff_avg(r) = 4.5 + 3.75*r",
+   "source": "promix/quantize/weight_pack.py:146-170 (PackedWeight: W_lo_packed N*K_low/2 uint8, physSFB_lo K_low/16 E4M3 bytes, W_hi_bytes N*K_high uint8, physSFB_hi K_high/32 E8M0 bytes, g_w scalar); promix/quantize/quant_utils.py:1066-1180 (fake_quantize_mxfp8/nvfp4, MXFP8_BLOCK=32 NVFP4_BLOCK=16 at :113-115); two-level global quant_utils.py:762-817",
+   "r_table": {
+    "r_nominal": [
+     0.0,
+     0.03125,
+     0.0625,
+     0.08333,
+     0.125,
+     0.1875,
+     0.25,
+     0.375,
+     0.5,
+     0.75,
+     1.0
+    ],
+    "eff_bits": [
+     4.5,
+     4.6172,
+     4.7344,
+     4.8125,
+     4.9688,
+     5.2031,
+     5.4375,
+     5.9062,
+     6.375,
+     7.3125,
+     8.25
+    ],
+    "note": "r=1 is served as all-but-one-ring (K_low=64) and K_high snaps to 64-rings (rd_oppareto_ours.py:snap_khigh), so exact per-shape r differs slightly from nominal; formula uses exact r = K_high/K."
+   },
+   "kv4_bits_per_elem": {
+    "head_dim_128": 5.4375,
+    "head_dim_64": 6.375,
+    "formula": "per-head [main NVFP4 | high MXFP8] with high rounded UP to 32 (quant_utils.kv_fp_high_length mode='up'): hd=128 -> (96*4.5 + 32*8.25)/128 = 5.4375; hd=64 -> (32*4.5 + 32*8.25)/64 = 6.375. NOT merged into the main w/a axes."
+   },
+   "notes": [
+    "rd_oppareto_ours.py:140 eff_bits(K_low,K_high) = (4.5*K_low + 8.25*K_high)/K is CORRECT to <1e-5 bits: the only omission is the per-tensor FP32 two-level global g_w (32/(N*K) ~ 3e-6..8e-6 bits/elem) and the per-Linear input had_K metadata; no fix needed.",
+    "[implementation duplication, excluded] PackedWeight additionally keeps a decode-GEMV copy (W_lo_dec/S_lo_dec fp32 per-16 = +2 bits, W_hi_dec/S_hi_dec fp32 per-32 = +1 bit, weight_pack.py:167-170). Same information re-packed for the M=1 path; the format cost is the fused pack, so Pareto uses single-copy bits.",
+    "[excluded] K_low_pad +64 zero columns fires only on low-SM devices (GB10), weight_pack.py:173-183."
+   ]
+  },
+  "nvfp4_modelopt_llmcompressor": {
+   "tier": "w4a4",
+   "w_bits": 4.5,
+   "a_bits": 4.5,
+   "avg_bits": 4.5,
+   "formula": "w: 4 (E2M1 packed 2/byte) + 8/16 (E4M3 weight_scale per 16) + 2*32/(N*K) (weight_global_scale + input_global_scale FP32 [1]) = 4.5000; a: dynamic NVFP4 = 4 + 8/16 + static per-tensor input_global_scale = 4.5",
+   "source": "measured from safetensors headers of /home/luofan/baselines/quant/Qwen3-8B-NVFP4 and unsloth--Llama-3.2-3B-nvfp4: weight_packed U8 (N,K/2), weight_scale F8_E4M3 (N,K/16), *_global_scale F32 [1]; quantized-linear bits/elem = 4.5000 exact (6.95e9 elems, Qwen3-8B)",
+   "discrepancy": "tracker value 4.56 came from total checkpoint GB / total params (includes bf16 embeddings/norms/lm_head); per quantized weight element it is exactly 4.500"
+  },
+  "arcquant": {
+   "tier": "w4a4",
+   "w_bits": {
+    "llama-3.2-1b-instruct": 5.2204,
+    "llama-3.2-3b": 5.1214,
+    "llama-3-8b": 5.1362
+   },
+   "a_bits": {
+    "llama-3.2-1b-instruct": 5.2204,
+    "llama-3.2-3b": 5.1214,
+    "llama-3-8b": 5.1362
+   },
+   "avg_bits": {
+    "llama-3.2-1b-instruct": 5.2204,
+    "llama-3.2-3b": 5.1214,
+    "llama-3-8b": 5.1362
+   },
+   "formula": "per Linear: 4.5*(K+S)/K, S = adaptive residual channel count (method's own accounting, ARCQuant utilize.py:554/560). Weights: top-S channels DUPLICATED along K, all NVFP4 (E2M1 + UE4M3 per 16 = 4.5) + per-tensor FP32 global (quantize.py:291, negligible). Activations: NVFP4(x) concat NVFP4(residual error on S columns) (quantize.py:312-341) -> same (K+S)/K expansion. Params-weighted over all Linears.",
+   "source": "measured: saved/*_average_bits_wikitext2_max.pt params-weighted on server (3B: 5.1214, min 4.535/max 5.8125, S mean 385; 8B: 5.1362, S mean 483; 1B(hash 5a8abab4): 5.2204, K inferred 2048/8192 matches 1B). Formula verified at ARCQuant/utilize.py:554-576; quantize code model/quantize.py:287-341, 145-171",
+   "discrepancy": "tracker 5.12/5.14/5.22 CONFIRMED (5.1214/5.1362/5.2204)"
+  },
+  "sharq": {
+   "tier": "w4a4",
+   "w_bits": 4.75,
+   "a_bits": 7.5,
+   "avg_bits": 6.125,
+   "formula": "w: 4 (single shared E2M1 payload, K/2 bytes/row) + 8/32 (UE4M3 sparse-view scale per 32) + 8/16 (dense-view scale: the SAME per-32 values physically DUPLICATED into a per-16 buffer) + per-tensor FP32 global = 4.75 physical (4.25 if dedup counted once). a (asymptotic, measured 7.5625 at M=2048,K=4096 incl. +128-row SFA padding): 2:4-compressed sparse backbone 2.0 (E2M1 on K/2 kept) + sparse metadata E 0.5 + sparse SFA 0.5 + dense NVFP4 residual 4.0 + residual SFA 0.5 = 7.5 + per-tensor FP32 global",
+   "source": "measured: sharq_ops.get_fused_sparse_residual_buffer_sizes(2048,4096,4096) -> a_comp 2.0 / E 0.5 / SFA 0.53125 / Q_res 4.0 / SF_res 0.53125 bits/elem (SharQ/kernels/src/bindings.cpp:243-253, include/sparse_nvfp4.h:117-151). Weight: kernels/src/shared_weight_nvfp4.cu:20-111 (quantize_w32_shared_kernel + duplicate_sfb32_to_dense_sfb16_kernel); model/quantize.py:149-211",
+   "discrepancy": "tracker '~4.5 (†)' understates: physical weight storage is 4.75 (dup dense SFB), and the activation stream is 7.5 bits/elem (two full streams + sparsity metadata) — the † caveat is now quantified"
+  },
+  "micromix": {
+   "tier": "w4a4",
+   "w_bits": {
+    "llama-3.2-3b": 5.2256,
+    "llama-3-8b": 5.18
+   },
+   "a_bits": {
+    "llama-3.2-3b": 5.2256,
+    "llama-3-8b": 5.18
+   },
+   "avg_bits": {
+    "llama-3.2-3b": 5.2256,
+    "llama-3-8b": 5.18
+   },
+   "formula": "per Linear: (4*p4 + 6*p6 + 8*p8)/K + 8/32, channels split into MXFP4 (E2M1) / MXFP6 (E3M2, physically 6-bit packed: 'KS = AS.size(1)*4/3' bindings.cpp:69) / MXFP8 (E4M3), each with UE8M0 scale per 32. p6/p8 are per-Linear calibrated counts; same split applies to weights and activations (shared reorder index). Params-weighted.",
+   "source": "measured: saved/{Llama-3.2-3B,llama-3-8b}_p{6,8}_num_wikitext2.pt params-weighted on server (3B elem-only 4.9756 +0.25 scale = 5.2256; 8B 4.93 +0.25 = 5.18). Element types mgemm/src/gemm.cu:13-19 (cutlass::mx_float{4,6,8}_t); FP6 6-bit packing mgemm/src/bindings.cpp:69",
+   "discrepancy": "tracker 5.23/5.18 CONFIRMED"
+  },
+  "resq_coquant": {
+   "tier": "w4a4",
+   "w_bits": {
+    "1B": 4.5124,
+    "3B": 4.5088,
+    "8B": 4.5063
+   },
+   "a_bits": {
+    "1B": 4.5248,
+    "3B": 4.5176,
+    "8B": 4.5126
+   },
+   "avg_bits": {
+    "1B": 4.5186,
+    "3B": 4.5132,
+    "8B": 4.5094
+   },
+   "formula": "w: 7/8*INT4 + 1/8*INT8 + 2 per-output-channel FP16 scales (main+high segments, sym, GPTQ+w_clip) = 4.5 + 32/K; a: per-token asym 2 segments (scale+zero FP16 each) = 4.5 + 64/K; KV: INT4 asym per-head (k/v_groupsize = head_dim) = 4 + 32/head_dim. Params-weighted.",
+   "source": "config: CoQuant/fake_quant/0_eval_ptq_4bit.sh (--w_bits 4 --a_bits 4 --high_bits 8 --high_fraction 0.125 --w_clip --a_asym --k_asym --v_asym) on server; segment quantizer structure promix/quantize/quant_utils.py:314-419 (scale/zero per token per segment). [假设] scale dtype FP16 (ResQ fake-quant keeps scales in model dtype; a real INT kernel would store FP16/FP32 — ±16/K bits at most).",
+   "discrepancy": "tracker '~4.6' -> precise 4.51 (w)"
+  },
+  "atom": {
+   "tier": "w4a4",
+   "w_bits": {
+    "1B": 4.267,
+    "3B": 4.2075,
+    "8B": 4.1666
+   },
+   "a_bits": {
+    "1B": 4.3295,
+    "3B": 4.27,
+    "8B": 4.2291
+   },
+   "avg_bits": {
+    "1B": 4.2983,
+    "3B": 4.2388,
+    "8B": 4.1979
+   },
+   "formula": "per Linear (K=d_in): w = 4*(1-128/K) + 8*(128/K) + 16/(128*2) [INT4 g128 scale, channel_group=2] + (16/128)*(128/K) [keeper INT8 scale] = 4.0625 + 528/K; a = same keeper mix with per-token g128 FP16 scales = 4.125 + 528/K. KV INT4 asym per-head. Params-weighted.",
+   "source": "paper-config + repo RESULTS: /home/luofan/baselines/peers/atom/RESULTS.md §2 (its own bits formula, keeper=128 INT8, group-128, channel_group=2, --a_sym --w_sym, kv_cache INT4). [假设] activation scale dtype FP16; Atom fake-quant does not materialize them.",
+   "discrepancy": "tracker '~4.3' -> per-model 4.17-4.27 (w)"
+  },
+  "quarot": {
+   "tier": "w4a4",
+   "w_bits": {
+    "1B": 4.0062,
+    "3B": 4.0044,
+    "8B": 4.0032
+   },
+   "a_bits": {
+    "1B": 4.0062,
+    "3B": 4.0044,
+    "8B": 4.0032
+   },
+   "avg_bits": {
+    "1B": 4.0062,
+    "3B": 4.0044,
+    "8B": 4.0032
+   },
+   "formula": "w: INT4 GPTQ per-output-channel symmetric (group_size=-1, w_clip) = 4 + 16/K; a: INT4 per-token symmetric = 4 + 16/K; KV INT4 per-token sym. Params-weighted.",
+   "source": "as-run config /home/luofan/baselines/peers/quarot/RESULTS.md:44-59 (--rotate --w_bits 4 --a_bits 4 --k_bits 4 --v_bits 4 --w_clip). [假设] FP16 scale storage.",
+   "discrepancy": "tracker '4.0' -> 4.003-4.006 (rounding-level only)"
+  },
+  "spinquant": {
+   "tier": "w4a4",
+   "w_bits": {
+    "1B": 4.0062,
+    "3B": 4.0044,
+    "8B": 4.0032
+   },
+   "a_bits": {
+    "1B": 4.0124,
+    "3B": 4.0088,
+    "8B": 4.0063
+   },
+   "avg_bits": {
+    "1B": 4.0093,
+    "3B": 4.0066,
+    "8B": 4.0048
+   },
+   "formula": "w: INT4 GPTQ per-output-channel sym (w_groupsize=-1, w_clip) = 4 + 16/K; a: INT4 per-token ASYM (--a_asym: FP16 scale + zero) = 4 + 32/K; KV: INT4 asym per-head group=head_dim = 4 + 32/hd (4.5 @hd64, 4.25 @hd128). Params-weighted.",
+   "source": "as-run config /home/luofan/baselines/peers/spinquant/RESULTS.md:16-18, run_eval.sh:8-18. [假设] FP16 scale/zero storage.",
+   "discrepancy": "tracker '4.0' -> 4.003-4.012"
+  },
+  "gptq_w4a16": {
+   "tier": "weight-only",
+   "w_bits": 4.125,
+   "a_bits": 16.0,
+   "avg_bits": 10.0625,
+   "formula": "w: 4 (INT4, 8/int32 word in weight_packed) + 16/128 (BF16 weight_scale per group-128) = 4.125; symmetric — NO zero-point tensor in checkpoint. a: bf16 (W4A16 tier, separate Pareto marker).",
+   "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-gptq_w4a16 down_proj = weight_packed I32 (3072,1024) [=3072x8192 4-bit], weight_scale BF16 (3072,64) [g128]; suffixes contain no zero_point"
+  },
+  "awq_w4a16": {
+   "tier": "weight-only",
+   "w_bits": 4.125,
+   "a_bits": 16.0,
+   "avg_bits": 10.0625,
+   "formula": "identical compressed-tensors layout to GPTQ ckpt: INT4 g128 + BF16 scale, symmetric (no zero-point tensor) = 4 + 16/128 = 4.125",
+   "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-awq_w4a16 (weight_packed I32 (3072,1024), weight_scale BF16 (3072,64)). Note: classic AWQ is asym (+4/128 zeros = 4.156); OUR evaluated ckpt is the symmetric compressed-tensors re-pack."
+  },
+  "fp8_w8a8": {
+   "tier": "fp8",
+   "w_bits": 8.004,
+   "a_bits": 8.008,
+   "avg_bits": 8.006,
+   "formula": "w: FP8 E4M3 + per-output-channel BF16 weight_scale = 8 + 16/K (measured 8.0044 at 3B); a: dynamic per-token FP8 = 8 + 32/K [假设 FP32 token scale; ckpt has no input_scale -> vLLM dynamic]",
+   "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-fp8 (weight F8_E4M3 (3072,8192), weight_scale BF16 (3072,1)); quantized-linear bits/elem = 8.0044"
+  },
+  "bf16": {
+   "tier": "ref",
+   "w_bits": 16.0,
+   "a_bits": 16.0,
+   "avg_bits": 16.0,
+   "formula": "bf16 anchor",
+   "source": "definition"
+  }
+ },
+ "ours_ppl": {
+  "llama3.2-1b": {
+   "_source": "docs/rd_metricsweep_data/llama3.2-1b_kv{16,4}_r*.json; dense 0.05-grid: docs/rd_acctune_data/densesweep/1b_r*.json",
+   "kv16": [
+    [
+     0.0,
+     15.68,
+     21.45
+    ],
+    [
+     0.1,
+     14.86,
+     20.4
+    ],
+    [
+     0.2,
+     14.1,
+     19.65
+    ],
+    [
+     0.3,
+     14.05,
+     19.63
+    ],
+    [
+     0.4,
+     13.85,
+     19.38
+    ],
+    [
+     0.5,
+     13.84,
+     19.33
+    ],
+    [
+     0.6,
+     13.75,
+     19.19
+    ],
+    [
+     0.7,
+     13.65,
+     19.09
+    ],
+    [
+     0.8,
+     13.64,
+     19.1
+    ],
+    [
+     0.9,
+     13.58,
+     19.02
+    ],
+    [
+     1.0,
+     13.46,
+     18.89
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     16.02,
+     21.82
+    ],
+    [
+     0.1,
+     15.19,
+     20.76
+    ],
+    [
+     0.2,
+     14.35,
+     19.93
+    ],
+    [
+     0.3,
+     14.29,
+     19.89
+    ],
+    [
+     0.4,
+     14.11,
+     19.67
+    ],
+    [
+     0.5,
+     14.05,
+     19.58
+    ],
+    [
+     0.6,
+     13.97,
+     19.43
+    ],
+    [
+     0.7,
+     13.87,
+     19.33
+    ],
+    [
+     0.8,
+     13.87,
+     19.34
+    ],
+    [
+     0.9,
+     13.8,
+     19.25
+    ],
+    [
+     1.0,
+     13.7,
+     19.11
+    ]
+   ],
+   "kv16_dense005": [
+    [
+     0.05,
+     15.07,
+     20.71
+    ],
+    [
+     0.1,
+     14.49,
+     20.06
+    ],
+    [
+     0.15,
+     14.13,
+     19.84
+    ],
+    [
+     0.2,
+     14.03,
+     19.66
+    ],
+    [
+     0.25,
+     13.99,
+     19.63
+    ],
+    [
+     0.3,
+     13.93,
+     19.52
+    ],
+    [
+     0.35,
+     13.91,
+     19.55
+    ],
+    [
+     0.4,
+     13.92,
+     19.5
+    ],
+    [
+     0.45,
+     13.87,
+     19.47
+    ],
+    [
+     0.5,
+     13.85,
+     19.44
+    ],
+    [
+     0.55,
+     13.85,
+     19.43
+    ],
+    [
+     0.6,
+     13.8,
+     19.35
+    ],
+    [
+     0.65,
+     13.76,
+     19.31
+    ],
+    [
+     0.7,
+     13.73,
+     19.26
+    ],
+    [
+     0.75,
+     13.68,
+     19.2
+    ],
+    [
+     0.8,
+     13.7,
+     19.24
+    ],
+    [
+     0.85,
+     13.67,
+     19.21
+    ],
+    [
+     0.9,
+     13.65,
+     19.18
+    ],
+    [
+     0.95,
+     13.62,
+     19.16
+    ],
+    [
+     1.0,
+     13.57,
+     19.05
+    ]
+   ]
+  },
+  "llama3.2-3b": {
+   "_source": "docs/rd_metricsweep_data/llama3.2-3b_kv{16,4}_r*.json; dense 0.05-grid: docs/rd_acctune_data/densesweep/3b_r*.json",
+   "kv16": [
+    [
+     0.0,
+     9.365,
+     12.85
+    ],
+    [
+     0.1,
+     8.26,
+     11.33
+    ],
+    [
+     0.2,
+     8.203,
+     11.23
+    ],
+    [
+     0.3,
+     8.163,
+     11.16
+    ],
+    [
+     0.4,
+     8.14,
+     11.09
+    ],
+    [
+     0.5,
+     8.115,
+     11.04
+    ],
+    [
+     0.6,
+     8.106,
+     10.97
+    ],
+    [
+     0.7,
+     8.06,
+     10.9
+    ],
+    [
+     0.8,
+     8.019,
+     10.81
+    ],
+    [
+     0.9,
+     7.99,
+     10.74
+    ],
+    [
+     1.0,
+     7.949,
+     10.68
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     9.499,
+     13.02
+    ],
+    [
+     0.1,
+     8.343,
+     11.47
+    ],
+    [
+     0.2,
+     8.277,
+     11.36
+    ],
+    [
+     0.3,
+     8.247,
+     11.29
+    ],
+    [
+     0.4,
+     8.217,
+     11.22
+    ],
+    [
+     0.5,
+     8.203,
+     11.17
+    ],
+    [
+     0.6,
+     8.182,
+     11.1
+    ],
+    [
+     0.7,
+     8.128,
+     11.02
+    ],
+    [
+     0.8,
+     8.087,
+     10.93
+    ],
+    [
+     0.9,
+     8.061,
+     10.85
+    ],
+    [
+     1.0,
+     8.02,
+     10.81
+    ]
+   ],
+   "kv16_dense005": [
+    [
+     0.05,
+     8.801,
+     12.06
+    ],
+    [
+     0.1,
+     8.247,
+     11.31
+    ],
+    [
+     0.15,
+     8.204,
+     11.25
+    ],
+    [
+     0.2,
+     8.194,
+     11.2
+    ],
+    [
+     0.25,
+     8.157,
+     11.16
+    ],
+    [
+     0.3,
+     8.148,
+     11.12
+    ],
+    [
+     0.35,
+     8.144,
+     11.09
+    ],
+    [
+     0.4,
+     8.133,
+     11.07
+    ],
+    [
+     0.45,
+     8.119,
+     11.04
+    ],
+    [
+     0.5,
+     8.101,
+     11.01
+    ],
+    [
+     0.55,
+     8.103,
+     11.0
+    ],
+    [
+     0.6,
+     8.098,
+     10.99
+    ],
+    [
+     0.65,
+     8.096,
+     10.98
+    ],
+    [
+     0.7,
+     8.088,
+     10.96
+    ],
+    [
+     0.75,
+     8.074,
+     10.93
+    ],
+    [
+     0.8,
+     8.053,
+     10.9
+    ],
+    [
+     0.85,
+     8.033,
+     10.84
+    ],
+    [
+     0.9,
+     8.025,
+     10.81
+    ],
+    [
+     0.95,
+     8.011,
+     10.79
+    ],
+    [
+     1.0,
+     7.989,
+     10.76
+    ]
+   ]
+  },
+  "llama3-8b": {
+   "_source": "docs/rd_metricsweep_data/llama3-8b_kv{16,4}_r*.json; dense 0.05-grid: docs/rd_acctune_data/densesweep/8b_r*.json",
+   "kv16": [
+    [
+     0.0,
+     7.358,
+     10.74
+    ],
+    [
+     0.1,
+     6.605,
+     9.635
+    ],
+    [
+     0.2,
+     6.545,
+     9.545
+    ],
+    [
+     0.3,
+     6.515,
+     9.485
+    ],
+    [
+     0.4,
+     6.486,
+     9.418
+    ],
+    [
+     0.5,
+     6.46,
+     9.372
+    ],
+    [
+     0.6,
+     6.413,
+     9.268
+    ],
+    [
+     0.7,
+     6.376,
+     9.219
+    ],
+    [
+     0.8,
+     6.34,
+     9.151
+    ],
+    [
+     0.9,
+     6.317,
+     9.109
+    ],
+    [
+     1.0,
+     6.279,
+     9.063
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     7.422,
+     10.81
+    ],
+    [
+     0.1,
+     6.657,
+     9.698
+    ],
+    [
+     0.2,
+     6.594,
+     9.603
+    ],
+    [
+     0.3,
+     6.566,
+     9.54
+    ],
+    [
+     0.4,
+     6.529,
+     9.492
+    ],
+    [
+     0.5,
+     6.506,
+     9.433
+    ],
+    [
+     0.6,
+     6.456,
+     9.327
+    ],
+    [
+     0.7,
+     6.418,
+     9.277
+    ],
+    [
+     0.8,
+     6.382,
+     9.21
+    ],
+    [
+     0.9,
+     6.361,
+     9.167
+    ],
+    [
+     1.0,
+     6.328,
+     9.119
+    ]
+   ],
+   "kv16_dense005": [
+    [
+     0.05,
+     6.814,
+     9.943
+    ],
+    [
+     0.1,
+     6.585,
+     9.603
+    ],
+    [
+     0.15,
+     6.565,
+     9.552
+    ],
+    [
+     0.2,
+     6.536,
+     9.509
+    ],
+    [
+     0.25,
+     6.509,
+     9.477
+    ],
+    [
+     0.3,
+     6.506,
+     9.453
+    ],
+    [
+     0.35,
+     6.483,
+     9.429
+    ],
+    [
+     0.4,
+     6.475,
+     9.407
+    ],
+    [
+     0.45,
+     6.457,
+     9.374
+    ],
+    [
+     0.5,
+     6.454,
+     9.357
+    ],
+    [
+     0.55,
+     6.449,
+     9.332
+    ],
+    [
+     0.6,
+     6.428,
+     9.298
+    ],
+    [
+     0.65,
+     6.411,
+     9.275
+    ],
+    [
+     0.7,
+     6.388,
+     9.255
+    ],
+    [
+     0.75,
+     6.374,
+     9.224
+    ],
+    [
+     0.8,
+     6.355,
+     9.192
+    ],
+    [
+     0.85,
+     6.341,
+     9.168
+    ],
+    [
+     0.9,
+     6.34,
+     9.151
+    ],
+    [
+     0.95,
+     6.327,
+     9.137
+    ],
+    [
+     1.0,
+     6.305,
+     9.117
+    ]
+   ]
+  },
+  "qwen3-8b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-8b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     10.92,
+     14.72
+    ],
+    [
+     0.1,
+     9.903,
+     13.62
+    ],
+    [
+     0.2,
+     9.84,
+     13.61
+    ],
+    [
+     0.3,
+     9.831,
+     13.57
+    ],
+    [
+     0.4,
+     9.823,
+     13.51
+    ],
+    [
+     0.5,
+     9.822,
+     13.52
+    ],
+    [
+     0.6,
+     9.77,
+     13.46
+    ],
+    [
+     0.7,
+     9.838,
+     13.46
+    ],
+    [
+     0.8,
+     9.775,
+     13.43
+    ],
+    [
+     0.9,
+     9.761,
+     13.41
+    ],
+    [
+     1.0,
+     9.731,
+     13.38
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     11.04,
+     14.82
+    ],
+    [
+     0.1,
+     9.963,
+     13.74
+    ],
+    [
+     0.2,
+     9.897,
+     13.68
+    ],
+    [
+     0.3,
+     9.924,
+     13.68
+    ],
+    [
+     0.4,
+     9.888,
+     13.63
+    ],
+    [
+     0.5,
+     9.922,
+     13.65
+    ],
+    [
+     0.6,
+     9.826,
+     13.59
+    ],
+    [
+     0.7,
+     9.87,
+     13.56
+    ],
+    [
+     0.8,
+     9.816,
+     13.54
+    ],
+    [
+     0.9,
+     9.811,
+     13.51
+    ],
+    [
+     1.0,
+     9.798,
+     13.48
+    ]
+   ]
+  },
+  "qwen3-14b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-14b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     9.768,
+     13.29
+    ],
+    [
+     0.1,
+     8.849,
+     12.31
+    ],
+    [
+     0.2,
+     8.806,
+     12.27
+    ],
+    [
+     0.3,
+     8.764,
+     12.24
+    ],
+    [
+     0.4,
+     8.756,
+     12.2
+    ],
+    [
+     0.5,
+     8.745,
+     12.17
+    ],
+    [
+     0.6,
+     8.717,
+     12.13
+    ],
+    [
+     0.7,
+     8.728,
+     12.13
+    ],
+    [
+     0.8,
+     8.711,
+     12.11
+    ],
+    [
+     0.9,
+     8.737,
+     12.11
+    ],
+    [
+     1.0,
+     8.725,
+     12.1
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     9.853,
+     13.36
+    ],
+    [
+     0.1,
+     8.903,
+     12.36
+    ],
+    [
+     0.2,
+     8.86,
+     12.31
+    ],
+    [
+     0.3,
+     8.849,
+     12.28
+    ],
+    [
+     0.4,
+     8.815,
+     12.25
+    ],
+    [
+     0.5,
+     8.815,
+     12.22
+    ],
+    [
+     0.6,
+     8.773,
+     12.17
+    ],
+    [
+     0.7,
+     8.782,
+     12.16
+    ],
+    [
+     0.8,
+     8.758,
+     12.14
+    ],
+    [
+     0.9,
+     8.78,
+     12.14
+    ],
+    [
+     1.0,
+     8.78,
+     12.13
+    ]
+   ]
+  },
+  "qwen3-32b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-32b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     8.511,
+     11.92
+    ],
+    [
+     0.1,
+     7.793,
+     11.04
+    ],
+    [
+     0.2,
+     7.785,
+     11.01
+    ],
+    [
+     0.3,
+     7.759,
+     10.97
+    ],
+    [
+     0.4,
+     7.75,
+     10.93
+    ],
+    [
+     0.5,
+     7.735,
+     10.92
+    ],
+    [
+     0.6,
+     7.721,
+     10.92
+    ],
+    [
+     0.7,
+     7.729,
+     10.91
+    ],
+    [
+     0.8,
+     7.722,
+     10.9
+    ],
+    [
+     0.9,
+     7.714,
+     10.88
+    ],
+    [
+     1.0,
+     7.688,
+     10.87
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     8.521,
+     11.94
+    ],
+    [
+     0.1,
+     7.8,
+     11.06
+    ],
+    [
+     0.2,
+     7.776,
+     11.04
+    ],
+    [
+     0.3,
+     7.761,
+     10.98
+    ],
+    [
+     0.4,
+     7.751,
+     10.95
+    ],
+    [
+     0.5,
+     7.745,
+     10.94
+    ],
+    [
+     0.6,
+     7.722,
+     10.92
+    ],
+    [
+     0.7,
+     7.737,
+     10.92
+    ],
+    [
+     0.8,
+     7.725,
+     10.91
+    ],
+    [
+     0.9,
+     7.72,
+     10.89
+    ],
+    [
+     1.0,
+     7.693,
+     10.89
+    ]
+   ]
+  },
+  "llama3-70b": {
+   "_source": "docs/rd_acctune_data/densesweep/70b_r*.json (kv16, 0.05 grid) + 70b_kv4_r*.json (kv4, 0.1 grid)",
+   "kv16": [
+    [
+     0.0,
+     29.41,
+     41.67
+    ],
+    [
+     0.05,
+     6.126,
+     9.956
+    ],
+    [
+     0.1,
+     6.062,
+     9.909
+    ],
+    [
+     0.15,
+     6.06,
+     9.909
+    ],
+    [
+     0.2,
+     5.956,
+     9.838
+    ],
+    [
+     0.25,
+     5.998,
+     9.825
+    ],
+    [
+     0.3,
+     5.96,
+     9.801
+    ],
+    [
+     0.35,
+     5.901,
+     9.706
+    ],
+    [
+     0.4,
+     5.884,
+     9.707
+    ],
+    [
+     0.45,
+     5.864,
+     9.723
+    ],
+    [
+     0.5,
+     5.874,
+     9.674
+    ],
+    [
+     0.55,
+     5.859,
+     9.647
+    ],
+    [
+     0.6,
+     5.825,
+     9.657
+    ],
+    [
+     0.65,
+     5.827,
+     9.667
+    ],
+    [
+     0.75,
+     5.773,
+     9.615
+    ],
+    [
+     0.8,
+     5.799,
+     9.552
+    ],
+    [
+     0.85,
+     5.763,
+     9.563
+    ],
+    [
+     0.9,
+     5.732,
+     9.53
+    ],
+    [
+     0.95,
+     5.708,
+     9.529
+    ],
+    [
+     1.0,
+     5.748,
+     9.496
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     30.21,
+     43.16
+    ],
+    [
+     0.1,
+     6.077,
+     9.93
+    ],
+    [
+     0.2,
+     5.976,
+     9.84
+    ],
+    [
+     0.3,
+     5.959,
+     9.819
+    ],
+    [
+     0.4,
+     5.892,
+     9.709
+    ],
+    [
+     0.5,
+     5.869,
+     9.705
+    ],
+    [
+     0.6,
+     5.828,
+     9.658
+    ],
+    [
+     0.7,
+     5.798,
+     9.646
+    ],
+    [
+     0.8,
+     5.801,
+     9.536
+    ],
+    [
+     0.9,
+     5.74,
+     9.524
+    ],
+    [
+     1.0,
+     5.762,
+     9.487
+    ]
+   ]
+  }
+ },
+ "ours_downstream": {
+  "llama3.2-1b": {
+   "_source": "docs/rd_metricsweep_data/llama3.2-1b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     40.06,
+     55.85
+    ],
+    [
+     0.1,
+     42.02,
+     57.25
+    ],
+    [
+     0.2,
+     43.66,
+     57.92
+    ],
+    [
+     0.3,
+     43.83,
+     58.54
+    ],
+    [
+     0.4,
+     44.27,
+     59.09
+    ],
+    [
+     0.5,
+     44.28,
+     58.76
+    ],
+    [
+     0.6,
+     44.65,
+     59.14
+    ],
+    [
+     0.7,
+     44.64,
+     59.22
+    ],
+    [
+     0.8,
+     44.42,
+     59.51
+    ],
+    [
+     0.9,
+     45.01,
+     59.14
+    ],
+    [
+     1.0,
+     44.84,
+     59.52
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     38.89,
+     53.5
+    ],
+    [
+     0.1,
+     40.96,
+     55.67
+    ],
+    [
+     0.2,
+     43.25,
+     55.83
+    ],
+    [
+     0.3,
+     42.82,
+     55.67
+    ],
+    [
+     0.4,
+     43.63,
+     54.5
+    ],
+    [
+     0.5,
+     44.35,
+     54.33
+    ],
+    [
+     0.6,
+     43.51,
+     56.67
+    ],
+    [
+     0.7,
+     43.49,
+     57.0
+    ],
+    [
+     0.8,
+     43.77,
+     56.67
+    ],
+    [
+     0.9,
+     44.18,
+     57.67
+    ],
+    [
+     1.0,
+     43.23,
+     57.33
+    ]
+   ]
+  },
+  "llama3.2-3b": {
+   "_source": "docs/rd_metricsweep_data/llama3.2-3b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     51.72,
+     63.67
+    ],
+    [
+     0.1,
+     54.32,
+     66.67
+    ],
+    [
+     0.2,
+     54.75,
+     66.5
+    ],
+    [
+     0.3,
+     55.58,
+     67.17
+    ],
+    [
+     0.4,
+     55.12,
+     67.17
+    ],
+    [
+     0.5,
+     55.42,
+     66.83
+    ],
+    [
+     0.6,
+     55.49,
+     67.5
+    ],
+    [
+     0.7,
+     56.19,
+     68.33
+    ],
+    [
+     0.8,
+     55.91,
+     68.5
+    ],
+    [
+     0.9,
+     56.18,
+     68.5
+    ],
+    [
+     1.0,
+     56.93,
+     68.67
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     51.16,
+     63.5
+    ],
+    [
+     0.1,
+     53.12,
+     66.0
+    ],
+    [
+     0.2,
+     53.49,
+     66.17
+    ],
+    [
+     0.3,
+     54.89,
+     67.5
+    ],
+    [
+     0.4,
+     53.98,
+     65.33
+    ],
+    [
+     0.5,
+     55.77,
+     67.5
+    ],
+    [
+     0.6,
+     54.89,
+     65.17
+    ],
+    [
+     0.7,
+     55.46,
+     69.33
+    ],
+    [
+     0.8,
+     55.44,
+     69.17
+    ],
+    [
+     0.9,
+     55.7,
+     67.33
+    ],
+    [
+     1.0,
+     56.47,
+     68.0
+    ]
+   ]
+  },
+  "llama3-8b": {
+   "_source": "docs/rd_metricsweep_data/llama3-8b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     61.54,
+     67.33
+    ],
+    [
+     0.1,
+     64.49,
+     70.0
+    ],
+    [
+     0.2,
+     65.61,
+     69.33
+    ],
+    [
+     0.3,
+     65.75,
+     68.67
+    ],
+    [
+     0.4,
+     65.75,
+     68.0
+    ],
+    [
+     0.5,
+     65.75,
+     71.33
+    ],
+    [
+     0.6,
+     65.96,
+     68.67
+    ],
+    [
+     0.7,
+     66.67,
+     68.0
+    ],
+    [
+     0.8,
+     66.25,
+     68.0
+    ],
+    [
+     0.9,
+     65.54,
+     70.67
+    ],
+    [
+     1.0,
+     67.02,
+     72.0
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     61.05,
+     68.67
+    ],
+    [
+     0.1,
+     64.07,
+     67.33
+    ],
+    [
+     0.2,
+     65.75,
+     67.33
+    ],
+    [
+     0.3,
+     64.91,
+     69.33
+    ],
+    [
+     0.4,
+     64.98,
+     66.67
+    ],
+    [
+     0.5,
+     64.49,
+     70.0
+    ],
+    [
+     0.6,
+     65.4,
+     72.67
+    ],
+    [
+     0.7,
+     64.28,
+     71.33
+    ],
+    [
+     0.8,
+     64.98,
+     71.33
+    ],
+    [
+     0.9,
+     65.47,
+     71.33
+    ],
+    [
+     1.0,
+     66.6,
+     69.33
+    ]
+   ]
+  },
+  "qwen3-8b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-8b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     74.25,
+     63.33
+    ],
+    [
+     0.1,
+     76.14,
+     65.33
+    ],
+    [
+     0.2,
+     75.44,
+     62.0
+    ],
+    [
+     0.3,
+     75.93,
+     65.33
+    ],
+    [
+     0.4,
+     77.05,
+     68.0
+    ],
+    [
+     0.5,
+     76.35,
+     66.0
+    ],
+    [
+     0.6,
+     76.49,
+     66.0
+    ],
+    [
+     0.7,
+     76.42,
+     64.0
+    ],
+    [
+     0.8,
+     77.75,
+     66.67
+    ],
+    [
+     0.9,
+     77.05,
+     64.67
+    ],
+    [
+     1.0,
+     77.19,
+     63.33
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     72.63,
+     60.0
+    ],
+    [
+     0.1,
+     73.82,
+     64.0
+    ],
+    [
+     0.2,
+     75.93,
+     66.0
+    ],
+    [
+     0.3,
+     75.93,
+     62.0
+    ],
+    [
+     0.4,
+     75.09,
+     62.67
+    ],
+    [
+     0.5,
+     75.23,
+     66.67
+    ],
+    [
+     0.6,
+     75.93,
+     63.33
+    ],
+    [
+     0.7,
+     75.44,
+     62.0
+    ],
+    [
+     0.8,
+     75.79,
+     64.67
+    ],
+    [
+     0.9,
+     76.21,
+     64.67
+    ],
+    [
+     1.0,
+     76.28,
+     62.0
+    ]
+   ]
+  },
+  "qwen3-14b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-14b_kv{16,4}_r*.json",
+   "kv16": [
+    [
+     0.0,
+     78.95,
+     62.67
+    ],
+    [
+     0.1,
+     80.07,
+     66.0
+    ],
+    [
+     0.2,
+     79.51,
+     66.0
+    ],
+    [
+     0.3,
+     79.65,
+     64.67
+    ],
+    [
+     0.4,
+     79.93,
+     66.67
+    ],
+    [
+     0.5,
+     79.44,
+     65.33
+    ],
+    [
+     0.6,
+     80.07,
+     67.33
+    ],
+    [
+     0.7,
+     79.23,
+     67.33
+    ],
+    [
+     0.8,
+     80.07,
+     66.0
+    ],
+    [
+     0.9,
+     80.49,
+     64.0
+    ],
+    [
+     1.0,
+     79.86,
+     65.33
+    ]
+   ],
+   "kv4": [
+    [
+     0.0,
+     78.25,
+     63.33
+    ],
+    [
+     0.1,
+     79.79,
+     69.33
+    ],
+    [
+     0.2,
+     79.02,
+     66.0
+    ],
+    [
+     0.3,
+     79.72,
+     64.67
+    ],
+    [
+     0.4,
+     79.16,
+     69.33
+    ],
+    [
+     0.5,
+     79.09,
+     65.33
+    ],
+    [
+     0.6,
+     80.07,
+     67.33
+    ],
+    [
+     0.7,
+     79.72,
+     68.67
+    ],
+    [
+     0.8,
+     79.58,
+     64.0
+    ],
+    [
+     0.9,
+     80.21,
+     66.0
+    ],
+    [
+     1.0,
+     80.14,
+     67.33
+    ]
+   ]
+  },
+  "qwen3-32b": {
+   "_source": "docs/rd_metricsweep_data/qwen3-32b_kv{16,4}_r*.json",
+   "kv16": null,
+   "kv4": null
+  },
+  "llama3-70b": {
+   "kv16": null,
+   "kv4": null
+  }
+ },
+ "serving": {
+  "_meta": {
+   "platform": "RTX PRO 6000 Blackwell (SM120), vLLM 0.32, one engine per GPU, graphs ON",
+   "tuple": "[r, tpot_ms, ttft_ms, tok_s]",
+   "tpot_ms": "decode-heavy case isl128_osl1024_b256 tpot_ms (pm*_r*_main.json)",
+   "ttft_ms": "prefill-heavy case isl1024_osl128_b256 ttft_s*1000 (pm*_r*_main.json)",
+   "tok_s": "QServe-protocol continuous batching isl1024_osl512_b256 gen_tok_per_s (pm*_r*_qserve.json)",
+   "dedup": "when both r0.X and r0.X0 files exist the newer meta.time run is used",
+   "source": "docs/vllm_final_data/pm{1b,3b,8b}_r*_{main,qserve}.json"
+  },
+  "llama3.2-1b": [
+   [
+    0.0,
+    7.27,
+    1508.0,
+    18340.0
+   ],
+   [
+    0.05,
+    9.586,
+    1919.0,
+    14210.0
+   ],
+   [
+    0.1,
+    7.252,
+    1399.0,
+    18610.0
+   ],
+   [
+    0.2,
+    7.144,
+    1406.0,
+    18710.0
+   ],
+   [
+    0.3,
+    7.24,
+    1455.0,
+    18470.0
+   ],
+   [
+    0.4,
+    7.243,
+    1472.0,
+    18380.0
+   ],
+   [
+    0.5,
+    7.313,
+    1496.0,
+    18320.0
+   ],
+   [
+    0.6,
+    7.288,
+    1512.0,
+    18170.0
+   ],
+   [
+    0.7,
+    7.383,
+    1548.0,
+    17960.0
+   ],
+   [
+    0.8,
+    7.474,
+    1594.0,
+    17860.0
+   ],
+   [
+    0.85,
+    7.663,
+    2331.0,
+    11660.0
+   ],
+   [
+    0.9,
+    7.518,
+    1645.0,
+    17640.0
+   ],
+   [
+    0.95,
+    7.644,
+    1643.0,
+    17450.0
+   ],
+   [
+    1.0,
+    7.556,
+    1658.0,
+    17410.0
+   ]
+  ],
+  "llama3.2-3b": [
+   [
+    0.0,
+    18.89,
+    3315.0,
+    6685.0
+   ],
+   [
+    0.03125,
+    18.93,
+    3212.0,
+    6732.0
+   ],
+   [
+    0.0625,
+    18.28,
+    2927.0,
+    6990.0
+   ],
+   [
+    0.09375,
+    19.07,
+    3234.0,
+    6711.0
+   ],
+   [
+    0.1,
+    18.7,
+    3091.0,
+    6832.0
+   ],
+   [
+    0.15,
+    18.7,
+    3097.0,
+    6808.0
+   ],
+   [
+    0.1875,
+    18.67,
+    3111.0,
+    6851.0
+   ],
+   [
+    0.2,
+    18.75,
+    3154.0,
+    6779.0
+   ],
+   [
+    0.25,
+    18.42,
+    3130.0,
+    6865.0
+   ],
+   [
+    0.3,
+    18.84,
+    3296.0,
+    6694.0
+   ],
+   [
+    0.4,
+    19.05,
+    3439.0,
+    6635.0
+   ],
+   [
+    0.5,
+    19.24,
+    3549.0,
+    6593.0
+   ],
+   [
+    0.6,
+    19.3,
+    3603.0,
+    6527.0
+   ],
+   [
+    0.65,
+    19.24,
+    3591.0,
+    6545.0
+   ],
+   [
+    0.7,
+    19.25,
+    3668.0,
+    6529.0
+   ],
+   [
+    0.75,
+    19.43,
+    3696.0,
+    6443.0
+   ],
+   [
+    0.8,
+    19.37,
+    3780.0,
+    6487.0
+   ],
+   [
+    0.85,
+    19.37,
+    3803.0,
+    6469.0
+   ],
+   [
+    0.9,
+    19.3,
+    3862.0,
+    6429.0
+   ],
+   [
+    0.95,
+    19.54,
+    3906.0,
+    6403.0
+   ],
+   [
+    1.0,
+    19.41,
+    3957.0,
+    6390.0
+   ]
+  ],
+  "llama3-8b": [
+   [
+    0.0,
+    24.85,
+    6633.0,
+    4828.0
+   ],
+   [
+    0.03125,
+    24.51,
+    5878.0,
+    5026.0
+   ],
+   [
+    0.0625,
+    24.99,
+    5994.0,
+    4970.0
+   ],
+   [
+    0.1,
+    25.52,
+    6344.0,
+    4841.0
+   ],
+   [
+    0.125,
+    25.32,
+    6363.0,
+    4789.0
+   ],
+   [
+    0.1875,
+    25.75,
+    6629.0,
+    4759.0
+   ],
+   [
+    0.2,
+    25.76,
+    6735.0,
+    4773.0
+   ],
+   [
+    0.25,
+    25.54,
+    6602.0,
+    4718.0
+   ],
+   [
+    0.3,
+    26.03,
+    7038.0,
+    4680.0
+   ],
+   [
+    0.4,
+    26.4,
+    7464.0,
+    4596.0
+   ],
+   [
+    0.5,
+    26.57,
+    7793.0,
+    4420.0
+   ],
+   [
+    0.6,
+    26.68,
+    8368.0,
+    4436.0
+   ],
+   [
+    0.7,
+    26.98,
+    8477.0,
+    4396.0
+   ],
+   [
+    0.8,
+    27.04,
+    8506.0,
+    4360.0
+   ],
+   [
+    0.9,
+    27.14,
+    9372.0,
+    4335.0
+   ],
+   [
+    1.0,
+    27.19,
+    8922.0,
+    4230.0
+   ]
+  ]
+ },
+ "opgap": {
+  "_meta": {
+   "definition": "gap-to-theory = ours gemm_ms / (torch_fp4_ms*(1-r) + torch_fp8_ms*r), median over shapes x M in {2048,8192}; 1.0 = cuBLASLt FP4/FP8 interpolation theory line; tuple=[r, median_gap, n_points]",
+   "gb10_shapes": "18 shapes (1B/3B/8B/70B/Q8B/Q14B x qkvo/gate_up/down) x 2M = 36 pts/r",
+   "pro6000_shapes": "12 shapes (1B/70B/Q8B/Q14B x 3) x 2M = 24 pts/r (ours_uniform11_ext.json only, matching the committed dashboard)",
+   "source": "docs/rd_oppareto_data/{ours_gb10_uniform11,ours_gb10_uniform11_tuned_v2,ours_uniform11_ext,torch_gb10_ext_m*,torch_ext_m*}.json"
+  },
+  "gb10_pre": [
+   [
+    0.0,
+    1.825,
+    36
+   ],
+   [
+    0.03125,
+    1.209,
+    36
+   ],
+   [
+    0.0625,
+    1.224,
+    36
+   ],
+   [
+    0.08333,
+    1.249,
+    36
+   ],
+   [
+    0.125,
+    1.21,
+    36
+   ],
+   [
+    0.1875,
+    1.245,
+    36
+   ],
+   [
+    0.25,
+    1.212,
+    36
+   ],
+   [
+    0.375,
+    1.212,
+    36
+   ],
+   [
+    0.5,
+    1.232,
+    36
+   ],
+   [
+    0.75,
+    1.204,
+    36
+   ],
+   [
+    1.0,
+    1.25,
+    36
+   ]
+  ],
+  "gb10_tuned_v2": [
+   [
+    0.0,
+    1.045,
+    36
+   ],
+   [
+    0.03125,
+    1.093,
+    36
+   ],
+   [
+    0.0625,
+    1.039,
+    36
+   ],
+   [
+    0.08333,
+    1.113,
+    36
+   ],
+   [
+    0.125,
+    1.067,
+    36
+   ],
+   [
+    0.1875,
+    1.082,
+    36
+   ],
+   [
+    0.25,
+    1.064,
+    36
+   ],
+   [
+    0.375,
+    1.071,
+    36
+   ],
+   [
+    0.5,
+    1.06,
+    36
+   ],
+   [
+    0.75,
+    1.082,
+    36
+   ],
+   [
+    1.0,
+    1.112,
+    36
+   ]
+  ],
+  "pro6000": [
+   [
+    0.0,
+    1.23,
+    24
+   ],
+   [
+    0.1,
+    1.121,
+    24
+   ],
+   [
+    0.2,
+    1.09,
+    24
+   ],
+   [
+    0.3,
+    1.102,
+    24
+   ],
+   [
+    0.4,
+    1.109,
+    24
+   ],
+   [
+    0.5,
+    1.1,
+    24
+   ],
+   [
+    0.6,
+    1.116,
+    24
+   ],
+   [
+    0.7,
+    1.121,
+    24
+   ],
+   [
+    0.8,
+    1.111,
+    24
+   ],
+   [
+    0.9,
+    1.117,
+    24
+   ],
+   [
+    1.0,
+    1.11,
+    24
+   ]
+  ]
+ },
+ "square_gap": {
+  "_meta": {
+   "definition": "per square size: gap = ours gemm_ms / (fp4_ms*(1-r)+fp8_ms*r), single shape M=N=K=size",
+   "source": "docs/rd_oppareto_data/{ours,torch}_{gb10,p6}_sq{4096,8192,10240,16384}.json"
+  },
+  "4096": {
+   "gb10": [
+    [
+     0.0,
+     1.063
+    ],
+    [
+     0.03125,
+     1.147
+    ],
+    [
+     0.0625,
+     1.155
+    ],
+    [
+     0.08333,
+     1.2
+    ],
+    [
+     0.125,
+     1.184
+    ],
+    [
+     0.1875,
+     1.192
+    ],
+    [
+     0.25,
+     1.173
+    ],
+    [
+     0.375,
+     1.179
+    ],
+    [
+     0.5,
+     1.146
+    ],
+    [
+     0.75,
+     1.152
+    ],
+    [
+     1.0,
+     1.194
+    ]
+   ],
+   "p6": [
+    [
+     0.0,
+     1.207
+    ],
+    [
+     0.03125,
+     1.108
+    ],
+    [
+     0.0625,
+     1.138
+    ],
+    [
+     0.08333,
+     1.182
+    ],
+    [
+     0.125,
+     1.133
+    ],
+    [
+     0.1875,
+     1.141
+    ],
+    [
+     0.25,
+     1.13
+    ],
+    [
+     0.375,
+     1.126
+    ],
+    [
+     0.5,
+     1.132
+    ],
+    [
+     0.75,
+     1.153
+    ],
+    [
+     1.0,
+     1.143
+    ]
+   ]
+  },
+  "8192": {
+   "gb10": [
+    [
+     0.0,
+     1.056
+    ],
+    [
+     0.03125,
+     1.108
+    ],
+    [
+     0.0625,
+     1.113
+    ],
+    [
+     0.08333,
+     1.114
+    ],
+    [
+     0.125,
+     1.085
+    ],
+    [
+     0.1875,
+     1.07
+    ],
+    [
+     0.25,
+     1.098
+    ],
+    [
+     0.375,
+     1.086
+    ],
+    [
+     0.5,
+     1.07
+    ],
+    [
+     0.75,
+     1.062
+    ],
+    [
+     1.0,
+     1.082
+    ]
+   ],
+   "p6": [
+    [
+     0.0,
+     1.238
+    ],
+    [
+     0.03125,
+     1.065
+    ],
+    [
+     0.0625,
+     1.021
+    ],
+    [
+     0.08333,
+     1.044
+    ],
+    [
+     0.125,
+     1.012
+    ],
+    [
+     0.1875,
+     1.023
+    ],
+    [
+     0.25,
+     1.028
+    ],
+    [
+     0.375,
+     1.054
+    ],
+    [
+     0.5,
+     1.048
+    ],
+    [
+     0.75,
+     1.091
+    ],
+    [
+     1.0,
+     1.089
+    ]
+   ]
+  },
+  "10240": {
+   "gb10": [
+    [
+     0.0,
+     1.02
+    ],
+    [
+     0.03125,
+     1.073
+    ],
+    [
+     0.0625,
+     1.055
+    ],
+    [
+     0.08333,
+     1.063
+    ],
+    [
+     0.125,
+     1.047
+    ],
+    [
+     0.1875,
+     1.041
+    ],
+    [
+     0.25,
+     1.03
+    ],
+    [
+     0.375,
+     1.024
+    ],
+    [
+     0.5,
+     1.006
+    ],
+    [
+     0.75,
+     1.003
+    ],
+    [
+     1.0,
+     1.032
+    ]
+   ],
+   "p6": [
+    [
+     0.0,
+     1.17
+    ],
+    [
+     0.03125,
+     1.037
+    ],
+    [
+     0.0625,
+     1.012
+    ],
+    [
+     0.08333,
+     1.032
+    ],
+    [
+     0.125,
+     1.01
+    ],
+    [
+     0.1875,
+     1.01
+    ],
+    [
+     0.25,
+     1.009
+    ],
+    [
+     0.375,
+     1.01
+    ],
+    [
+     0.5,
+     1.008
+    ],
+    [
+     0.75,
+     1.026
+    ],
+    [
+     1.0,
+     1.055
+    ]
+   ]
+  },
+  "16384": {
+   "gb10": [
+    [
+     0.0,
+     1.015
+    ],
+    [
+     0.03125,
+     1.037
+    ],
+    [
+     0.0625,
+     1.024
+    ],
+    [
+     0.08333,
+     1.014
+    ],
+    [
+     0.125,
+     0.9898
+    ],
+    [
+     0.1875,
+     0.9773
+    ],
+    [
+     0.25,
+     0.973
+    ],
+    [
+     0.375,
+     0.9569
+    ],
+    [
+     0.5,
+     0.972
+    ],
+    [
+     0.75,
+     0.9465
+    ],
+    [
+     1.0,
+     1.011
+    ]
+   ],
+   "p6": [
+    [
+     0.0,
+     1.183
+    ],
+    [
+     0.03125,
+     1.128
+    ],
+    [
+     0.0625,
+     1.13
+    ],
+    [
+     0.08333,
+     1.22
+    ],
+    [
+     0.125,
+     1.158
+    ],
+    [
+     0.1875,
+     1.173
+    ],
+    [
+     0.25,
+     1.199
+    ],
+    [
+     0.375,
+     1.223
+    ],
+    [
+     0.5,
+     1.249
+    ],
+    [
+     0.75,
+     1.264
+    ],
+    [
+     1.0,
+     1.264
+    ]
+   ]
+  }
+ },
+ "m31": {
+  "_meta": {
+   "source": "docs/motivation_3_1/runs.csv (per-run JSONs in docs/motivation_3_1/data/)",
+   "tuple": "[target_ratio, wiki_ppl, c4_ppl]",
+   "keys": "strategy_scope (rnd has per-seed keys; float controls keyed float_<representation>)",
+   "note": "rows with status reused* are valid deduplicated endpoint/control points and are included"
+  },
+  "3b": {
+   "av_across": [
+    [
+     0.0,
+     10.65,
+     14.45
+    ],
+    [
+     0.1,
+     8.296,
+     11.36
+    ],
+    [
+     0.2,
+     8.238,
+     11.26
+    ],
+    [
+     0.3,
+     8.228,
+     11.2
+    ],
+    [
+     0.4,
+     8.188,
+     11.13
+    ],
+    [
+     0.5,
+     8.173,
+     11.09
+    ],
+    [
+     0.6,
+     8.131,
+     11.02
+    ],
+    [
+     0.7,
+     8.087,
+     10.95
+    ],
+    [
+     0.8,
+     8.037,
+     10.86
+    ],
+    [
+     0.9,
+     8.022,
+     10.8
+    ],
+    [
+     1.0,
+     7.996,
+     10.71
+    ]
+   ],
+   "av_within": [
+    [
+     0.0,
+     10.65,
+     14.45
+    ],
+    [
+     0.1,
+     8.378,
+     11.52
+    ],
+    [
+     0.2,
+     8.335,
+     11.39
+    ],
+    [
+     0.3,
+     8.279,
+     11.31
+    ],
+    [
+     0.4,
+     8.24,
+     11.21
+    ],
+    [
+     0.5,
+     8.13,
+     11.03
+    ],
+    [
+     0.6,
+     8.088,
+     10.96
+    ],
+    [
+     0.7,
+     8.078,
+     10.9
+    ],
+    [
+     0.8,
+     8.036,
+     10.84
+    ],
+    [
+     0.9,
+     8.023,
+     10.79
+    ],
+    [
+     1.0,
+     7.996,
+     10.71
+    ]
+   ],
+   "float_pca": [
+    [
+     null,
+     7.812,
+     10.43
+    ]
+   ],
+   "float_raw": [
+    [
+     null,
+     7.812,
+     10.43
+    ]
+   ],
+   "ma_across": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     16.62,
+     24.97
+    ],
+    [
+     0.2,
+     18.15,
+     26.07
+    ],
+    [
+     0.3,
+     15.83,
+     26.07
+    ],
+    [
+     0.4,
+     16.03,
+     24.48
+    ],
+    [
+     0.5,
+     15.69,
+     25.24
+    ],
+    [
+     0.6,
+     15.82,
+     23.88
+    ],
+    [
+     0.7,
+     7.939,
+     10.67
+    ],
+    [
+     0.8,
+     7.897,
+     10.59
+    ],
+    [
+     0.9,
+     7.874,
+     10.54
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "ma_within": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     8.124,
+     11.07
+    ],
+    [
+     0.2,
+     8.083,
+     10.97
+    ],
+    [
+     0.3,
+     8.037,
+     10.91
+    ],
+    [
+     0.4,
+     8.004,
+     10.83
+    ],
+    [
+     0.5,
+     7.979,
+     10.77
+    ],
+    [
+     0.6,
+     7.952,
+     10.71
+    ],
+    [
+     0.7,
+     7.927,
+     10.65
+    ],
+    [
+     0.8,
+     7.892,
+     10.6
+    ],
+    [
+     0.9,
+     7.873,
+     10.56
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "rnd_within_s0": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     10.49,
+     17.02
+    ],
+    [
+     0.2,
+     8.329,
+     11.51
+    ],
+    [
+     0.3,
+     10.21,
+     15.0
+    ],
+    [
+     0.4,
+     8.55,
+     11.92
+    ],
+    [
+     0.5,
+     8.03,
+     10.89
+    ],
+    [
+     0.6,
+     8.0,
+     10.79
+    ],
+    [
+     0.7,
+     7.965,
+     10.72
+    ],
+    [
+     0.8,
+     7.913,
+     10.65
+    ],
+    [
+     0.9,
+     7.879,
+     10.58
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "rnd_within_s1": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     19.77,
+     25.3
+    ],
+    [
+     0.2,
+     16.0,
+     21.01
+    ],
+    [
+     0.3,
+     11.62,
+     15.76
+    ],
+    [
+     0.4,
+     8.075,
+     10.97
+    ],
+    [
+     0.5,
+     8.028,
+     10.88
+    ],
+    [
+     0.6,
+     7.982,
+     10.79
+    ],
+    [
+     0.7,
+     7.953,
+     10.72
+    ],
+    [
+     0.8,
+     7.915,
+     10.64
+    ],
+    [
+     0.9,
+     7.891,
+     10.57
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "rnd_within_s2": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     8.853,
+     12.75
+    ],
+    [
+     0.2,
+     9.741,
+     14.76
+    ],
+    [
+     0.3,
+     9.973,
+     14.97
+    ],
+    [
+     0.4,
+     8.093,
+     11.14
+    ],
+    [
+     0.5,
+     8.03,
+     10.89
+    ],
+    [
+     0.6,
+     7.998,
+     10.81
+    ],
+    [
+     0.7,
+     7.964,
+     10.73
+    ],
+    [
+     0.8,
+     7.92,
+     10.65
+    ],
+    [
+     0.9,
+     7.886,
+     10.59
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "ss_across": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     8.143,
+     11.09
+    ],
+    [
+     0.2,
+     8.112,
+     11.02
+    ],
+    [
+     0.3,
+     8.067,
+     10.95
+    ],
+    [
+     0.4,
+     8.043,
+     10.89
+    ],
+    [
+     0.5,
+     8.018,
+     10.82
+    ],
+    [
+     0.6,
+     7.989,
+     10.75
+    ],
+    [
+     0.7,
+     7.932,
+     10.67
+    ],
+    [
+     0.8,
+     7.906,
+     10.59
+    ],
+    [
+     0.9,
+     7.879,
+     10.54
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ],
+   "ss_within": [
+    [
+     0.0,
+     14.33,
+     23.13
+    ],
+    [
+     0.1,
+     8.122,
+     11.07
+    ],
+    [
+     0.2,
+     8.081,
+     11.0
+    ],
+    [
+     0.3,
+     8.037,
+     10.9
+    ],
+    [
+     0.4,
+     8.012,
+     10.84
+    ],
+    [
+     0.5,
+     7.981,
+     10.76
+    ],
+    [
+     0.6,
+     7.948,
+     10.71
+    ],
+    [
+     0.7,
+     7.925,
+     10.65
+    ],
+    [
+     0.8,
+     7.894,
+     10.6
+    ],
+    [
+     0.9,
+     7.872,
+     10.55
+    ],
+    [
+     1.0,
+     7.854,
+     10.5
+    ]
+   ]
+  },
+  "8b": {
+   "av_across": [
+    [
+     0.0,
+     7.932,
+     11.38
+    ],
+    [
+     0.1,
+     6.586,
+     9.602
+    ],
+    [
+     0.2,
+     6.551,
+     9.526
+    ],
+    [
+     0.3,
+     6.514,
+     9.466
+    ],
+    [
+     0.4,
+     6.48,
+     9.389
+    ],
+    [
+     0.5,
+     6.451,
+     9.352
+    ],
+    [
+     0.6,
+     6.391,
+     9.252
+    ],
+    [
+     0.7,
+     6.374,
+     9.209
+    ],
+    [
+     0.8,
+     6.341,
+     9.146
+    ],
+    [
+     0.9,
+     6.305,
+     9.099
+    ],
+    [
+     1.0,
+     6.274,
+     9.061
+    ]
+   ],
+   "av_within": [
+    [
+     0.0,
+     7.932,
+     11.38
+    ],
+    [
+     0.1,
+     6.62,
+     9.648
+    ],
+    [
+     0.2,
+     6.564,
+     9.562
+    ],
+    [
+     0.3,
+     6.563,
+     9.54
+    ],
+    [
+     0.4,
+     6.519,
+     9.484
+    ],
+    [
+     0.5,
+     6.42,
+     9.319
+    ],
+    [
+     0.6,
+     6.393,
+     9.276
+    ],
+    [
+     0.7,
+     6.355,
+     9.205
+    ],
+    [
+     0.8,
+     6.343,
+     9.171
+    ],
+    [
+     0.9,
+     6.3,
+     9.114
+    ],
+    [
+     1.0,
+     6.274,
+     9.061
+    ]
+   ],
+   "float_pca": [
+    [
+     null,
+     6.135,
+     8.879
+    ]
+   ],
+   "float_raw": [
+    [
+     null,
+     6.135,
+     8.879
+    ]
+   ],
+   "ma_across": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     7.325,
+     10.4
+    ],
+    [
+     0.2,
+     7.227,
+     10.39
+    ],
+    [
+     0.3,
+     7.454,
+     10.44
+    ],
+    [
+     0.4,
+     7.118,
+     10.15
+    ],
+    [
+     0.5,
+     7.279,
+     10.35
+    ],
+    [
+     0.6,
+     7.058,
+     9.734
+    ],
+    [
+     0.7,
+     7.018,
+     9.677
+    ],
+    [
+     0.8,
+     6.242,
+     9.007
+    ],
+    [
+     0.9,
+     6.217,
+     8.979
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "ma_within": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     6.478,
+     9.429
+    ],
+    [
+     0.2,
+     6.432,
+     9.353
+    ],
+    [
+     0.3,
+     6.398,
+     9.298
+    ],
+    [
+     0.4,
+     6.367,
+     9.231
+    ],
+    [
+     0.5,
+     6.33,
+     9.176
+    ],
+    [
+     0.6,
+     6.296,
+     9.119
+    ],
+    [
+     0.7,
+     6.261,
+     9.067
+    ],
+    [
+     0.8,
+     6.235,
+     9.027
+    ],
+    [
+     0.9,
+     6.205,
+     8.982
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "rnd_within_s0": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     7.682,
+     12.39
+    ],
+    [
+     0.2,
+     6.515,
+     9.486
+    ],
+    [
+     0.3,
+     6.463,
+     9.417
+    ],
+    [
+     0.4,
+     6.413,
+     9.328
+    ],
+    [
+     0.5,
+     6.372,
+     9.256
+    ],
+    [
+     0.6,
+     6.331,
+     9.185
+    ],
+    [
+     0.7,
+     6.285,
+     9.117
+    ],
+    [
+     0.8,
+     6.253,
+     9.057
+    ],
+    [
+     0.9,
+     6.215,
+     8.997
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "rnd_within_s1": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     6.556,
+     9.57
+    ],
+    [
+     0.2,
+     6.511,
+     9.475
+    ],
+    [
+     0.3,
+     6.459,
+     9.395
+    ],
+    [
+     0.4,
+     6.411,
+     9.333
+    ],
+    [
+     0.5,
+     6.369,
+     9.262
+    ],
+    [
+     0.6,
+     6.331,
+     9.191
+    ],
+    [
+     0.7,
+     6.291,
+     9.125
+    ],
+    [
+     0.8,
+     6.255,
+     9.064
+    ],
+    [
+     0.9,
+     6.216,
+     8.998
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "rnd_within_s2": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     7.611,
+     11.45
+    ],
+    [
+     0.2,
+     6.513,
+     9.478
+    ],
+    [
+     0.3,
+     6.473,
+     9.413
+    ],
+    [
+     0.4,
+     6.409,
+     9.339
+    ],
+    [
+     0.5,
+     6.368,
+     9.254
+    ],
+    [
+     0.6,
+     6.326,
+     9.182
+    ],
+    [
+     0.7,
+     6.295,
+     9.116
+    ],
+    [
+     0.8,
+     6.262,
+     9.06
+    ],
+    [
+     0.9,
+     6.225,
+     9.004
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "ss_across": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     6.484,
+     9.424
+    ],
+    [
+     0.2,
+     6.442,
+     9.371
+    ],
+    [
+     0.3,
+     6.412,
+     9.317
+    ],
+    [
+     0.4,
+     6.387,
+     9.257
+    ],
+    [
+     0.5,
+     6.355,
+     9.194
+    ],
+    [
+     0.6,
+     6.301,
+     9.106
+    ],
+    [
+     0.7,
+     6.268,
+     9.056
+    ],
+    [
+     0.8,
+     6.234,
+     9.009
+    ],
+    [
+     0.9,
+     6.213,
+     8.976
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ],
+   "ss_within": [
+    [
+     0.0,
+     7.782,
+     10.56
+    ],
+    [
+     0.1,
+     6.48,
+     9.431
+    ],
+    [
+     0.2,
+     6.428,
+     9.351
+    ],
+    [
+     0.3,
+     6.393,
+     9.292
+    ],
+    [
+     0.4,
+     6.361,
+     9.234
+    ],
+    [
+     0.5,
+     6.326,
+     9.179
+    ],
+    [
+     0.6,
+     6.294,
+     9.126
+    ],
+    [
+     0.7,
+     6.268,
+     9.074
+    ],
+    [
+     0.8,
+     6.237,
+     9.031
+    ],
+    [
+     0.9,
+     6.208,
+     8.985
+    ],
+    [
+     1.0,
+     6.183,
+     8.941
+    ]
+   ]
+  }
+ },
+ "m32": {
+  "_meta": {
+   "source": "docs/motivation_3_2/runs.csv",
+   "tuple": "[target_ratio, wiki_ppl, E_mean, A_high_mean, A_low_mean]",
+   "note": "rotated has 3 rotation seeds (rotated_s0/s1/s2); direct rows carry status reused_m31 (same underlying runs as m31 av_within s0) and are included; o_proj fixed FP16 -> absolute PPL not directly comparable to block-1 curves"
+  },
+  "3b": {
+   "rotated_s0": [
+    [
+     0.1,
+     8.49,
+     0.004789,
+     0.0007035,
+     0.007548
+    ],
+    [
+     0.2,
+     8.386,
+     0.004083,
+     0.0007016,
+     0.007546
+    ],
+    [
+     0.3,
+     8.254,
+     0.003468,
+     0.0006996,
+     0.007546
+    ],
+    [
+     0.4,
+     8.213,
+     0.00298,
+     0.0007008,
+     0.007548
+    ],
+    [
+     0.5,
+     8.122,
+     0.002501,
+     0.0007025,
+     0.007546
+    ],
+    [
+     0.6,
+     8.076,
+     0.002064,
+     0.0007038,
+     0.007545
+    ],
+    [
+     0.7,
+     8.029,
+     0.001688,
+     0.0007046,
+     0.007548
+    ],
+    [
+     0.8,
+     7.984,
+     0.001306,
+     0.0007048,
+     0.007546
+    ],
+    [
+     0.9,
+     7.941,
+     0.0009725,
+     0.0007047,
+     0.007547
+    ]
+   ],
+   "rotated_s1": [
+    [
+     0.1,
+     8.506,
+     0.004789,
+     0.0007037,
+     0.007549
+    ],
+    [
+     0.5,
+     8.135,
+     0.002501,
+     0.0007024,
+     0.007545
+    ],
+    [
+     0.9,
+     7.945,
+     0.0009722,
+     0.0007046,
+     0.007545
+    ]
+   ],
+   "rotated_s2": [
+    [
+     0.1,
+     8.451,
+     0.00479,
+     0.0007037,
+     0.00755
+    ],
+    [
+     0.5,
+     8.158,
+     0.002502,
+     0.0007025,
+     0.007545
+    ],
+    [
+     0.9,
+     7.944,
+     0.0009727,
+     0.0007047,
+     0.007551
+    ]
+   ],
+   "direct": [
+    [
+     0.1,
+     8.378,
+     0.005067,
+     0.0007034,
+     0.007542
+    ],
+    [
+     0.2,
+     8.335,
+     0.00433,
+     0.0007032,
+     0.007542
+    ],
+    [
+     0.3,
+     8.279,
+     0.003697,
+     0.000703,
+     0.007538
+    ],
+    [
+     0.4,
+     8.24,
+     0.0032,
+     0.0007029,
+     0.007531
+    ],
+    [
+     0.5,
+     8.13,
+     0.002713,
+     0.0007029,
+     0.00751
+    ],
+    [
+     0.6,
+     8.088,
+     0.002278,
+     0.0007029,
+     0.007509
+    ],
+    [
+     0.7,
+     8.078,
+     0.001905,
+     0.0007028,
+     0.007508
+    ],
+    [
+     0.8,
+     8.036,
+     0.001528,
+     0.0007027,
+     0.007508
+    ],
+    [
+     0.9,
+     8.023,
+     0.001199,
+     0.0007025,
+     0.007508
+    ]
+   ]
+  },
+  "8b": {
+   "rotated_s0": [
+    [
+     0.1,
+     6.709,
+     0.005102,
+     0.0007035,
+     0.00761
+    ],
+    [
+     0.2,
+     6.626,
+     0.004322,
+     0.0007014,
+     0.007609
+    ],
+    [
+     0.3,
+     6.559,
+     0.003726,
+     0.0007001,
+     0.007608
+    ],
+    [
+     0.4,
+     6.501,
+     0.003171,
+     0.0007011,
+     0.007607
+    ],
+    [
+     0.5,
+     6.442,
+     0.00267,
+     0.0007028,
+     0.007608
+    ],
+    [
+     0.6,
+     6.397,
+     0.002209,
+     0.0007041,
+     0.007608
+    ],
+    [
+     0.7,
+     6.341,
+     0.001778,
+     0.0007049,
+     0.007607
+    ],
+    [
+     0.8,
+     6.301,
+     0.001394,
+     0.0007049,
+     0.007609
+    ],
+    [
+     0.9,
+     6.259,
+     0.00101,
+     0.0007047,
+     0.007607
+    ]
+   ],
+   "rotated_s1": [
+    [
+     0.1,
+     6.697,
+     0.005101,
+     0.0007037,
+     0.00761
+    ],
+    [
+     0.5,
+     6.446,
+     0.00267,
+     0.0007029,
+     0.007607
+    ],
+    [
+     0.9,
+     6.263,
+     0.00101,
+     0.0007046,
+     0.007609
+    ]
+   ],
+   "rotated_s2": [
+    [
+     0.1,
+     6.723,
+     0.005102,
+     0.0007036,
+     0.00761
+    ],
+    [
+     0.5,
+     6.429,
+     0.00267,
+     0.0007029,
+     0.007607
+    ],
+    [
+     0.9,
+     6.258,
+     0.00101,
+     0.0007047,
+     0.007609
+    ]
+   ],
+   "direct": [
+    [
+     0.1,
+     6.62,
+     0.005368,
+     0.0006973,
+     0.007606
+    ],
+    [
+     0.2,
+     6.564,
+     0.004547,
+     0.0006985,
+     0.007612
+    ],
+    [
+     0.3,
+     6.563,
+     0.003942,
+     0.000699,
+     0.007618
+    ],
+    [
+     0.4,
+     6.519,
+     0.003389,
+     0.0006993,
+     0.007615
+    ],
+    [
+     0.5,
+     6.42,
+     0.00288,
+     0.0006993,
+     0.007576
+    ],
+    [
+     0.6,
+     6.393,
+     0.002422,
+     0.0006992,
+     0.007576
+    ],
+    [
+     0.7,
+     6.355,
+     0.001995,
+     0.0006991,
+     0.007575
+    ],
+    [
+     0.8,
+     6.343,
+     0.001615,
+     0.000699,
+     0.007576
+    ],
+    [
+     0.9,
+     6.3,
+     0.001235,
+     0.0006989,
+     0.007576
+    ]
+   ]
+  }
+ },
+ "missing": [
+  {
+   "where": "competitors.sharq.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.sharq.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.sharq.llama3-70b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.sharq.llama3-70b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.sharq.qwen3-8b.wiki",
+   "reason": "as-shipped ran but numerically collapsed: wiki 42803.9 / c4 27499.5 (Llama-specific pipeline does not transfer to Qwen3 QK-Norm); recorded as unusable"
+  },
+  {
+   "where": "competitors.sharq.qwen3-8b.c4",
+   "reason": "as-shipped ran but numerically collapsed: wiki 42803.9 / c4 27499.5 (Llama-specific pipeline does not transfer to Qwen3 QK-Norm); recorded as unusable"
+  },
+  {
+   "where": "competitors.sharq.qwen3-8b.mmlu",
+   "reason": "as-shipped ran but numerically collapsed: wiki 42803.9 / c4 27499.5 (Llama-specific pipeline does not transfer to Qwen3 QK-Norm); recorded as unusable"
+  },
+  {
+   "where": "competitors.sharq.qwen3-8b.zeroshot",
+   "reason": "as-shipped ran but numerically collapsed: wiki 42803.9 / c4 27499.5 (Llama-specific pipeline does not transfer to Qwen3 QK-Norm); recorded as unusable"
+  },
+  {
+   "where": "competitors.sharq.qwen3-14b.wiki",
+   "reason": "not applicable: SharQ Qwen3 pipeline collapsed at 8B, 14B not attempted"
+  },
+  {
+   "where": "competitors.sharq.qwen3-14b.c4",
+   "reason": "not applicable: SharQ Qwen3 pipeline collapsed at 8B, 14B not attempted"
+  },
+  {
+   "where": "competitors.sharq.qwen3-14b.mmlu",
+   "reason": "not applicable: SharQ Qwen3 pipeline collapsed at 8B, 14B not attempted"
+  },
+  {
+   "where": "competitors.sharq.qwen3-14b.zeroshot",
+   "reason": "not applicable: SharQ Qwen3 pipeline collapsed at 8B, 14B not attempted"
+  },
+  {
+   "where": "competitors.sharq.qwen3-32b.wiki",
+   "reason": "not applicable: same as 14B"
+  },
+  {
+   "where": "competitors.sharq.qwen3-32b.c4",
+   "reason": "not applicable: same as 14B"
+  },
+  {
+   "where": "competitors.sharq.qwen3-32b.mmlu",
+   "reason": "not applicable: same as 14B"
+  },
+  {
+   "where": "competitors.sharq.qwen3-32b.zeroshot",
+   "reason": "not applicable: same as 14B"
+  },
+  {
+   "where": "competitors.arcquant.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.arcquant.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.arcquant.llama3-70b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.arcquant.llama3-70b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-8b.wiki",
+   "reason": "not runnable: requires precomputed Llama-only reorder index artifacts (FileNotFoundError on Qwen3)"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-8b.c4",
+   "reason": "not runnable: requires precomputed Llama-only reorder index artifacts (FileNotFoundError on Qwen3)"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-8b.mmlu",
+   "reason": "not runnable: requires precomputed Llama-only reorder index artifacts (FileNotFoundError on Qwen3)"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-8b.zeroshot",
+   "reason": "not runnable: requires precomputed Llama-only reorder index artifacts (FileNotFoundError on Qwen3)"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-14b.wiki",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-14b.c4",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-14b.mmlu",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-14b.zeroshot",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-32b.wiki",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-32b.c4",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-32b.mmlu",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.arcquant.qwen3-32b.zeroshot",
+   "reason": "not applicable: Llama-only artifacts"
+  },
+  {
+   "where": "competitors.nvfp4.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-14b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-14b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-14b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-32b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-32b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.nvfp4.qwen3-32b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.micromix.llama3.2-1b.wiki",
+   "reason": "not applicable: method has no 1B configuration"
+  },
+  {
+   "where": "competitors.micromix.llama3.2-1b.c4",
+   "reason": "not applicable: method has no 1B configuration"
+  },
+  {
+   "where": "competitors.micromix.llama3.2-1b.mmlu",
+   "reason": "not applicable: method has no 1B configuration"
+  },
+  {
+   "where": "competitors.micromix.llama3.2-1b.zeroshot",
+   "reason": "not applicable: method has no 1B configuration"
+  },
+  {
+   "where": "competitors.micromix.llama3-70b.wiki",
+   "reason": "skipped by design: no SmoothQuant act-scale generator shipped + kernels mis-validate on CUDA 13"
+  },
+  {
+   "where": "competitors.micromix.llama3-70b.c4",
+   "reason": "skipped by design: no SmoothQuant act-scale generator shipped + kernels mis-validate on CUDA 13"
+  },
+  {
+   "where": "competitors.micromix.llama3-70b.mmlu",
+   "reason": "skipped by design: no SmoothQuant act-scale generator shipped + kernels mis-validate on CUDA 13"
+  },
+  {
+   "where": "competitors.micromix.llama3-70b.zeroshot",
+   "reason": "skipped by design: no SmoothQuant act-scale generator shipped + kernels mis-validate on CUDA 13"
+  },
+  {
+   "where": "competitors.micromix.qwen3-8b.wiki",
+   "reason": "not run (paper_experiments.md tableB blank)"
+  },
+  {
+   "where": "competitors.micromix.qwen3-8b.c4",
+   "reason": "not run (paper_experiments.md tableB blank)"
+  },
+  {
+   "where": "competitors.micromix.qwen3-8b.mmlu",
+   "reason": "not run (paper_experiments.md tableB blank)"
+  },
+  {
+   "where": "competitors.micromix.qwen3-8b.zeroshot",
+   "reason": "not run (paper_experiments.md tableB blank)"
+  },
+  {
+   "where": "competitors.micromix.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.micromix.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.llama3.2-1b.mmlu",
+   "reason": "wa_cov (own criterion); no a_cov 1B run"
+  },
+  {
+   "where": "competitors.coquant.llama3.2-1b.zeroshot",
+   "reason": "wa_cov (own criterion); no a_cov 1B run"
+  },
+  {
+   "where": "competitors.coquant.llama3-70b.wiki",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.coquant.llama3-70b.c4",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.coquant.llama3-70b.mmlu",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.coquant.llama3-70b.zeroshot",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.coquant.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.coquant.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.quarot.llama3-8b.c4",
+   "reason": "rd_accuracy_matrix.md 'peer RESULTS' lists an alternate run: 26.00/11.23/8.86"
+  },
+  {
+   "where": "competitors.quarot.llama3-8b.mmlu",
+   "reason": "rd_accuracy_matrix.md 'peer RESULTS' lists an alternate run: 26.00/11.23/8.86"
+  },
+  {
+   "where": "competitors.quarot.llama3-8b.zeroshot",
+   "reason": "rd_accuracy_matrix.md 'peer RESULTS' lists an alternate run: 26.00/11.23/8.86"
+  },
+  {
+   "where": "competitors.quarot.llama3-70b.c4",
+   "reason": "paper value, base model, not comparable in absolute terms"
+  },
+  {
+   "where": "competitors.quarot.llama3-70b.mmlu",
+   "reason": "paper value, base model, not comparable in absolute terms"
+  },
+  {
+   "where": "competitors.quarot.llama3-70b.zeroshot",
+   "reason": "paper value, base model, not comparable in absolute terms"
+  },
+  {
+   "where": "competitors.quarot.qwen3-8b.wiki",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.quarot.qwen3-8b.c4",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.quarot.qwen3-8b.mmlu",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.quarot.qwen3-8b.zeroshot",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.quarot.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.quarot.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.spinquant.llama3-70b.c4",
+   "reason": "paper value"
+  },
+  {
+   "where": "competitors.spinquant.llama3-70b.mmlu",
+   "reason": "paper value"
+  },
+  {
+   "where": "competitors.spinquant.llama3-70b.zeroshot",
+   "reason": "paper value"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.spinquant.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.atom.llama3-70b.wiki",
+   "reason": "paper has no Llama-3-70B (only Llama-1-65B 3.53->3.89); cite-only, no comparable number"
+  },
+  {
+   "where": "competitors.atom.llama3-70b.c4",
+   "reason": "paper has no Llama-3-70B (only Llama-1-65B 3.53->3.89); cite-only, no comparable number"
+  },
+  {
+   "where": "competitors.atom.llama3-70b.mmlu",
+   "reason": "paper has no Llama-3-70B (only Llama-1-65B 3.53->3.89); cite-only, no comparable number"
+  },
+  {
+   "where": "competitors.atom.llama3-70b.zeroshot",
+   "reason": "paper has no Llama-3-70B (only Llama-1-65B 3.53->3.89); cite-only, no comparable number"
+  },
+  {
+   "where": "competitors.atom.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.atom.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.resq.llama3-70b.wiki",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.resq.llama3-70b.c4",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.resq.llama3-70b.mmlu",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.resq.llama3-70b.zeroshot",
+   "reason": "not run (tableB '-')"
+  },
+  {
+   "where": "competitors.resq.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.resq.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-1b.c4",
+   "reason": "1B used pipeline-PPL protocol, not aligned with other rows"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-1b.mmlu",
+   "reason": "1B used pipeline-PPL protocol, not aligned with other rows"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-1b.zeroshot",
+   "reason": "1B used pipeline-PPL protocol, not aligned with other rows"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-70b.wiki",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-70b.c4",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-70b.mmlu",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.gptq_w4a16.llama3-70b.zeroshot",
+   "reason": "not run (tableB blank)"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.gptq_w4a16.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-1b.c4",
+   "reason": "1B protocol caveat as GPTQ"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-1b.mmlu",
+   "reason": "1B protocol caveat as GPTQ"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-1b.zeroshot",
+   "reason": "1B protocol caveat as GPTQ"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-3b.c4",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin absolute-protocol value is 8.48"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-3b.mmlu",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin absolute-protocol value is 8.48"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3.2-3b.zeroshot",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin absolute-protocol value is 8.48"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-8b.c4",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin value is 6.73"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-8b.mmlu",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin value is 6.73"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-8b.zeroshot",
+   "reason": "vllm_final_fiveway.md AWQ-Marlin value is 6.73"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-70b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-70b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-70b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.llama3-70b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.awq_w4a16.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-1b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-1b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-1b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-3b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-3b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3.2-3b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-8b.c4",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-8b.mmlu",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-8b.zeroshot",
+   "reason": "not measured in any committed doc/data file"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-70b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-70b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-70b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.llama3-70b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-8b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-8b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-8b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-8b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-14b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-14b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-14b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-14b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-32b.wiki",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-32b.c4",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-32b.mmlu",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.fp8_w8a8.qwen3-32b.zeroshot",
+   "reason": "not run"
+  },
+  {
+   "where": "competitors.bf16.llama3.2-1b.mmlu",
+   "reason": "1B bf16 MMLU never run (results_tracker.md: '1B/13B MMLU' residual gap)"
+  },
+  {
+   "where": "competitors.bf16.llama3-70b.mmlu",
+   "reason": "70B bf16 downstream not run (NVFP4 proxy only)"
+  },
+  {
+   "where": "competitors.bf16.llama3-70b.zeroshot",
+   "reason": "70B bf16 downstream not run (NVFP4 proxy only)"
+  },
+  {
+   "where": "competitors.bf16.qwen3-32b.wiki",
+   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+  },
+  {
+   "where": "competitors.bf16.qwen3-32b.c4",
+   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+  },
+  {
+   "where": "competitors.bf16.qwen3-32b.mmlu",
+   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+  },
+  {
+   "where": "competitors.bf16.qwen3-32b.zeroshot",
+   "reason": "Qwen3-32B bf16 anchor never measured (tableB blank; ppl-only campaign)"
+  },
+  {
+   "where": "ours_downstream.qwen3-32b.kv16",
+   "reason": "no mmlu/zeroshot fields in metricsweep JSONs for this model/KV"
+  },
+  {
+   "where": "ours_downstream.qwen3-32b.kv4",
+   "reason": "no mmlu/zeroshot fields in metricsweep JSONs for this model/KV"
+  },
+  {
+   "where": "ours_ppl.llama3-70b.kv16.r0.70",
+   "reason": "70b_r0.70.json absent locally (old campaign killed between wiki and c4 writes; results_tracker.md records wiki=5.796 with no c4; stub was deleted per stub-guard fix)"
+  },
+  {
+   "where": "ours_downstream.llama3-70b",
+   "reason": "70B downstream needs offload-lm-eval path; never run (tableA blank)"
+  },
+  {
+   "where": "serving.llama3-70b",
+   "reason": "no ProMix 70B r-sweep serving data (70B serving = NVFP4-single-card vs BF16-TP2 comparison only, rd_scale_report.md SS5; plugin has no TP)"
+  },
+  {
+   "where": "serving.qwen3-*",
+   "reason": "vLLM plugin Qwen support unvalidated; serving backlog item (results_tracker.md 2026-11-26)"
+  }
+ ]
+}
