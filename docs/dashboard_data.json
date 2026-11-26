@@ -241,17 +241,17 @@
    "llama3.2-1b": {
     "wiki": 16.64,
     "c4": 23.32,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/rd_newpeers_accuracy.md",
-    "note": "wa_cov (own criterion); no a_cov 1B run"
+    "mmlu": 36.97,
+    "zeroshot": 53.43,
+    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_newacc_backfill/coquant_llama3.2-1b_{mmlu,zeroshot}.json (2026-11-26 backfill, wiki gate 16.6357 vs 16.64, same wa_cov pipeline)",
+    "note": "wa_cov (own criterion); downstream 2026-11-26 also wa_cov (no a_cov 1B artifacts); no a_cov 1B run"
    },
    "llama3.2-3b": {
     "wiki": 9.18,
     "c4": 12.82,
     "mmlu": 50.26,
     "zeroshot": 64.24,
-    "source": "docs/rd_newpeers_accuracy.md (a_cov control = ResQ criterion); mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_3b_{mmlu,zs}.json)",
+    "source": "docs/rd_newpeers_accuracy.md (a_cov control = ResQ criterion); mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_3b_{mmlu,zs}.json); c4 re-verified 2026-11-26 docs/rd_newacc_backfill/coquant_llama3.2-3b_c4.json (12.8181, wiki 9.1803)",
     "note": "a_cov variant; wa_cov variant = 9.5552/13.2484"
    },
    "llama3-8b": {
@@ -259,7 +259,7 @@
     "c4": 10.79,
     "mmlu": 59.81,
     "zeroshot": 68.81,
-    "source": "docs/rd_newpeers_accuracy.md (a_cov); mmlu docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_8b_mmlu.json); 0-shot computed from server /home/luofan/accmatrix/coq_8b_zs.json (AVG6, rd_metrics convention)",
+    "source": "docs/rd_newpeers_accuracy.md (a_cov); mmlu docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/coq_8b_mmlu.json); 0-shot computed from server /home/luofan/accmatrix/coq_8b_zs.json (AVG6, rd_metrics convention); c4 re-verified 2026-11-26 docs/rd_newacc_backfill/coquant_llama3-8b_c4.json (10.7912, wiki 7.3510)",
     "note": "a_cov variant; wa_cov = 7.6908/11.1848; 0-shot cell landed on server only, never harvested to repo"
    },
    "llama3-70b": {
@@ -5282,14 +5282,6 @@
   {
    "where": "competitors.micromix.qwen3-32b.zeroshot",
    "reason": "not run"
-  },
-  {
-   "where": "competitors.coquant.llama3.2-1b.mmlu",
-   "reason": "wa_cov (own criterion); no a_cov 1B run"
-  },
-  {
-   "where": "competitors.coquant.llama3.2-1b.zeroshot",
-   "reason": "wa_cov (own criterion); no a_cov 1B run"
   },
   {
    "where": "competitors.coquant.llama3-70b.wiki",

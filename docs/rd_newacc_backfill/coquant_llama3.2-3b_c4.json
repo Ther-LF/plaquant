@@ -1,0 +1,20 @@
+{
+ "cell": "competitors.coquant.llama3.2-3b.c4",
+ "value_c4": 12.8181,
+ "wiki_repro": {
+  "measured": 9.1803,
+  "committed": 9.18,
+  "abs_diff": 0.0003,
+  "gate": "<0.05 PASS"
+ },
+ "variant": "a_cov control (= ResQ criterion, the committed representative row); wa_cov variant committed separately (9.5552/13.2484)",
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, non-overlapping 2048-token chunks, token-pooled exp(mean NLL)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (CoQuant repo-shipped get_c4 = verbatim our promix/eval/data.py:get_c4 protocol)"
+ },
+ "harness": "CoQuant's own shipped fake_quant/ptq.py (ResQ-fork pipeline), torchrun, container python / transformers 4.48.1, W4A4KV4 INT high_fraction 0.125",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant_args": "--w_bits 4 --a_bits 4 --k_bits 4 --v_bits 4 --high_bits 8 --low_bits 2 --k/v_groupsize 128 --high_fraction 0.125 --rotate_mode mix, U-a_cov basis, per_layer rotation",
+ "raw_server_log": "/home/luofan/accmatrix/backfill/logs/coq_3b_ppl.log"
+}

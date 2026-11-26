@@ -62,7 +62,7 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 | ARCQuant  | ✅(15.22/20.79·0shot56.15·MMLU40.79) | ✅(8.54/C4 11.55·66.14·52.64) | ✅(6.81/C4 9.79·71.47·62.19) | PPL✓(6.183/10.049) | ❌不可跑(需Llama专用reorder索引工件,Qwen无) | — | — |
 | NVFP4     | ✅(15.65/C4 21.58·0shot56.28·MMLU42.62) | ✅(8.63/C4 11.64·66.16·52.63) | ✅(6.87/C4 9.87·71.48·62.34) | ✅(5.928·0shot77.94·MMLU78.99) | PPL✓(wiki 10.072; ProMix r≥0.1 压它 9.90<10.07) | PPL✓(wiki 8.898; ProMix r≥0.1 压它 8.849<8.898) | PPL✓(wiki 8.000, 修复ckpt后; ProMix 32B曲线出后对照) |
 | MicroMix  | — (无1B: kernel拒绝K=2048, 11-26实测确认) | ✅(9.05/C4 12.28·65.14·49.79) | ✅(7.39/C4 10.56·70.63·59.12) | — (作者口径70B skip) | ⬜ | ⬜ | ⬜ |
-| CoQuant   | PPL✓(16.64/23.32 wa) | ✅(9.18·64.24·50.26) | ✅(7.35·下游✓) | — | ⬜ | ⬜ | ⬜ |
+| CoQuant   | ✅(16.64/23.32 wa·0shot53.43·MMLU36.97) | ✅(9.18/C4 12.82·64.24·50.26) | ✅(7.35/C4 10.79·下游✓) | — | ⬜ | ⬜ | ⬜ |
 | QuaRot    | PPL✓(22.11 KV4) | PPL✓(10.72) | PPL✓(8.65) | 论文值(6.66) | ⬜ | ⬜ | ⬜ |
 | SpinQuant | PPL✓(16.14 learned) | PPL✓(9.25) | PPL✓(7.88 had) | 论文值(5.5) | ⬜ | ⬜ | ⬜ |
 | Atom      | PPL✓(18.40) | PPL✓(9.70) | PPL✓(7.57) | 论文值(65B) | ⬜ | ⬜ | ⬜ |
@@ -71,7 +71,7 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 | GPTQ/AWQ W4A16 | PPL✓(14.22/14.53) | PPL✓(8.20/8.35) | PPL✓(6.52/6.59) | ⬜ | ⬜ | ⬜ | ⬜ |
 | FP8 W8A8  | PPL✓(13.30) | PPL✓(7.88) | PPL✓(6.19) | ⬜ | ⬜ | ⬜ | ⬜ |
 
-**表B 缺口小结(2026-11-22)**:① 对手×Qwen3 全空(跨架构主张的最大缺口,SharQ/NVFP4 在 Qwen 可跑性待验);② 1B 下游(对手 MMLU/0-shot);③ 70B 对手下游;④ Qwen3-32B 全列(模型未缓存);⑤ FP-Quant/QuTLASS 无 runner。
+**表B 缺口小结(2026-11-22, 更新2026-11-26)**:① 对手×Qwen3 全空(跨架构主张的最大缺口,SharQ/NVFP4 在 Qwen 可跑性待验);② ~~1B 下游(对手 MMLU/0-shot)~~ ✅已补(11-26 backfill, docs/rd_newacc_backfill/; MicroMix 1B 实锤不可跑);NVFP4 C4 1B/3B/8B 同批补齐;③ 70B 对手下游;④ Qwen3-32B 全列(模型未缓存);⑤ FP-Quant/QuTLASS 无 runner。
 
 ### 跟踪表 C — 跳过记录(坏点 + 原因)
 | 模型 | KV | r | 指标 | 原因 |

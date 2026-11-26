@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.coquant.llama3.2-1b.mmlu",
+ "value_mmlu_micro": 36.97,
+ "mmlu_macro": 37.6,
+ "groups": {
+  "mmlu": 0.36967668423301525,
+  "mmlu_humanities": 0.35005313496280555,
+  "mmlu_other": 0.40971998712584484,
+  "mmlu_social_sciences": 0.40396490087747805,
+  "mmlu_stem": 0.32603869330796065
+ },
+ "variant": "wa_cov (CoQuant's own criterion; matches the committed 1B wiki row 16.64)",
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), reported = lm-eval 'mmlu' group acc (micro average), rd_metrics convention",
+ "harness": "CoQuant's own shipped fake_quant/ptq.py + lm_eval HFLM (RD_LMEVAL_OUT dump), torchrun, container python / transformers 4.48.1, k/v_groupsize 64",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "wiki_repro": {
+  "measured": 16.6357,
+  "committed": 16.64,
+  "abs_diff": 0.0043,
+  "note": "wiki+c4 (23.3224) reproduced in the SAME invocation before lm-eval (log coq_1b_mmlu.log; also gated in the zeroshot invocation)"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill/coq_1b_mmlu.json"
+}

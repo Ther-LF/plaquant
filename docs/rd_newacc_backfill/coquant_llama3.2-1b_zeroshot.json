@@ -1,0 +1,43 @@
+{
+ "cell": "competitors.coquant.llama3.2-1b.zeroshot",
+ "value_zeroshot_avg6": 53.43,
+ "per_task": {
+  "piqa": {
+   "acc,none": 0.6969532100108814,
+   "acc_norm,none": 0.6898803046789989
+  },
+  "arc_easy": {
+   "acc,none": 0.6262626262626263,
+   "acc_norm,none": 0.5782828282828283
+  },
+  "arc_challenge": {
+   "acc,none": 0.3148464163822526,
+   "acc_norm,none": 0.33447098976109213
+  },
+  "hellaswag": {
+   "acc,none": 0.41455885281816374,
+   "acc_norm,none": 0.5509858593905597
+  },
+  "winogrande": {
+   "acc,none": 0.5461720599842147,
+   "acc_norm,none": null
+  },
+  "lambada_openai": {
+   "acc,none": 0.5059188822045411,
+   "acc_norm,none": null
+  }
+ },
+ "variant": "wa_cov (CoQuant's own criterion; matches the committed 1B wiki row 16.64 \u2014 no a_cov 1B artifacts exist)",
+ "protocol": "0-shot 6-task, AVG6 = mean of acc_norm (acc for winogrande/lambada_openai), rd_metrics convention, full tasks",
+ "harness": "CoQuant's own shipped fake_quant/ptq.py (ResQ-fork pipeline), torchrun, container python / transformers 4.48.1, W4A4KV4 INT high_fraction 0.125 + lm_eval HFLM in the SAME invocation (RD_LMEVAL_OUT dump), k/v_groupsize 64 (1B head_dim)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "wiki_repro": {
+  "measured": 16.6357,
+  "committed": 16.64,
+  "abs_diff": 0.0043,
+  "c4_repro": 23.3224,
+  "note": "wiki+c4 reproduced in the SAME invocation before lm-eval (log coq_1b_zs.log)"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill/coq_1b_zs.json"
+}
