@@ -277,3 +277,10 @@ r0 的 0.068 为跨 GPU GPTQ exporter 分歧非集成误差。serving: GB10 deco
 趋势与 Pro6000 同构(TTFT 随 r 单调升, decode 近平)。klow_pad 实证 no-op(3B ring512 所有 K_low%128==0), 选项(a)零损失。
 数据: docs/vllm_final_data/gb10_pm3b_* (16 文件) + 复跑脚本 docs/vllm_final_scripts/gb10_*。
 **论文点坐实: 同一量化包+同一插件跨 SM120/SM121 部署, 数值逐点对齐。**
+
+## KDA-3 (Round 12-14) 收官(2026-11-27)
+GB10 gap: median 1.081→**1.039**, worst 1.360→**1.232**, r=1 列 1.116→1.058; cosine 零回归, 13 代表点单 launch 复验。
+① K_high 128-pad: r=1/32、1/12 列解锁 fk, 1.28-1.36→1.02-1.15(padded int16 逐位相等) ② **重大翻案**: Round-10 全部"fk 亏损点"系默认 tile-walk artifact——换 walk(s8/AlongM 参数化)后全部反转为赢(3B down M8192 0.30x→1.05-1.29x), FK 窗口表 v3 ③ deep-MX stage 实锤关闭(SMEM 超限) ④ NCU 解封=sudo 即可(零系统改动)。
+遗留(log residuals): 8B/Q8B gate_up M8192 低 r walk 探针、r=0 castfold 列 fk 变体、M4096 窗口。
+协调项: serve 产出器未发射 K_high pad(已守卫; ring512 KH%128==0 不触发, 现 serve 不受影响)。
+曲线: ours_gb10_uniform11_tuned_v3.json。

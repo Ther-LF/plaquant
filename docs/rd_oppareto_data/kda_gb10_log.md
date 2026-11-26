@@ -396,3 +396,117 @@ docs/rd_oppareto_data/forgekernel_sm121/ (hw_kb/cuda/sm121 opened upstream-style
 with index + 2 methodology entries; mechanism entries still to be earned by a
 run that certifies probes on SM121 — this run's candidates sit in its gap queue,
 see fk_sm121_recon_report.md).
+
+# ============ KDA round 3 (KDA-3) ============
+
+## Round 12 — K_high 128-pad (round-11 residual #1) (2026-11-27)
+
+Mirror of the round-3 K_low pad, high side: zero-pad the PHYSICAL MXFP8 GEMM
+buffers to K_high%128==0 so the fk_smallk kernel (hard K_high%128 constraint)
+becomes eligible at the KH%128!=0 r-columns (r=1/32 KH=64, r=1/12 KH=192, ...).
+
+Changes:
+- `quant_pack_float_ext.cu`: quant_pack_float_fp8 gains K_valid (<K) — pad
+  blocks emit zero bytes + zero SF in the SAME single pack launch (exact 0.0
+  contribution; same pattern as the round-3 fp4 K_valid).
+- `weight_pack.py`: PackedWeight.K_high_pad + khigh_pad_enabled(N, K, K_high).
+  UNLIKE the K_low pad this is NOT a blanket win (round 3 measured ~2% cost
+  through the shipping kernel), so the auto gate is low-SM AND (N, K) in
+  _FK_TABLE_GB10 AND padded KH within the window kh_max (PROMIX_KHIGH_PAD=0/1
+  override). W_hi_dec / marlin / decode buffers stay logical.
+- `mixed_linear.py`: K_high_pad on all GEMM entry K_hi args + the qpf fp8
+  activation pack (K_valid=K_high); qpfm/hpk/gather/norm producers guarded off
+  when the pad is active (serve wiring note, same as round 3).
+
+Gates (idle GB10): padded-vs-unpadded через shipping kernel torch.equal AND
+int16-bit-exact on 8 cases (KH 64/192/704/1984/8128 over the 3 FK shapes);
+qpf fast-path vs torch slow-path HIGH pair torch.equal (the LO pair differs by
+design — act_mse scale search lives only in the qpf kernel, pre-existing);
+fk-routed cosine vs fp32 +1.2e-6..+1.5e-6 BETTER per point. Single launch
+verified (sidecar below).
+
+Boundary A/B (interleaved, co-tenant-robust): fk wins the newly eligible
+columns 1.07-1.23x; ONE loss found — (8192,2048) M8192 KH1984->2048 at the
+then-default s1 walk, -2.7% -> initially hard-excluded via per-window kh_max
+(later LIFTED in round 13 — the s8 walk wins 1.15x there).
+
+## Round 13 — fk tile-walk: the round-10 exclusions were walk artifacts
+
+Probe (planned as "confirm bottleneck before a ForgeKernel generation" for 3B
+gate_up M8192): swept the fk kernel's tile-walk (debug_set_order swz x along_m)
+vs shipping. Finding: EVERY round-10 "fk loses" exclusion flips to a WIN with
+the right walk — no new kernel generation needed:
+- 3B down  M8192 (round-10 0.30x!): s8/m1 -> 1.05-1.29x over shipping, all r.
+- 3B gate_up M8192 (0.85-0.98x):    s8/m1 -> 1.08-1.12x, all r incl. r=1.
+- 1B gate_up M2048 (0.94x):         s4/m1 -> 1.13-1.20x.
+- NEW shapes probed on the same hunch: 3B qkvo (3072,3072) M2048 s4/m1
+  1.17-1.22x; 8B/Q8B qkvo (4096,4096) M2048 s4/m1 1.14-1.17x.
+- (8192,2048) M8192 walk crossover: s1 wins KH<=512 (1.12-1.20x), tie at
+  768-1024, s8 wins KH>=1536 (1.10-1.15x, incl. the round-12 KH1984 exclusion).
+Mechanism consistent with round 2 (CUTLASS swizzle) — tile-order L2 reuse on
+48 SMs; the fk kernel simply never had per-shape walk tuning.
+
+Changes:
+- `fk_smallk_ext.cu`: run_prepacked gains per-call (swz, along_m) overrides
+  (0/-1 = keep debug_set_order globals). Schedule-only; s8m1-vs-s1m1 verified
+  int16-bit-exact.
+- `mixed_linear.py`: _FK_TABLE_GB10 restructured to lists of
+  (m_lo, m_hi, kh_max, swz, along_m), first match wins (kh banding doubles as
+  the walk crossover). Final table: (8192,2048) M8192 s1(KH<=1024)/s8 + M2048
+  s4; (2048,2048) M2048 s1; (3072,8192) M2048 s1 + M8192 s8; (8192,3072)
+  M8192 s8 + M2048 s4; (3072,3072) M2048 s4; (4096,4096) M2048 s4.
+  All kh caps lifted (every r=1 end measured winning with its walk).
+
+### v3 curve (ours_gb10_uniform11_tuned_v3.json)
+7 shapes re-measured through the shipping dispatch (idle GPU, co-tenant 0
+verified; 1B:qkvo/3B:gate_up/3B:down + 1B:gate_up/3B:qkvo/8B:qkvo/Q8B:qkvo),
+other rows carried from v2. 396 model-shape points:
+- overall median gap 1.081 -> **1.039**, worst 1.360 -> **1.232**, p90 1.157
+- per-r column medians now 1.02-1.07 (was 1.04-1.12); r=1 column 1.116 -> 1.058
+- headline flips: 3B down M8192 r=1 1.244 -> 0.933; 3B gate_up M8192 all r
+  1.24-1.36 -> 1.05-1.18; 3B qkvo M2048 all r 1.20-1.27 -> 1.01-1.08;
+  1B gate_up M2048 all r -> 0.90-0.99 (sub-theory); 8B/Q8B qkvo M2048 -> ~1.0.
+- cosine regressions: 0 (every fk point +1.2e-6..+1.5e-6 better; non-fk
+  points bit-identical).
+- `ours_gb10_uniform11_tuned_v3.launch_verify.json`: 13 cases covering every
+  new window/pad/walk-band — ALL exactly 1 CUDA kernel per _gemm.
+
+Serve-producer note (for the vLLM-integ lane): qpfm/hpk/gather/norm-pack
+producers do NOT emit the K_high pad; they are guarded off when K_high_pad !=
+K_high (assert/fallback), exactly like the round-3 K_low pad. Ring-512
+allocations never trigger either pad (KH always %128==0), so current GB10
+serve configs are unaffected. Wire K_valid pads into the producers before
+serving non-ring allocations on FK shapes.
+
+## Round 14 — deep-MX stage probe (round-11 residual #3): CLOSED, infeasible
+
+/tmp/probe_stages_r14.py (c++20 + K_high_pad fixes): nv3mx3, nv2mx3, nv2mx4
+variant builds of the codesign mainloop ALL fail cutlass initialize ("Error
+Internal") on GB10 — one extra MX stage is +33.8KB SMEM, over the 100KB/block
+budget at BLK_K=128, matching round 4a's nv-side result. The r=1 ring is now
+served by the round-13 fk walk windows instead (r=1 column median 1.058).
+
+## NCU unblock (round-11 residual #4): SOLVED — sudo, no system change
+
+RmProfilingAdminOnly=1 only restricts NON-ROOT users; luofan has passwordless
+sudo on the Spark. `sudo /usr/local/cuda/bin/ncu ...` profiles successfully
+(verified on a live kernel: metrics returned, no ERR_NVGPUCTRPERM). Nsight
+Compute 2025.3.1 at /opt/nvidia/nsight-compute. No modprobe.d edit / reboot
+needed. For ForgeKernel: point the harness's profile commands at `sudo ncu`
+(FK_DELIVERY=ssh runs as luofan; sudo -n works non-interactively). The
+persistent non-root alternative (options nvidia
+NVreg_RestrictProfilingToAdminUsers=0 in /etc/modprobe.d + initramfs + reboot)
+is documented but unnecessary.
+
+## Round 12-14 residuals
+1. 8B/Q8B gate_up M8192 (N=14336/12288, K=4096) low-r ~1.19-1.23: never fk-
+   probed with walk tuning — same lever likely applies (one probe away).
+2. 3B qkvo M8192 ~1.15-1.20, Q14B/70B down M2048 r=1 ~1.20-1.22: ditto.
+3. r=0 castfold column is untouched by fk (single-phase; fk requires both
+   segments) — 3B gate_up M8192 r=0 1.201 is now the structural worst class.
+   A single-phase variant of the fk kernel (skip the MX phase) would cover it.
+4. fk M-range gaps: only M2048 and M>=8192 windows are measured; 2048<M<8192
+   falls back to shipping (benchmark Ms only — serve prefill chunks may hit
+   4096: probe before enabling there).
+5. With NCU now available via sudo, a ForgeKernel generation 2 run can use
+   stall/timeline pricing (round-10 runs were CUPTI-only).

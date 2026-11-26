@@ -148,11 +148,20 @@ __device__ __forceinline__ int rtn_idx(float absx, const float* v, int n) {
 template <class TIn, class LayoutSF>
 __global__ void qpf8_kernel(uint8_t* __restrict__ data_out, uint8_t* __restrict__ sf_out,
                             const TIn* __restrict__ x, LayoutSF layout,
-                            int rows, int nblk, int K, int row_stride, int col_off) {
+                            int rows, int nblk, int K, int row_stride, int col_off,
+                            int K_valid) {
   int warp = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
   int lane = threadIdx.x & 31;
   if (warp >= rows * nblk) return;
   int r = warp / nblk, b = warp % nblk;
+  // KDA-GB10 r12 (K_high 128-alignment pad, mirror of the r3 fp4 K_valid):
+  // blocks beyond K_valid are PAD — zero element bytes (E4M3 0.0 -> exact 0.0
+  // contribution regardless of SF) + zero SF byte, emitted in the SAME launch.
+  if (b * 32 >= K_valid) {
+    data_out[r * K + b * 32 + lane] = 0;
+    if (lane == 0) sf_out[layout(make_coord(r, b * 32, 0))] = 0;
+    return;
+  }
   int base = r * row_stride + col_off + b * 32;
   float f = to_float(x[base + lane]);
   float a = fabsf(f);
@@ -230,7 +239,7 @@ static void launch_qpf(torch::Tensor x, uint8_t* data_out, uint8_t* sf_out,
 #define LAUNCH(TY, PTR)                                                                 \
   do {                                                                                  \
     if (FMT == 8)                                                                       \
-      qpf8_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off); \
+      qpf8_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off, K_valid); \
     else                                                                                \
       qpf4_kernel<TY, LayoutSF><<<grid, tpb, 0, stream>>>(data_out, sf_out, PTR, layout, rows, nblk, K, row_stride, col_off, K_valid); \
   } while (0)
@@ -270,8 +279,11 @@ std::vector<torch::Tensor> quant_pack_float_fp4(torch::Tensor x, int64_t M, int6
 }
 
 std::vector<torch::Tensor> quant_pack_float_fp8(torch::Tensor x, int64_t M, int64_t N, int64_t K,
-                                                int64_t row_stride, int64_t col_off) {
+                                                int64_t row_stride, int64_t col_off,
+                                                int64_t K_valid) {
   TORCH_CHECK(x.is_cuda(), "x CUDA"); TORCH_CHECK(K % 32 == 0, "K%32 (MXFP8 block-32)");
+  if (K_valid < 0) K_valid = K;
+  TORCH_CHECK(K_valid % 32 == 0 && K_valid <= K, "K_valid%32, K_valid<=K");
   init_grids_once();
   x = x.contiguous();
   int rs = (row_stride < 0) ? (int)K : (int)row_stride;
@@ -284,7 +296,7 @@ std::vector<torch::Tensor> quant_pack_float_fp8(torch::Tensor x, int64_t M, int6
   auto sf_out = (nblk % 4) ? torch::zeros({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev))
                 : torch::empty({(int64_t)size(filter_zeros(layout_SFA))}, u8opts(dev));
   launch_qpf<decltype(layout_SFA), 8>(x, data_out.data_ptr<uint8_t>(), sf_out.data_ptr<uint8_t>(),
-                                      layout_SFA, Mi, nblk, Ki, rs, co, stream);
+                                      layout_SFA, Mi, nblk, Ki, rs, co, stream, (int)K_valid);
   data_out = data_out.view({Mi, Ki});
   return {data_out, sf_out};
 }
@@ -297,7 +309,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         pybind11::arg("row_stride") = -1, pybind11::arg("col_off") = 0,
         pybind11::arg("K_valid") = -1);
   m.def("quant_pack_float_fp8", &quant_pack_float_fp8,
-        "fused float->MXFP8 quantize+bytes+interleaved-SF; returns {bytes(M,K), physSFA}",
+        "fused float->MXFP8 quantize+bytes+interleaved-SF; returns {bytes(M,K), physSFA}. "
+        "K_valid<K emits zero bytes/SF for pad blocks [K_valid,K) (128-alignment pad)",
         pybind11::arg("x"), pybind11::arg("M"), pybind11::arg("N"), pybind11::arg("K"),
-        pybind11::arg("row_stride") = -1, pybind11::arg("col_off") = 0);
+        pybind11::arg("row_stride") = -1, pybind11::arg("col_off") = 0,
+        pybind11::arg("K_valid") = -1);
 }

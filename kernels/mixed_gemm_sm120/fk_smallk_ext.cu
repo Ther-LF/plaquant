@@ -738,7 +738,8 @@ static torch::Tensor launch_fk_gemm(const torch::Tensor& A_lo, const torch::Tens
                                     const torch::Tensor& A_hi, const torch::Tensor& B_hi,
                                     const uint8_t* p_sfa_lo, const uint8_t* p_sfb_lo,
                                     const uint8_t* p_sfa_hi, const uint8_t* p_sfb_hi,
-                                    const torch::Tensor& Bias, double alpha, cudaStream_t stream) {
+                                    const torch::Tensor& Bias, double alpha, cudaStream_t stream,
+                                    int swz = 0, int along_m = -1) {
     const int m = (int)A_lo.size(0), n = (int)B_lo.size(0);
     const int k_lo = (int)A_lo.size(1) * 2, k_hi = (int)A_hi.size(1);
     TORCH_CHECK(k_lo % 128 == 0 && k_hi % 32 == 0, "k_lo % 128 / k_hi % 32");
@@ -771,7 +772,10 @@ static torch::Tensor launch_fk_gemm(const torch::Tensor& A_lo, const torch::Tens
     p.kt_lo = k_lo / BK; p.kt_hi = k_hi / BK;
     p.nq_lo = nq_of(k_lo / 16); p.nq_hi = nq_of(k_hi / 32);
     p.tiles_m = m / BM; p.tiles_n = n / BN;
-    p.swz = g_swz; p.along_m = g_along_m;
+    // KDA-GB10 r13: per-call tile-walk override (0/-1 = keep the debug_set_order
+    // globals). Schedule-only — per-tile math identical (torch.equal-gated).
+    p.swz = (swz > 0) ? swz : g_swz;
+    p.along_m = (along_m >= 0) ? along_m : g_along_m;
     const int minor_tiles = p.along_m ? p.tiles_n : p.tiles_m;
     TORCH_CHECK(minor_tiles % p.swz == 0, "tile walk: minor tile count % swizzle");
 
@@ -811,7 +815,8 @@ torch::Tensor run_prepacked(torch::Tensor a_lo, torch::Tensor psfa_lo,
                             torch::Tensor b_lo, torch::Tensor psfb_lo,
                             torch::Tensor a_hi, torch::Tensor psfa_hi,
                             torch::Tensor b_hi, torch::Tensor psfb_hi,
-                            torch::Tensor bias, double alpha = 1.0) {
+                            torch::Tensor bias, double alpha = 1.0,
+                            int64_t swz = 0, int64_t along_m = -1) {
     c10::cuda::CUDAGuard guard(a_lo.device());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     torch::Tensor A_lo = a_lo.view(torch::kUInt8).contiguous();
@@ -826,7 +831,7 @@ torch::Tensor run_prepacked(torch::Tensor a_lo, torch::Tensor psfa_lo,
     return launch_fk_gemm(A_lo, B_lo, A_hi, B_hi,
                           pal.data_ptr<uint8_t>(), pbl.data_ptr<uint8_t>(),
                           pah.data_ptr<uint8_t>(), pbh.data_ptr<uint8_t>(),
-                          Bias, alpha, stream);
+                          Bias, alpha, stream, (int)swz, (int)along_m);
 }
 
 // Diagnostics used by the build probes (not part of the timed path).
@@ -857,7 +862,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("run_prepacked", &run_prepacked, pybind11::arg("a_lo"), pybind11::arg("psfa_lo"),
           pybind11::arg("b_lo"), pybind11::arg("psfb_lo"), pybind11::arg("a_hi"),
           pybind11::arg("psfa_hi"), pybind11::arg("b_hi"), pybind11::arg("psfb_hi"),
-          pybind11::arg("bias"), pybind11::arg("alpha") = 1.0);
+          pybind11::arg("bias"), pybind11::arg("alpha") = 1.0,
+          pybind11::arg("swz") = 0, pybind11::arg("along_m") = -1);
     m.def("debug_blocked_sf", &debug_blocked_sf);
     m.def("debug_prep_launches", &debug_prep_launches);
     m.def("debug_set_order", &debug_set_order);

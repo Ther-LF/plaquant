@@ -189,14 +189,16 @@ def klow_pad_enabled():
         return False
 
 
-def khigh_pad_enabled(N, K):
+def khigh_pad_enabled(N, K, K_high=0):
     """KDA-GB10 r12: pad K_high up to 128 alignment (zero blocks) so the
     fk_smallk kernel (K_high%128==0 constraint) becomes eligible at the
     KH%128!=0 r-columns. UNLIKE the K_low pad this is NOT a general win —
     round 3 measured high-side padding costs ~2% through the shipping CUTLASS
     kernel — so the auto gate is low-SM AND (N, K) in the measured FK window
-    table (_FK_TABLE_GB10). Override with PROMIX_KHIGH_PAD=0/1 (1 = pad on any
-    low-SM-eligible shape regardless of the FK table)."""
+    table (_FK_TABLE_GB10) AND the padded K_high within the window's measured
+    kh_max cap (above it fk is excluded, so the pad would buy nothing).
+    Override with PROMIX_KHIGH_PAD=0/1 (1 = pad on any low-SM-eligible shape
+    regardless of the FK table)."""
     import os
     v = os.environ.get("PROMIX_KHIGH_PAD", "")
     if v == "0":
@@ -211,7 +213,11 @@ def khigh_pad_enabled(N, K):
         return True
     try:
         from promix.quantize.mixed_linear import _FK_TABLE_GB10
-        return (N, K) in _FK_TABLE_GB10
+        wins = _FK_TABLE_GB10.get((N, K))
+        if not wins:
+            return False
+        kh_max = max(w[2] for w in wins)
+        return ((K_high + 127) // 128) * 128 <= kh_max
     except Exception:
         return False
 
@@ -322,7 +328,7 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
         # FK-window shapes (see khigh_pad_enabled) — it exists to satisfy the
         # fk_smallk kernel's K_high%128==0 constraint, not as a general win.
         K_high_pad = K_high
-        if K_high % 128 != 0 and khigh_pad_enabled(N, K):
+        if K_high % 128 != 0 and khigh_pad_enabled(N, K, K_high):
             K_high_pad = ((K_high + 127) // 128) * 128
         if K_high_pad != K_high:
             bytes_pack = torch.cat(

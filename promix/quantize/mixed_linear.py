@@ -141,11 +141,39 @@ _SMALLM_TABLE_GB10 = {
 # output-write stream dominates and the K/tile count is short.
 # Kernel constraints: K_high % 128 == 0, K_high >= 128, K_low_pad % 128 == 0,
 # K_low_pad >= 128, M % 128 == 0, N % 128 == 0 (checked in _fk_cfg).
+# KDA-GB10 r12: the K_high 128-pad (weight_pack.khigh_pad_enabled) makes the
+# KH%128!=0 columns eligible; measured on the padded columns (interleaved A/B,
+# idle GB10): r=1/32 and 1/12 win 1.21-1.23x, window r=1 ends win 1.12-1.14x
+# (1B qkvo KH1984, 3B down KH8128) EXCEPT 1B gate_up M8192 KH1984->2048 which
+# LOSES 2.7% -> per-window kh_max cap (third field) hard-excludes it; the pad
+# itself is then skipped for that weight (khigh_pad_enabled mirrors the cap),
+# so the excluded point keeps the validated unpadded shipping kernel.
 # ---------------------------------------------------------------------------
+# KDA-GB10 r13: per-window tile-walk (swz, along_m) — the round-10 "fk loses"
+# exclusions were the DEFAULT s1/AlongM tile walk, not the kernel: with the
+# right walk fk wins on every one of them (idle-GB10 interleaved probes,
+# /tmp/r13_gu3b_probe.py + /tmp/r13b_excl.py + /tmp/r13c_windows.py):
+#   (3072,8192) M8192 s8m1: 1.05-1.29x (was 0.30x at s1m1!)
+#   (8192,3072) M8192 s8m1: 1.08-1.12x all r; M2048 s4m1 1.10-1.19x
+#   (8192,2048) M2048 s4m1: 1.13-1.19x (was 0.94x)
+# Walk is schedule-only (s8m1 vs s1m1 bit-exact, torch.equal int16-gated);
+# previously-validated windows keep their round-10 walk (1, 1) — s4m1 measured
+# equal there, not better. Value = list of (m_lo, m_hi, kh_max, swz, along_m)
+# windows, first match wins. kh_max: measured per-window K_high_pad cap
+# (r12: (8192,2048) KH1984->2048 loses 2.7% at M8192 -> capped at 1536; the
+# weight-side pad is also skipped there, see weight_pack.khigh_pad_enabled).
 _FK_TABLE_GB10 = {
-    (8192, 2048): (8192, 1 << 30),   # (m_lo, m_hi) inclusive
-    (2048, 2048): (2048, 2048),
-    (3072, 8192): (2048, 2048),
+    # (N, K): list of (m_lo, m_hi, kh_max, swz, along_m), FIRST MATCH wins —
+    # kh_max banding doubles as a walk crossover (e.g. (8192,2048) M8192:
+    # s1 wins 1.10-1.20x at KH<=1024, s8 wins 1.10-1.15x at KH 1536-2048
+    # where s1 LOSES 7% — r13e band probe).
+    (8192, 2048): [(8192, 1 << 30, 1024, 1, 1), (8192, 1 << 30, 1 << 30, 8, 1),
+                   (2048, 2048, 1 << 30, 4, 1)],
+    (2048, 2048): [(2048, 2048, 1 << 30, 1, 1)],
+    (3072, 8192): [(2048, 2048, 1 << 30, 1, 1), (8192, 1 << 30, 1 << 30, 8, 1)],
+    (8192, 3072): [(8192, 1 << 30, 1 << 30, 8, 1), (2048, 2048, 1 << 30, 4, 1)],
+    (3072, 3072): [(2048, 2048, 1 << 30, 4, 1)],   # r13d: 1.17-1.22x all r
+    (4096, 4096): [(2048, 2048, 1 << 30, 4, 1)],   # r13d: 1.14-1.17x all r
 }
 
 _SPLITK_TABLE_GB10 = {
@@ -561,14 +589,14 @@ class MixedQuantLinear(nn.Module):
         branch depends only on (N, K, M, K_high) — static per captured graph."""
         if self._cd_fk is None or self.is_pure_nvfp4 or not _low_sm_device():
             return None
-        win = _FK_TABLE_GB10.get((self.N, self.K))
-        if win is None or not (win[0] <= M <= win[1]):
-            return None
         if (self.K_high_pad % 128 != 0 or self.K_high_pad < 128
                 or self.K_low_pad % 128 != 0 or self.K_low_pad < 128
                 or M % 128 != 0 or self.N % 128 != 0):
             return None
-        return True
+        for m_lo, m_hi, kh_max, swz, along_m in _FK_TABLE_GB10.get((self.N, self.K), ()):
+            if m_lo <= M <= m_hi and self.K_high_pad <= kh_max:
+                return (swz, along_m)   # r13: per-window tile walk
+        return None
 
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
@@ -602,10 +630,11 @@ class MixedQuantLinear(nn.Module):
             # boundaries (write/mainloop overlap). Single launch, fp16 out,
             # bias + alpha in the epilogue; measured 1.06-1.21x inside its
             # windows, cosine measured equal-or-better (no bf16 round-trip).
+            walk = self._fk_cfg(M)
             return self._cd_fk.run_prepacked(
                 A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
                 A_hi, pSFA_hi, self.W_hi_bytes, self.physSFB_hi,
-                self._bias_or_zero(A_lo.device), self.g_w)
+                self._bias_or_zero(A_lo.device), self.g_w, walk[0], walk[1])
         if self.bias_in_epilogue and self._cd_bias is not None and self.bias is not None:
             # A REAL bias: the epilogue fold wins everywhere (removes the cast
             # AND the bias add; r26 lever A, bit-identical by construction).
