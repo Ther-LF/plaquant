@@ -1,0 +1,29 @@
+{
+ "cell": "competitors.micromix.llama3-8b.c4",
+ "value_c4": 10.5621,
+ "wiki_repro": {
+  "measured": 7.3919,
+  "committed": 7.39,
+  "abs_diff": 0.0019,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, '\\n\\n'.join, non-overlapping 2048-token chunks, token-pooled exp(mean NLL) (committed scoreboard protocol)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (verbatim promix/eval/data.py:get_c4 eval protocol)"
+ },
+ "harness": "promix/scripts/rd_newacc_peer.py (as-shipped quantization via peer's own model_utils, peer's own GPTQ-standard eval_ppl loop / lm-eval HFLM in peer's pinned venv)",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/models/llama-3-8b",
+ "quant": "MICROMIX",
+ "raw_server_path": "/home/luofan/accmatrix/backfill/mm_8b_ppl.json",
+ "raw": {
+  "peer": "micromix",
+  "model": "/home/luofan/models/llama-3-8b",
+  "quant": "MICROMIX",
+  "kv_cache": false,
+  "wikitext": 7.391922950744629,
+  "c4": 10.562070846557617
+ },
+ "note": "same CUDA-13 kernel mis-validation caveat"
+}

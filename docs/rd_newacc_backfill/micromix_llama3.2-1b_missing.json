@@ -1,0 +1,12 @@
+{
+ "cell": "competitors.micromix.llama3.2-1b.{wiki,c4,mmlu,zeroshot}",
+ "status": "missing — confirmed not runnable as-shipped (2026-11-26 probe)",
+ "probe": {
+  "date": "2026-11-26",
+  "model": "/home/luofan/hf_cache/hub/models--unsloth--Llama-3.2-1B-Instruct/snapshots/5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "calibration": "SUCCEEDED: reorder_indices.py (p4/p6/p8 allocation, avg 4.79 bits) + rd_newacc_mm_actscales.py both ran clean on 1B",
+  "quantization": "FAILED: model/qLinearLayer.py mixedgemm.reorder_quantize_w4 -> 'K value is not valid: 2048' / RuntimeError: Value error in run_reorder_quantize_w4",
+  "diagnosis": "MicroMix's mixedgemm CUDA kernels hard-reject K=2048 (Llama-3.2-1B hidden size); kernel shape support starts at the 3B/8B GEMM shapes. No 1B configuration exists as-shipped; patching their kernel would violate the as-shipped policy.",
+  "logs": "/home/luofan/accmatrix/backfill/logs/mm_1b_{calib,actscales,ppl}.log"
+ }
+}

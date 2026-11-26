@@ -186,14 +186,14 @@
     "mmlu": null,
     "zeroshot": null,
     "source": "docs/rd_newpeers_accuracy.md",
-    "note": "not applicable: method has no 1B configuration"
+    "note": "not applicable: confirmed 2026-11-26 — mixedgemm kernel rejects K=2048 ('K value is not valid: 2048' in reorder_quantize_w4); calibration runs but quantization impossible as-shipped (docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json)"
    },
    "llama3.2-3b": {
     "wiki": 9.05,
     "c4": 12.28,
     "mmlu": 49.79,
     "zeroshot": 65.14,
-    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_3b_{mmlu,zs}.json)",
+    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_3b_{mmlu,zs}.json); c4 re-verified 2026-11-26 docs/rd_newacc_backfill/micromix_llama3.2-3b_c4.json (12.2822, wiki 9.0452)",
     "note": "kernels fail own --validate on CUDA 13 -> pessimistic bound"
    },
    "llama3-8b": {
@@ -201,7 +201,7 @@
     "c4": 10.56,
     "mmlu": 59.12,
     "zeroshot": 70.63,
-    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_8b_{mmlu,zs}.json)",
+    "source": "docs/rd_newpeers_accuracy.md; mmlu+0-shot docs/rd_accuracy_matrix.md (raw docs/rd_accmatrix_data/mm_8b_{mmlu,zs}.json); c4 re-verified 2026-11-26 docs/rd_newacc_backfill/micromix_llama3-8b_c4.json (10.5621, wiki 7.3919)",
     "note": "same CUDA-13 kernel mis-validation caveat"
    },
    "llama3-70b": {
@@ -5225,19 +5225,19 @@
   },
   {
    "where": "competitors.micromix.llama3.2-1b.wiki",
-   "reason": "not applicable: method has no 1B configuration"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.c4",
-   "reason": "not applicable: method has no 1B configuration"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.mmlu",
-   "reason": "not applicable: method has no 1B configuration"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.zeroshot",
-   "reason": "not applicable: method has no 1B configuration"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3-70b.wiki",
