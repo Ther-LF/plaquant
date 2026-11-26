@@ -1,0 +1,18 @@
+{
+ "cell": "competitors.bf16.llama3-70b.mmlu",
+ "value_mmlu_micro": 80.63,
+ "groups": {
+  "mmlu": 0.8063157894736842,
+  "mmlu_stem": 0.76,
+  "mmlu_other": 0.8092307692307692,
+  "mmlu_social_sciences": 0.8533333333333334,
+  "mmlu_humanities": 0.8276923076923077
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (57 subtasks, n=1425), batch_size=8 — the committed large-model lim25 protocol (identical meta to docs/rd_metricsweep_data llama3-8b/qwen3-14b sweeps and the qwen bf16 anchors); reported = lm-eval 'mmlu' group acc (micro)",
+ "harness": "lm-eval 0.4.13 hf backend, parallelize=True (model sharded across 2x RTX PRO 6000 96GB, GPUs 6+7; 140 GB bf16 does not fit one card). Offload pathway validated same-session on llama3-8b bf16 FULL protocol: MMLU 65.40 vs committed 65.28 (d=+0.12pp), 0-shot AVG6 73.36 vs committed 73.33 (d=+0.03pp) — see bf16_llama3-8b_offload_validation.json",
+ "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct (sha-verified ckpt)",
+ "hardware": "RTX PRO 6000 Blackwell x2 (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "note": "First measured bf16-70B downstream anchor (previously 'NVFP4 proxy only'). Protocol caveat: NVFP4-70B row (78.99/77.94) was measured FULL-task via vLLM; this cell is lim25 — MMLU comparison holds (80.63 > 78.99), 0-shot lim25 noise documented in the zeroshot cell.",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/bf16_70b_mmlu/"
+}

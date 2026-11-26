@@ -711,10 +711,10 @@
    "llama3-70b": {
     "wiki": 5.316,
     "c4": 9.204,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/rd_peers70b.md committed rd_scale bridge (raw docs/rd_scale_data/70b_bf16_bridge.json)",
-    "note": "70B bf16 downstream not run (NVFP4 proxy only)"
+    "mmlu": 80.63,
+    "zeroshot": 76.67,
+    "source": "docs/rd_peers70b.md committed rd_scale bridge (raw docs/rd_scale_data/70b_bf16_bridge.json); downstream docs/rd_newacc_backfill/bf16_llama3-70b_{mmlu,zeroshot}.json",
+    "note": "downstream lim25 protocol (MMLU limit=25/subtask bs8, 0-shot limit=25), lm-eval 0.4.13 hf parallelize across 2x96GB; 8B offload validation d<=0.12pp; NVFP4-70B row is FULL-task vLLM protocol (0-shot not directly comparable at lim25 noise)"
    },
    "qwen3-8b": {
     "wiki": 9.725,

@@ -67,11 +67,11 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 | SpinQuant | PPL✓(16.14 learned) | PPL✓(9.25) | PPL✓(7.88 had) | 论文值(5.5) | ⬜ | ⬜ | ⬜ |
 | Atom      | PPL✓(18.40) | PPL✓(9.70) | PPL✓(7.57) | 论文值(65B) | ⬜ | ⬜ | ⬜ |
 | ResQ      | PPL✓(15.98 KV4) | PPL✓(8.71) | PPL✓(7.06) | — | ⬜ | ⬜ | ⬜ |
-| bf16      | ✅(13.16·59.33·MMLU46.05) | ✅(7.82·68.11·56.11) | ✅(6.14·73.33·65.28) | PPL✓(5.316/9.204,下游NVFP4代理) | ✅(9.725/13.299+下游lim25) | ✅(8.646/12.014 新锚点+下游lim25) | ✅(7.610/C4 10.781·0shot66.00·MMLU83.65, lim25) |
+| bf16      | ✅(13.16·59.33·MMLU46.05) | ✅(7.82·68.11·56.11) | ✅(6.14·73.33·65.28) | ✅(5.316/9.204·0shot76.67·MMLU80.63, lim25, 11-26 双卡offload实测) | ✅(9.725/13.299+下游lim25) | ✅(8.646/12.014 新锚点+下游lim25) | ✅(7.610/C4 10.781·0shot66.00·MMLU83.65, lim25) |
 | GPTQ/AWQ W4A16 | PPL✓(14.22/14.53) | PPL✓(8.20/8.35) | PPL✓(6.52/6.59) | ⬜ | ⬜ | ⬜ | ⬜ |
 | FP8 W8A8  | PPL✓(13.30) | PPL✓(7.88) | PPL✓(6.19) | ⬜ | ⬜ | ⬜ | ⬜ |
 
-**表B 缺口小结(2026-11-22, 更新2026-11-26)**:① 对手×Qwen3 全空(跨架构主张的最大缺口,SharQ/NVFP4 在 Qwen 可跑性待验);② ~~1B 下游(对手 MMLU/0-shot)~~ ✅已补(11-26 backfill, docs/rd_newacc_backfill/; MicroMix 1B 实锤不可跑);NVFP4 C4 1B/3B/8B 同批补齐;③ 70B 对手下游;④ Qwen3-32B 全列(模型未缓存);⑤ FP-Quant/QuTLASS 无 runner。
+**表B 缺口小结(2026-11-22, 更新2026-11-26)**:① 对手×Qwen3 全空(跨架构主张的最大缺口,SharQ/NVFP4 在 Qwen 可跑性待验);② ~~1B 下游(对手 MMLU/0-shot)~~ ✅已补(11-26 backfill, docs/rd_newacc_backfill/; MicroMix 1B 实锤不可跑);NVFP4 C4 1B/3B/8B 同批补齐;③ 70B 对手下游(bf16 锚点✅ 11-26 双卡offload实测, 8B 校验 Δ≤0.12pp;GPTQ/AWQ/FP8/SharQ/ARC 进行中);④ Qwen3-32B 全列(模型未缓存);⑤ FP-Quant/QuTLASS 无 runner。
 
 ### 跟踪表 C — 跳过记录(坏点 + 原因)
 | 模型 | KV | r | 指标 | 原因 |

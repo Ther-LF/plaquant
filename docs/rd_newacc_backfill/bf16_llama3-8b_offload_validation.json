@@ -1,0 +1,30 @@
+{
+ "purpose": "offload lm-eval pathway validation for the 70B downstream campaign: llama3-8b bf16 FULL-protocol downstream through the exact 70B mechanism (lm-eval 0.4.13 hf backend, parallelize=True, model sharded across GPUs 6+7) must reproduce the committed single-GPU hf 0.4.5 values within +-0.5pp",
+ "mmlu_full_5shot": {
+  "measured_micro": 65.40,
+  "committed": 65.28,
+  "abs_diff_pp": 0.12,
+  "gate": "<0.5 PASS",
+  "groups": {"mmlu": 0.6539666714143284, "mmlu_stem": 0.5610529654297495, "mmlu_other": 0.7270679111683296, "mmlu_social_sciences": 0.7611309717257069, "mmlu_humanities": 0.5978746014877789}
+ },
+ "zeroshot_full_avg6": {
+  "measured": 73.36,
+  "committed": 73.33,
+  "abs_diff_pp": 0.03,
+  "gate": "<0.5 PASS",
+  "per_task_measured_vs_committed": {
+   "piqa_acc_norm": [80.47, 81.07],
+   "arc_easy_acc_norm": [77.90, 77.82],
+   "arc_challenge_acc_norm": [54.10, 53.16],
+   "hellaswag_acc_norm": [79.26, 79.17],
+   "winogrande_acc": [73.01, 73.24],
+   "lambada_openai_acc": [75.43, 75.51]
+  }
+ },
+ "committed_source": "docs/rd_mmlu_report.md (65.28) / docs/rd_metrics_report.md (73.33), lm-eval 0.4.5 HFLM single-GPU",
+ "model": "/home/luofan/models/llama-3-8b",
+ "harness": "lm-eval 0.4.13 hf backend, parallelize=True across 2x RTX PRO 6000 (GPUs 6+7), batch_size 8 (mmlu) / 16 (0-shot), FULL tasks (no limit)",
+ "throughput": "8B sharded: full MMLU ~15 min, full 0-shot (65.7k reqs) ~35 min; 70B sharded: ~15.8 loglikelihood reqs/s at bs8 (MMLU lim25 5700 reqs in ~6 min + ~25 min tokenize/setup)",
+ "date": "2026-11-26",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/val8b_{mmlu,zs}/"
+}

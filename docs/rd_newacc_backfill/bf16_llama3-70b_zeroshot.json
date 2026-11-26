@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.bf16.llama3-70b.zeroshot",
+ "value_zeroshot_avg6": 76.67,
+ "per_task": {
+  "piqa": {"acc,none": 0.88, "acc_norm,none": 0.8},
+  "arc_easy": {"acc,none": 0.76, "acc_norm,none": 0.72},
+  "arc_challenge": {"acc,none": 0.6, "acc_norm,none": 0.64},
+  "hellaswag": {"acc,none": 0.68, "acc_norm,none": 0.8},
+  "winogrande": {"acc,none": 0.72, "acc_norm,none": null},
+  "lambada_openai": {"acc,none": 0.92, "acc_norm,none": null}
+ },
+ "protocol": "0-shot 6-task piqa/arc_easy/arc_challenge/hellaswag/winogrande/lambada_openai, AVG6 = mean of acc_norm (acc for winogrande/lambada_openai), limit=25 per task (n=150), batch_size=8 — the committed large-model lim25 protocol (same as qwen3-8b/14b bf16 anchors)",
+ "harness": "lm-eval 0.4.13 hf backend, parallelize=True (sharded across 2x 96GB GPUs 6+7). Offload pathway validated same-session on llama3-8b bf16 FULL protocol (d=+0.03pp vs committed 73.33)",
+ "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct",
+ "hardware": "RTX PRO 6000 Blackwell x2 (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "note": "lim25 n=150 sampling noise is +-3.5pp; the NVFP4-70B row (77.94) is FULL-task vLLM protocol, so 76.67<77.94 is a cross-protocol artifact, not a quantized>bf16 claim. Scale-monotone vs our bf16 ladder: 8B 73.33 (full) -> 70B 76.67 (lim25).",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/bf16_70b_zs/"
+}
