@@ -251,3 +251,9 @@ v2 全曲线: 总中位 1.081, 最差 1.360, cosine 回退 0, 全点单 launch �
 方阵套件(双平台 4096-16384+baseline): GB10 16384 gap 0.99(大K到理论线, 肉在短K); P6 16384 抬高 1.13-1.27(巨网格swizzle嫌疑+共卡噪声, caveat)。
 ForgeKernel SM121 全链路跑通(harness在Mac+ssh评测, hw_kb/sm121 开树, SASS 级 recon 报告 fk_sm121_recon_report.md); v1 四个硬限制已绕过可报 upstream。
 剩余空间(Round 11): K_high 128-pad 解锁 r=1/32/1/12 列(预期→~1.1)、3B gu M8192 下一代进化、r=1 deep-MX stage、NCU 解封、P6 巨网格复测。
+
+## 块1 精度全矩阵收官(2026-11-26) 🎉
+7 模型 × 双 KV × 11 点全部落地。最后两格: 70B-KV4 11/11(悬崖在KV4复现30.21, 全程≈KV16+0.02以内, r0.9=5.740/r1.0=5.762 噪声级平坦);
+32B 双 KV 11/11(kv16 8.511→7.688, kv4 8.521→7.693, 单调, KV4代价≤0.01, r≥0.1 全程压 NVFP4 8.000)。
+终止条件盘点: 块1 曲线✅ 块2 serving(1B/3B/8B)✅ 块3 算子双平台✅ 对手表B闭环✅。
+遗留(明确另立项/可选): 70B/32B 下游、serving backlog(batch512/长ctx/Qwen)、M31 可选Qwen扩展、KDA Round11 空间。
