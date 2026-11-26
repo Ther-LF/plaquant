@@ -158,6 +158,11 @@ class PackedWeight:
     # are zero codes + zero SF, contributing exactly 0.0 — bit-exact outputs.
     # Logical split (x slicing, decode buffers) always uses K_low. 0 == K_low.
     K_low_pad: int = 0
+    # KDA-GB10 r12: PHYSICAL MXFP8 contraction width of the packed GEMM buffers.
+    # == K_high normally; rounded UP to 128 (zero bytes + zero SF pad blocks,
+    # exact 0.0 contribution) when the fk_smallk route needs K_high%128==0 on a
+    # measured FK-window shape (see khigh_pad_enabled). 0 == K_high.
+    K_high_pad: int = 0
     # Round-6 two-level weight global: per-tensor FP32 g carried on the fused-GEMM
     # epilogue alpha (D = g*(A@B)). 1.0 = single-level (no epilogue scaling).
     g_w: float = 1.0
@@ -180,6 +185,33 @@ def klow_pad_enabled():
         return v == "1"
     try:
         return torch.cuda.get_device_properties(0).multi_processor_count <= 72
+    except Exception:
+        return False
+
+
+def khigh_pad_enabled(N, K):
+    """KDA-GB10 r12: pad K_high up to 128 alignment (zero blocks) so the
+    fk_smallk kernel (K_high%128==0 constraint) becomes eligible at the
+    KH%128!=0 r-columns. UNLIKE the K_low pad this is NOT a general win —
+    round 3 measured high-side padding costs ~2% through the shipping CUTLASS
+    kernel — so the auto gate is low-SM AND (N, K) in the measured FK window
+    table (_FK_TABLE_GB10). Override with PROMIX_KHIGH_PAD=0/1 (1 = pad on any
+    low-SM-eligible shape regardless of the FK table)."""
+    import os
+    v = os.environ.get("PROMIX_KHIGH_PAD", "")
+    if v == "0":
+        return False
+    try:
+        low_sm = torch.cuda.get_device_properties(0).multi_processor_count <= 72
+    except Exception:
+        return False
+    if not low_sm:
+        return False
+    if v == "1":
+        return True
+    try:
+        from promix.quantize.mixed_linear import _FK_TABLE_GB10
+        return (N, K) in _FK_TABLE_GB10
     except Exception:
         return False
 
@@ -284,11 +316,28 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
     if K_high > 0:
         bytes_hi, SFB_hi, deq_hi = quantize_mxfp8_spec(W_hi, frozen_scale=frozen_mxfp8_scale,
                                                        global_scale=global_scale)
-        physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi.contiguous(), N, K_high)
+        # KDA-GB10 r12: 128-alignment pad of the PHYSICAL MXFP8 GEMM buffers
+        # (zero element bytes + zero SF -> exact 0.0 contribution; activation
+        # side mirrors via quant_pack_float_fp8's K_valid). Only on measured
+        # FK-window shapes (see khigh_pad_enabled) — it exists to satisfy the
+        # fk_smallk kernel's K_high%128==0 constraint, not as a general win.
+        K_high_pad = K_high
+        if K_high % 128 != 0 and khigh_pad_enabled(N, K):
+            K_high_pad = ((K_high + 127) // 128) * 128
+        if K_high_pad != K_high:
+            bytes_pack = torch.cat(
+                [bytes_hi, torch.zeros(N, K_high_pad - K_high, dtype=torch.uint8, device=dev)], 1)
+            SFB_hi_pack = torch.cat(
+                [SFB_hi, torch.zeros(N, (K_high_pad - K_high) // 32, dtype=torch.uint8, device=dev)], 1)
+        else:
+            bytes_pack, SFB_hi_pack = bytes_hi, SFB_hi
+        physSFB_hi = cd.prepack_sf_fp8_b(SFB_hi_pack.contiguous(), N, K_high_pad)
         W_hi_dec = bytes_hi.contiguous()
         S_hi_dec = (torch.exp2(SFB_hi.float() - 127.0) * g).contiguous()
     else:
+        K_high_pad = 0
         bytes_hi = torch.empty((N, 0), dtype=torch.uint8, device=dev)
+        bytes_pack = bytes_hi
         physSFB_hi = torch.empty((0,), dtype=torch.uint8, device=dev)
         deq_hi = torch.empty((N, 0), dtype=torch.float32, device=dev)
         W_hi_dec = torch.empty((N, 0), dtype=torch.uint8, device=dev)
@@ -308,9 +357,10 @@ def pack_weight_mixed(W, K_low, K_high, nv, mx, cd, bias=None,
 
     return PackedWeight(
         N=N, K=K, K_low=K_low, K_high=K_high, K_low_pad=K_low_pad,
+        K_high_pad=K_high_pad,
         W_lo_packed=W_lo_packed.contiguous(),
         physSFB_lo=physSFB_lo.contiguous(),
-        W_hi_bytes=bytes_hi.contiguous(),
+        W_hi_bytes=bytes_pack.contiguous(),
         physSFB_hi=physSFB_hi.contiguous(),
         W_deq=W_deq,
         bias=None if bias is None else bias.detach().to(dev).contiguous(),

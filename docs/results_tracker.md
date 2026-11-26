@@ -269,3 +269,11 @@ bf16 Qwen3-32B 锚全套(7.610/10.781/83.65/66.0)+1B MMLU 46.05; GPTQ/AWQ/FP8 �
 Sanity: 四件套四指标跨方法排序完全单调一致(ResQ<SpinQuant≈Atom<QuaRot); FP8≈bf16。
 注记项: QuaRot-1B(Δ0.41)/ResQ-1B(Δ0.12)为旧venv亡佚的torch版本敏感(双值注记); **AWQ-1B wiki 重对齐 14.53→15.16**(旧值管线错位)。
 覆盖矩阵: 可跑缺口仅剩 70B 对手下游(agent跑着)和 Qwen×Llama-bound(结构性❌)。missing 259→182。
+
+## GB10 vLLM 集成收官(2026-11-27)
+**vLLM 0.33 + SM121 零代码适配跑通**(plugin/ops/fusion/kernels 原样工作, 仅 env: 12.1a + c++20)。
+3B 四点 r-sweep(0/0.125/0.5/1.0): gate T2 全 PASS(dPPL≤0.0103), 跨设备 vLLM PPL 对齐 Pro6000(r0.5 Δ0.0008, r1.0 Δ0.012);
+r0 的 0.068 为跨 GPU GPTQ exporter 分歧非集成误差。serving: GB10 decode 甜点 b128(~1.8k tok/s), QServe b256 472-488 tok/s(Pro6000 的 1/14, 平台带宽差所致);
+趋势与 Pro6000 同构(TTFT 随 r 单调升, decode 近平)。klow_pad 实证 no-op(3B ring512 所有 K_low%128==0), 选项(a)零损失。
+数据: docs/vllm_final_data/gb10_pm3b_* (16 文件) + 复跑脚本 docs/vllm_final_scripts/gb10_*。
+**论文点坐实: 同一量化包+同一插件跨 SM120/SM121 部署, 数值逐点对齐。**

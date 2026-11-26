@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "tag": "gb10_pm3b_r0.5_qserve",
+    "model": "/home/luofan/gb10_sweep/ckpt/promix-3b-r0.5",
+    "argv": [
+      "/home/luofan/plaquant/promix/vllm_integ/bench_serve.py",
+      "--model",
+      "/home/luofan/gb10_sweep/ckpt/promix-3b-r0.5",
+      "--tag",
+      "gb10_pm3b_r0.5_qserve",
+      "--dtype",
+      "float16",
+      "--batches",
+      "128,256",
+      "--cases",
+      "1024:512",
+      "--prefill-len",
+      "0",
+      "--max-model-len",
+      "4096",
+      "--gpu-mem-util",
+      "0.90",
+      "--extra-llm-kwargs",
+      "{\"max_num_seqs\":512}",
+      "--out",
+      "/home/luofan/gb10_sweep/bench/gb10_pm3b_r0.5_qserve.json"
+    ],
+    "gpu": null,
+    "torch": "2.14.0+cu130",
+    "cuda": "13.0",
+    "device_name": "NVIDIA GB10",
+    "time": "2026-11-26 22:27:32",
+    "vllm": "0.33.0",
+    "load_s": 60.66149229602888,
+    "quantization_resolved": "promix",
+    "dtype_resolved": "torch.float16",
+    "enforce_eager": false
+  },
+  "cases": {
+    "isl1024_osl512_b128": {
+      "isl": 1024,
+      "osl": 512,
+      "batch": 128,
+      "ttft_s": 7.917712380178273,
+      "full_s": 86.97180102509446,
+      "tpot_ms": 154.70467445189078,
+      "gen_tok_per_s": 753.5315956155781,
+      "total_tok_per_s": 2260.594786846734,
+      "ttft_runs_s": [
+        7.907779750879854,
+        7.918103547068313,
+        7.917712380178273
+      ],
+      "full_runs_s": [
+        85.66816424904391,
+        86.97180102509446,
+        87.8502555580344
+      ]
+    },
+    "isl1024_osl512_b256": {
+      "isl": 1024,
+      "osl": 512,
+      "batch": 256,
+      "ttft_s": 15.815335443010554,
+      "full_s": 276.0273210660089,
+      "tpot_ms": 509.22110689432157,
+      "gen_tok_per_s": 474.8515454694993,
+      "total_tok_per_s": 1424.554636408498,
+      "ttft_runs_s": [
+        15.773238529916853,
+        15.815335443010554,
+        15.829702290939167
+      ],
+      "full_runs_s": [
+        264.8861433127895,
+        276.0273210660089,
+        284.51253696298227
+      ]
+    }
+  },
+  "memory": {
+    "max_memory_reserved_gib": 108.1796875,
+    "max_memory_allocated_gib": 107.78232717514038
+  }
+}
