@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.atom.llama3.2-1b.zeroshot",
+ "value_zeroshot": 52.33,
+ "per_task": {
+  "piqa": 0.6838955386289445,
+  "arc_easy": 0.5547138047138047,
+  "arc_challenge": 0.3302047781569966,
+  "hellaswag": 0.5347540330611432,
+  "winogrande": 0.5666929755327546,
+  "lambada_openai": 0.469241218707549
+ },
+ "protocol": "0-shot AVG6 FULL (acc_norm piqa/arc/hellaswag; acc winogrande/lambada), lm-eval 0.4.5 HFLM bs16, same quantized instance",
+ "wiki_repro": {
+  "measured": 18.3996,
+  "committed": 18.4,
+  "abs_diff": 0.0004,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/atom_1b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "Atom W4A4 (~4.2 b/w: 128 INT8 keeper + g128 + hessian reorder + GPTQ + INT4 KV), as-shipped model/main.py",
+ "harness": "peers/atom Atom model/main.py (+RD hooks, own llama_eval loop, cached reorder index) in its pinned venv"
+}

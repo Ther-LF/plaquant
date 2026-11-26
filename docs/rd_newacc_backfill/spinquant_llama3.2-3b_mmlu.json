@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.spinquant.llama3.2-3b.mmlu",
+ "value_mmlu": 46.2,
+ "mmlu_macro": 47.9,
+ "groups": {
+  "mmlu": 0.4620424440962826,
+  "mmlu_humanities": 0.4263549415515409,
+  "mmlu_other": 0.5140006437077567,
+  "mmlu_social_sciences": 0.5359116022099447,
+  "mmlu_stem": 0.39200761179828736
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), lm-eval 0.4.5 HFLM bs16 on the SAME quantized model instance (single quantize pass with the gate run)",
+ "wiki_repro": {
+  "measured": 9.2465,
+  "committed": 9.25,
+  "abs_diff": 0.0035,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/spin_3b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "SpinQuant W4A4KV4 (GPTQ W4 + asym A4 + asym KV4 g=head_dim; 1B/3B LEARNED Cayley-SGD rotation rot_{1b,3b}/R.bin, 8B Hadamard \u2014 same variants as committed scoreboard)",
+ "harness": "peers/spinquant SpinQuant ptq.py (+RD hooks, own eval loop; torchvision stub for lm_eval import) in its pinned venv (torch 2.14.1)"
+}

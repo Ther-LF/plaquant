@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.spinquant.llama3.2-1b.zeroshot",
+ "value_zeroshot": 53.35,
+ "per_task": {
+  "piqa": 0.6898803046789989,
+  "arc_easy": 0.5728114478114478,
+  "arc_challenge": 0.34215017064846415,
+  "hellaswag": 0.5455088627763394,
+  "winogrande": 0.5651144435674822,
+  "lambada_openai": 0.4855424024839899
+ },
+ "protocol": "0-shot AVG6 FULL (acc_norm piqa/arc/hellaswag; acc winogrande/lambada), lm-eval 0.4.5 HFLM bs16, same quantized instance",
+ "wiki_repro": {
+  "measured": 16.1435,
+  "committed": 16.14,
+  "abs_diff": 0.0035,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/spin_1b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "SpinQuant W4A4KV4 (GPTQ W4 + asym A4 + asym KV4 g=head_dim; 1B/3B LEARNED Cayley-SGD rotation rot_{1b,3b}/R.bin, 8B Hadamard \u2014 same variants as committed scoreboard)",
+ "harness": "peers/spinquant SpinQuant ptq.py (+RD hooks, own eval loop; torchvision stub for lm_eval import) in its pinned venv (torch 2.14.1)"
+}

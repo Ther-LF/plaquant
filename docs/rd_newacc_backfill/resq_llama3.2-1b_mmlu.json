@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.resq.llama3.2-1b.mmlu",
+ "value_mmlu": 36.07,
+ "mmlu_macro": 36.63,
+ "groups": {
+  "mmlu": 0.3607036034752884,
+  "mmlu_humanities": 0.3339001062699256,
+  "mmlu_other": 0.4193756034760219,
+  "mmlu_social_sciences": 0.390315242118947,
+  "mmlu_stem": 0.3139866793529971
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), lm-eval 0.4.5 HFLM bs16 on the SAME quantized model instance (single quantize pass with the gate run)",
+ "wiki_repro": {
+  "measured": 15.8621,
+  "committed": 15.98,
+  "abs_diff": 0.1179,
+  "gate": "DEVIATION \u03940.118 (15.8621 vs 15.98): identical R/U artifacts (md5-verified across all clones), original venv_resq destroyed \u2014 env-level GPTQ numerics drift; 3B/8B reproduce <0.01. Cell values self-consistent with the 15.8621 invocation."
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/resq_1b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "ResQ W4A4KV4 (INT4 + 1/8 INT8 high channels, hf=0.125, GPTQ, asym KV4; rotate_mode resq full_shared, committed R/U artifacts plaquant-accmatrix/rotation)",
+ "harness": "refquant/resq_src fake_quant/ptq.py (ourproto wiki + RD hooks) via base-env torchrun (original venv_resq destroyed)"
+}

@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.resq.llama3.2-1b.c4",
+ "value_c4": 22.0226,
+ "wiki_repro": {
+  "measured": 15.8621,
+  "committed": 15.98,
+  "abs_diff": 0.1179,
+  "gate": "DEVIATION \u03940.118 (15.8621 vs 15.98): identical R/U artifacts (md5-verified across all clones), original venv_resq destroyed \u2014 env-level GPTQ numerics drift; 3B/8B reproduce <0.01. Cell values self-consistent with the 15.8621 invocation."
+ },
+ "protocol": {
+  "wiki": "our-protocol full-forward (ourproto / peer own GPTQ-standard loop \u2014 same as committed scoreboard cell)",
+  "c4": "get_c4 256x2048 seed0 verbatim, scored with the same loop"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/resq_1b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "ResQ W4A4KV4 (INT4 + 1/8 INT8 high channels, hf=0.125, GPTQ, asym KV4; rotate_mode resq full_shared, committed R/U artifacts plaquant-accmatrix/rotation)",
+ "harness": "refquant/resq_src fake_quant/ptq.py (ourproto wiki + RD hooks) via base-env torchrun (original venv_resq destroyed)"
+}

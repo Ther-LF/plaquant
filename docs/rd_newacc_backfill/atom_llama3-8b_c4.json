@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.atom.llama3-8b.c4",
+ "value_c4": 11.0623,
+ "wiki_repro": {
+  "measured": 7.5703,
+  "committed": 7.57,
+  "abs_diff": 0.0003,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "our-protocol full-forward (ourproto / peer own GPTQ-standard loop \u2014 same as committed scoreboard cell)",
+  "c4": "get_c4 256x2048 seed0 verbatim, scored with the same loop"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/atom_8b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "Atom W4A4 (~4.2 b/w: 128 INT8 keeper + g128 + hessian reorder + GPTQ + INT4 KV), as-shipped model/main.py",
+ "harness": "peers/atom Atom model/main.py (+RD hooks, own llama_eval loop, cached reorder index) in its pinned venv"
+}

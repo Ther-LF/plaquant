@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.quarot.llama3.2-3b.mmlu",
+ "value_mmlu": 39.77,
+ "mmlu_macro": 40.82,
+ "groups": {
+  "mmlu": 0.3977353653325737,
+  "mmlu_humanities": 0.37258235919234856,
+  "mmlu_other": 0.45123913743160604,
+  "mmlu_social_sciences": 0.4406889827754306,
+  "mmlu_stem": 0.340627973358706
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), lm-eval 0.4.5 HFLM bs16 on the SAME quantized model instance (single quantize pass with the gate run)",
+ "wiki_repro": {
+  "measured": 10.7386,
+  "committed": 10.72,
+  "abs_diff": 0.0186,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/quarot_3b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "QuaRot W4A4KV4 (GPTQ W4 per-channel + per-token sym A4 + asym KV4 g=head_dim, random Hadamard), fake-quant, refquant/run_quarot.py as-shipped pipeline",
+ "harness": "refquant/run_quarot.py (+RD_C4/RD_DOWNSTREAM hooks; eval-phase cleanup_memory no-op speed fix, numerics unchanged) in peers/quarot/venv (torch 2.11+cu130)"
+}

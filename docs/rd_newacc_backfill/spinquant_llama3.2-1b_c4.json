@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.spinquant.llama3.2-1b.c4",
+ "value_c4": 22.8407,
+ "wiki_repro": {
+  "measured": 16.1435,
+  "committed": 16.14,
+  "abs_diff": 0.0035,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "our-protocol full-forward (ourproto / peer own GPTQ-standard loop \u2014 same as committed scoreboard cell)",
+  "c4": "get_c4 256x2048 seed0 verbatim, scored with the same loop"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/spin_1b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "SpinQuant W4A4KV4 (GPTQ W4 + asym A4 + asym KV4 g=head_dim; 1B/3B LEARNED Cayley-SGD rotation rot_{1b,3b}/R.bin, 8B Hadamard \u2014 same variants as committed scoreboard)",
+ "harness": "peers/spinquant SpinQuant ptq.py (+RD hooks, own eval loop; torchvision stub for lm_eval import) in its pinned venv (torch 2.14.1)"
+}

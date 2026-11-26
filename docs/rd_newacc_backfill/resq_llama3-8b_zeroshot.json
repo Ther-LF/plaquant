@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.resq.llama3-8b.zeroshot",
+ "value_zeroshot": 70.64,
+ "per_task": {
+  "piqa": 0.7905331882480957,
+  "arc_easy": 0.7596801346801347,
+  "arc_challenge": 0.5034129692832765,
+  "hellaswag": 0.7611033658633738,
+  "winogrande": 0.7048145224940805,
+  "lambada_openai": 0.7186105181447701
+ },
+ "protocol": "0-shot AVG6 FULL (acc_norm piqa/arc/hellaswag; acc winogrande/lambada), lm-eval 0.4.5 HFLM bs16, same quantized instance",
+ "wiki_repro": {
+  "measured": 7.0581,
+  "committed": 7.06,
+  "abs_diff": 0.0019,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/resq_8b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "ResQ W4A4KV4 (INT4 + 1/8 INT8 high channels, hf=0.125, GPTQ, asym KV4; rotate_mode resq full_shared, committed R/U artifacts plaquant-accmatrix/rotation)",
+ "harness": "refquant/resq_src fake_quant/ptq.py (ourproto wiki + RD hooks) via base-env torchrun (original venv_resq destroyed)"
+}

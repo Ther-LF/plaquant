@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.quarot.llama3.2-3b.zeroshot",
+ "value_zeroshot": 58.38,
+ "per_task": {
+  "piqa": 0.7181719260065288,
+  "arc_easy": 0.6094276094276094,
+  "arc_challenge": 0.35665529010238906,
+  "hellaswag": 0.6485759808803028,
+  "winogrande": 0.584846093133386,
+  "lambada_openai": 0.5852901222588783
+ },
+ "protocol": "0-shot AVG6 FULL (acc_norm piqa/arc/hellaswag; acc winogrande/lambada), lm-eval 0.4.5 HFLM bs16, same quantized instance",
+ "wiki_repro": {
+  "measured": 10.7386,
+  "committed": 10.72,
+  "abs_diff": 0.0186,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/quarot_3b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "QuaRot W4A4KV4 (GPTQ W4 per-channel + per-token sym A4 + asym KV4 g=head_dim, random Hadamard), fake-quant, refquant/run_quarot.py as-shipped pipeline",
+ "harness": "refquant/run_quarot.py (+RD_C4/RD_DOWNSTREAM hooks; eval-phase cleanup_memory no-op speed fix, numerics unchanged) in peers/quarot/venv (torch 2.11+cu130)"
+}

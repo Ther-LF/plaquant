@@ -1,0 +1,24 @@
+{
+ "cell": "competitors.atom.llama3.2-3b.mmlu",
+ "value_mmlu": 45.36,
+ "mmlu_macro": 46.5,
+ "groups": {
+  "mmlu": 0.45363908275174475,
+  "mmlu_humanities": 0.4159404888416578,
+  "mmlu_other": 0.5152880592211136,
+  "mmlu_social_sciences": 0.5219369515762106,
+  "mmlu_stem": 0.3824928639391056
+ },
+ "protocol": "MMLU 5-shot FULL (57 subtasks, no limit), lm-eval 0.4.5 HFLM bs16 on the SAME quantized model instance (single quantize pass with the gate run)",
+ "wiki_repro": {
+  "measured": 9.6986,
+  "committed": 9.699,
+  "abs_diff": 0.0004,
+  "gate": "<0.05 PASS"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/atom_3b.json",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "quant": "Atom W4A4 (~4.2 b/w: 128 INT8 keeper + g128 + hessian reorder + GPTQ + INT4 KV), as-shipped model/main.py",
+ "harness": "peers/atom Atom model/main.py (+RD hooks, own llama_eval loop, cached reorder index) in its pinned venv"
+}
