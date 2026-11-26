@@ -1,0 +1,16 @@
+{
+ "cell": "competitors.fp8_w8a8.llama3-70b.{wiki,c4}",
+ "value_wiki": 5.4050,
+ "value_c4": 9.2293,
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, '\\n\\n'.join, non-overlapping 2048-token chunks, token-pooled exp(mean NLL) (committed scoreboard protocol; vLLM prompt_logprobs, bench_vllm convention)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (verbatim promix/eval/data.py:get_c4 eval protocol)"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py — vLLM prompt_logprobs PPL on llm-compressor FP8_DYNAMIC ckpt (same stack/convention as the committed NVFP4 70B ppl row)",
+ "quant": "FP8 W8A8 dynamic per-token activations (llm-compressor 0.14.0.1 QuantizationModifier FP8_DYNAMIC, ignore lm_head, data-free) — same recipe as the committed 1B/3B/8B fp8 ckpts (baselines/scripts/quantize.py); ckpt built this session by /home/luofan/accmatrix/backfill70b/quantize_70b.py (disk full: ckpt saved to /dev/shm, 68 GiB, reproducible from script)",
+ "sanity": "bf16 70B committed 5.316/9.204 -> FP8 +0.089/+0.025; scale-consistent with 8B fp8 (+0.054 wiki vs its bf16)",
+ "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct -> FP8_DYNAMIC",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) single card (GPU6), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/fp8_70b_ppl.json"
+}

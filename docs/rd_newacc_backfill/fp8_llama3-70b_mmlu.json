@@ -1,0 +1,19 @@
+{
+ "cell": "competitors.fp8_w8a8.llama3-70b.mmlu",
+ "value_mmlu_micro": 80.35,
+ "groups": {
+  "mmlu": 0.8035087719298246,
+  "mmlu_stem": 0.751578947368421,
+  "mmlu_other": 0.8061538461538461,
+  "mmlu_social_sciences": 0.86,
+  "mmlu_humanities": 0.8246153846153846
+ },
+ "protocol": "MMLU 5-shot, limit=25 per subtask (n=1425), batch_size auto — lim25 large-model protocol (same as bf16-70B anchor cell)",
+ "harness": "lm-eval 0.4.13 vllm backend (gpu_memory_utilization=0.85, max_model_len=4096), single 96GB card — same stack as the committed NVFP4 downstream rows",
+ "quant": "FP8 W8A8 dynamic (llm-compressor FP8_DYNAMIC, data-free; ckpt in /dev/shm, reproducible via /home/luofan/accmatrix/backfill70b/quantize_70b.py)",
+ "wiki_repro": {"measured": 5.4050, "note": "trust gate = same-ckpt same-session ppl run (fp8_llama3-70b_ppl.json); no prior committed FP8-70B wiki to compare — this IS the first measurement"},
+ "sanity": "80.35 < bf16-70B 80.63 (same lim25 protocol) and > NVFP4-70B 78.99 (full protocol) — ordering plausible for near-lossless W8A8",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/fp8_70b_mmlu/"
+}

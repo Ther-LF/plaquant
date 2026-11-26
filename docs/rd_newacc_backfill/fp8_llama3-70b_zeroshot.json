@@ -1,0 +1,20 @@
+{
+ "cell": "competitors.fp8_w8a8.llama3-70b.zeroshot",
+ "value_zeroshot_avg6": 78.00,
+ "per_task": {
+  "piqa": {"acc,none": 0.88, "acc_norm,none": 0.8},
+  "arc_easy": {"acc,none": 0.8, "acc_norm,none": 0.76},
+  "arc_challenge": {"acc,none": 0.6, "acc_norm,none": 0.68},
+  "hellaswag": {"acc,none": 0.68, "acc_norm,none": 0.84},
+  "winogrande": {"acc,none": 0.72, "acc_norm,none": null},
+  "lambada_openai": {"acc,none": 0.88, "acc_norm,none": null}
+ },
+ "protocol": "0-shot 6-task AVG6 (acc_norm for piqa/arc/hellaswag, acc for winogrande/lambada), limit=25 per task (n=150) — lim25 large-model protocol",
+ "harness": "lm-eval 0.4.13 vllm backend (gpu_memory_utilization=0.85, max_model_len=4096), single 96GB card",
+ "quant": "FP8 W8A8 dynamic (llm-compressor FP8_DYNAMIC, data-free)",
+ "wiki_repro": {"measured": 5.4050, "note": "same-ckpt same-session gate (fp8_llama3-70b_ppl.json)"},
+ "sanity_flag": "78.00 > bf16-70B lim25 76.67 at identical protocol/docs: a 2-doc flip inside n=150 noise (SE ~3.5pp) — NOT a quantized>bf16 claim; MMLU (n=1425) shows the sane ordering 80.35 < 80.63. Recorded with this caveat per sanity-gate rule.",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0) GPU6, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/fp8_70b_zs/"
+}
