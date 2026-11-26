@@ -1,0 +1,42 @@
+{
+ "cell": "competitors.nvfp4.llama3.2-1b.zeroshot",
+ "value_zeroshot_avg6": 56.28,
+ "per_task": {
+  "piqa": {
+   "acc,none": 0.7236126224156693,
+   "acc_norm,none": 0.7143634385201306
+  },
+  "arc_easy": {
+   "acc,none": 0.6283670033670034,
+   "acc_norm,none": 0.5782828282828283
+  },
+  "arc_challenge": {
+   "acc,none": 0.32081911262798635,
+   "acc_norm,none": 0.3361774744027304
+  },
+  "hellaswag": {
+   "acc,none": 0.43686516630153355,
+   "acc_norm,none": 0.5791674965146385
+  },
+  "winogrande": {
+   "acc,none": 0.6195737963693765,
+   "acc_norm,none": null
+  },
+  "lambada_openai": {
+   "acc,none": 0.5491946438967592,
+   "acc_norm,none": null
+  }
+ },
+ "protocol": "0-shot 6-task piqa/arc_easy/arc_challenge/hellaswag/winogrande/lambada_openai, AVG6 = mean of acc_norm (acc for winogrande/lambada_openai), rd_metrics convention, full tasks",
+ "harness": "lm-eval vllm backend (batch auto, max_model_len 4096) on llm-compressor NVFP4 ckpt \u2014 same stack as committed NVFP4 3B/8B downstream rows",
+ "model": "/home/luofan/baselines/quant/Llama-3.2-1B-Instruct-NVFP4",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "wiki_repro": {
+  "measured": 15.6458,
+  "committed": 15.65,
+  "abs_diff": 0.0042,
+  "note": "gate run = docs/rd_newacc_backfill/nvfp4_llama3.2-1b_c4.json (same ckpt, same vLLM stack, same session)"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill/nv_1b_zs/"
+}
