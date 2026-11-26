@@ -262,3 +262,10 @@ ForgeKernel SM121 全链路跑通(harness在Mac+ssh评测, hw_kb/sm121 开树, S
 批次① C4@3B/8B 全补(重测与 10-30 提交值一致到小数点后3-4位=管线零漂移): SharQ 11.29/9.58, ARC 11.55/9.79, NVFP4 11.64/9.87(+1B 21.58 新), MicroMix 12.28/10.56, CoQuant 12.82/10.79; 排序与 wiki 同序。
 批次② 1B 下游: SharQ MMLU42.89/zs57.83, ARC 40.79/56.15, NVFP4 42.62/56.28, CoQuant 36.97/53.43; 全<bf16 锚, wiki gate 全过。
 坏格仅 MicroMix-1B(其 kernel 硬拒 K=2048, 实锤 missing)。dashboard_data/表B 已同步。
+
+## Related work 小模型列全量清缺(2026-11-26, 77 格, docs/rd_newacc_backfill/)
+NVFP4×Qwen 三尺寸 ✅ 四指标(8B 10.07/13.78/74.88/66.0; 14B 8.90/12.40/77.82/63.3; 32B 8.01/11.15/82.46/66.7);
+bf16 Qwen3-32B 锚全套(7.610/10.781/83.65/66.0)+1B MMLU 46.05; GPTQ/AWQ/FP8 参考组 27格; INT4四件套(QuaRot/SpinQuant/Atom/ResQ)×3模型 36格。
+Sanity: 四件套四指标跨方法排序完全单调一致(ResQ<SpinQuant≈Atom<QuaRot); FP8≈bf16。
+注记项: QuaRot-1B(Δ0.41)/ResQ-1B(Δ0.12)为旧venv亡佚的torch版本敏感(双值注记); **AWQ-1B wiki 重对齐 14.53→15.16**(旧值管线错位)。
+覆盖矩阵: 可跑缺口仅剩 70B 对手下游(agent跑着)和 Qwen×Llama-bound(结构性❌)。missing 259→182。
