@@ -1,0 +1,28 @@
+{
+ "cell": "competitors.nvfp4.qwen3-14b.mmlu",
+ "value_mmlu": 77.82,
+ "mmlu_macro": 77.82,
+ "groups": {
+  "mmlu_stem": 0.7621052631578947,
+  "mmlu_other": 0.7692307692307693,
+  "mmlu_social_sciences": 0.8133333333333334,
+  "mmlu_humanities": 0.7784615384615384,
+  "mmlu": 0.7782456140350877
+ },
+ "protocol": "MMLU 5-shot limit=25/subtask (lim25 protocol \u2014 identical to the committed Qwen3 bf16 anchors and ProMix Qwen metricsweep curves), reported = lm-eval 'mmlu' group acc",
+ "harness": "lm-eval vllm backend (batch auto, max_model_len 4096) on llm-compressor NVFP4 ckpt",
+ "model": {
+  "pretrained": "/home/luofan/baselines/quant/Qwen3-14B-NVFP4",
+  "gpu_memory_utilization": 0.85,
+  "max_model_len": 4096
+ },
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "wiki_repro": {
+  "measured": 8.8953,
+  "committed": 8.898,
+  "abs_diff": 0.0027,
+  "note": "gate run = docs/rd_newacc_backfill/nvfp4_qwen3-14b_c4.json"
+ },
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/nv_qwen3_14b_nvfp4_mmlu/"
+}

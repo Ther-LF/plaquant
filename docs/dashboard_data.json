@@ -159,24 +159,24 @@
    },
    "qwen3-8b": {
     "wiki": 10.07,
-    "c4": null,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/results_tracker.md 2026-11-23 (raw server /home/luofan/accmatrix/nvfp4_qwen8b_ppl.json)"
+    "c4": 13.7764,
+    "mmlu": 74.88,
+    "zeroshot": 66.0,
+    "source": "docs/results_tracker.md 2026-11-23 (raw server /home/luofan/accmatrix/nvfp4_qwen8b_ppl.json); c4+mmlu+0-shot docs/rd_newacc_backfill/nvfp4_qwen3-8b_{c4,mmlu,zeroshot}.json (2026-11-26 backfill, wiki gate 10.0733 vs 10.07; downstream lim25 protocol = Qwen bf16 anchors)"
    },
    "qwen3-14b": {
     "wiki": 8.898,
-    "c4": null,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/results_tracker.md 2026-11-24 (llm-compressor ckpt + bench_vllm)"
+    "c4": 12.404,
+    "mmlu": 77.82,
+    "zeroshot": 63.33,
+    "source": "docs/results_tracker.md 2026-11-24 (llm-compressor ckpt + bench_vllm); c4+mmlu+0-shot docs/rd_newacc_backfill/nvfp4_qwen3-14b_{c4,mmlu,zeroshot}.json (2026-11-26 backfill, wiki gate 8.8953 vs 8.898; downstream lim25 protocol = Qwen bf16 anchors)"
    },
    "qwen3-32b": {
     "wiki": 8.0,
-    "c4": null,
-    "mmlu": null,
-    "zeroshot": null,
-    "source": "docs/results_tracker.md 2026-11-25 (rerun after repaired checkpoint; earlier NaN = corrupted model shards)"
+    "c4": 11.1464,
+    "mmlu": 82.46,
+    "zeroshot": 66.67,
+    "source": "docs/results_tracker.md 2026-11-25 (rerun after repaired checkpoint; earlier NaN = corrupted model shards); c4+mmlu+0-shot docs/rd_newacc_backfill/nvfp4_qwen3-32b_{c4,mmlu,zeroshot}.json (2026-11-26 backfill, wiki gate 8.006 vs 8.0; downstream lim25 protocol = Qwen bf16 anchors)"
    }
   },
   "micromix": {
@@ -186,7 +186,7 @@
     "mmlu": null,
     "zeroshot": null,
     "source": "docs/rd_newpeers_accuracy.md",
-    "note": "not applicable: confirmed 2026-11-26 — mixedgemm kernel rejects K=2048 ('K value is not valid: 2048' in reorder_quantize_w4); calibration runs but quantization impossible as-shipped (docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json)"
+    "note": "not applicable: confirmed 2026-11-26 \u2014 mixedgemm kernel rejects K=2048 ('K value is not valid: 2048' in reorder_quantize_w4); calibration runs but quantization impossible as-shipped (docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json)"
    },
    "llama3.2-3b": {
     "wiki": 9.05,
@@ -371,7 +371,7 @@
     "c4": null,
     "mmlu": null,
     "zeroshot": null,
-    "source": "docs/scoreboard.md round-14 (Hadamard; learned rotation not trained at 8B — too slow single-GPU)"
+    "source": "docs/scoreboard.md round-14 (Hadamard; learned rotation not trained at 8B \u2014 too slow single-GPU)"
    },
    "llama3-70b": {
     "wiki": 5.5,
@@ -836,7 +836,7 @@
    "avg_bits": 6.125,
    "formula": "w: 4 (single shared E2M1 payload, K/2 bytes/row) + 8/32 (UE4M3 sparse-view scale per 32) + 8/16 (dense-view scale: the SAME per-32 values physically DUPLICATED into a per-16 buffer) + per-tensor FP32 global = 4.75 physical (4.25 if dedup counted once). a (asymptotic, measured 7.5625 at M=2048,K=4096 incl. +128-row SFA padding): 2:4-compressed sparse backbone 2.0 (E2M1 on K/2 kept) + sparse metadata E 0.5 + sparse SFA 0.5 + dense NVFP4 residual 4.0 + residual SFA 0.5 = 7.5 + per-tensor FP32 global",
    "source": "measured: sharq_ops.get_fused_sparse_residual_buffer_sizes(2048,4096,4096) -> a_comp 2.0 / E 0.5 / SFA 0.53125 / Q_res 4.0 / SF_res 0.53125 bits/elem (SharQ/kernels/src/bindings.cpp:243-253, include/sparse_nvfp4.h:117-151). Weight: kernels/src/shared_weight_nvfp4.cu:20-111 (quantize_w32_shared_kernel + duplicate_sfb32_to_dense_sfb16_kernel); model/quantize.py:149-211",
-   "discrepancy": "tracker '~4.5 (†)' understates: physical weight storage is 4.75 (dup dense SFB), and the activation stream is 7.5 bits/elem (two full streams + sparsity metadata) — the † caveat is now quantified"
+   "discrepancy": "tracker '~4.5 (\u2020)' understates: physical weight storage is 4.75 (dup dense SFB), and the activation stream is 7.5 bits/elem (two full streams + sparsity metadata) \u2014 the \u2020 caveat is now quantified"
   },
   "micromix": {
    "tier": "w4a4",
@@ -874,7 +874,7 @@
     "8B": 4.5094
    },
    "formula": "w: 7/8*INT4 + 1/8*INT8 + 2 per-output-channel FP16 scales (main+high segments, sym, GPTQ+w_clip) = 4.5 + 32/K; a: per-token asym 2 segments (scale+zero FP16 each) = 4.5 + 64/K; KV: INT4 asym per-head (k/v_groupsize = head_dim) = 4 + 32/head_dim. Params-weighted.",
-   "source": "config: CoQuant/fake_quant/0_eval_ptq_4bit.sh (--w_bits 4 --a_bits 4 --high_bits 8 --high_fraction 0.125 --w_clip --a_asym --k_asym --v_asym) on server; segment quantizer structure promix/quantize/quant_utils.py:314-419 (scale/zero per token per segment). [假设] scale dtype FP16 (ResQ fake-quant keeps scales in model dtype; a real INT kernel would store FP16/FP32 — ±16/K bits at most).",
+   "source": "config: CoQuant/fake_quant/0_eval_ptq_4bit.sh (--w_bits 4 --a_bits 4 --high_bits 8 --high_fraction 0.125 --w_clip --a_asym --k_asym --v_asym) on server; segment quantizer structure promix/quantize/quant_utils.py:314-419 (scale/zero per token per segment). [\u5047\u8bbe] scale dtype FP16 (ResQ fake-quant keeps scales in model dtype; a real INT kernel would store FP16/FP32 \u2014 \u00b116/K bits at most).",
    "discrepancy": "tracker '~4.6' -> precise 4.51 (w)"
   },
   "atom": {
@@ -895,7 +895,7 @@
     "8B": 4.1979
    },
    "formula": "per Linear (K=d_in): w = 4*(1-128/K) + 8*(128/K) + 16/(128*2) [INT4 g128 scale, channel_group=2] + (16/128)*(128/K) [keeper INT8 scale] = 4.0625 + 528/K; a = same keeper mix with per-token g128 FP16 scales = 4.125 + 528/K. KV INT4 asym per-head. Params-weighted.",
-   "source": "paper-config + repo RESULTS: /home/luofan/baselines/peers/atom/RESULTS.md §2 (its own bits formula, keeper=128 INT8, group-128, channel_group=2, --a_sym --w_sym, kv_cache INT4). [假设] activation scale dtype FP16; Atom fake-quant does not materialize them.",
+   "source": "paper-config + repo RESULTS: /home/luofan/baselines/peers/atom/RESULTS.md \u00a72 (its own bits formula, keeper=128 INT8, group-128, channel_group=2, --a_sym --w_sym, kv_cache INT4). [\u5047\u8bbe] activation scale dtype FP16; Atom fake-quant does not materialize them.",
    "discrepancy": "tracker '~4.3' -> per-model 4.17-4.27 (w)"
   },
   "quarot": {
@@ -916,7 +916,7 @@
     "8B": 4.0032
    },
    "formula": "w: INT4 GPTQ per-output-channel symmetric (group_size=-1, w_clip) = 4 + 16/K; a: INT4 per-token symmetric = 4 + 16/K; KV INT4 per-token sym. Params-weighted.",
-   "source": "as-run config /home/luofan/baselines/peers/quarot/RESULTS.md:44-59 (--rotate --w_bits 4 --a_bits 4 --k_bits 4 --v_bits 4 --w_clip). [假设] FP16 scale storage.",
+   "source": "as-run config /home/luofan/baselines/peers/quarot/RESULTS.md:44-59 (--rotate --w_bits 4 --a_bits 4 --k_bits 4 --v_bits 4 --w_clip). [\u5047\u8bbe] FP16 scale storage.",
    "discrepancy": "tracker '4.0' -> 4.003-4.006 (rounding-level only)"
   },
   "spinquant": {
@@ -937,7 +937,7 @@
     "8B": 4.0048
    },
    "formula": "w: INT4 GPTQ per-output-channel sym (w_groupsize=-1, w_clip) = 4 + 16/K; a: INT4 per-token ASYM (--a_asym: FP16 scale + zero) = 4 + 32/K; KV: INT4 asym per-head group=head_dim = 4 + 32/hd (4.5 @hd64, 4.25 @hd128). Params-weighted.",
-   "source": "as-run config /home/luofan/baselines/peers/spinquant/RESULTS.md:16-18, run_eval.sh:8-18. [假设] FP16 scale/zero storage.",
+   "source": "as-run config /home/luofan/baselines/peers/spinquant/RESULTS.md:16-18, run_eval.sh:8-18. [\u5047\u8bbe] FP16 scale/zero storage.",
    "discrepancy": "tracker '4.0' -> 4.003-4.012"
   },
   "gptq_w4a16": {
@@ -945,7 +945,7 @@
    "w_bits": 4.125,
    "a_bits": 16.0,
    "avg_bits": 10.0625,
-   "formula": "w: 4 (INT4, 8/int32 word in weight_packed) + 16/128 (BF16 weight_scale per group-128) = 4.125; symmetric — NO zero-point tensor in checkpoint. a: bf16 (W4A16 tier, separate Pareto marker).",
+   "formula": "w: 4 (INT4, 8/int32 word in weight_packed) + 16/128 (BF16 weight_scale per group-128) = 4.125; symmetric \u2014 NO zero-point tensor in checkpoint. a: bf16 (W4A16 tier, separate Pareto marker).",
    "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-gptq_w4a16 down_proj = weight_packed I32 (3072,1024) [=3072x8192 4-bit], weight_scale BF16 (3072,64) [g128]; suffixes contain no zero_point"
   },
   "awq_w4a16": {
@@ -961,7 +961,7 @@
    "w_bits": 8.004,
    "a_bits": 8.008,
    "avg_bits": 8.006,
-   "formula": "w: FP8 E4M3 + per-output-channel BF16 weight_scale = 8 + 16/K (measured 8.0044 at 3B); a: dynamic per-token FP8 = 8 + 32/K [假设 FP32 token scale; ckpt has no input_scale -> vLLM dynamic]",
+   "formula": "w: FP8 E4M3 + per-output-channel BF16 weight_scale = 8 + 16/K (measured 8.0044 at 3B); a: dynamic per-token FP8 = 8 + 32/K [\u5047\u8bbe FP32 token scale; ckpt has no input_scale -> vLLM dynamic]",
    "source": "measured from safetensors headers: unsloth--Llama-3.2-3B-fp8 (weight F8_E4M3 (3072,8192), weight_scale BF16 (3072,1)); quantized-linear bits/elem = 8.0044"
   },
   "bf16": {
@@ -5168,56 +5168,20 @@
    "reason": "not applicable: Llama-only artifacts"
   },
   {
-   "where": "competitors.nvfp4.qwen3-8b.c4",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-8b.mmlu",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-8b.zeroshot",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-14b.c4",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-14b.mmlu",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-14b.zeroshot",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-32b.c4",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-32b.mmlu",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
-   "where": "competitors.nvfp4.qwen3-32b.zeroshot",
-   "reason": "not measured in any committed doc/data file"
-  },
-  {
    "where": "competitors.micromix.llama3.2-1b.wiki",
-   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) \u2014 probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.c4",
-   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) \u2014 probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.mmlu",
-   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) \u2014 probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3.2-1b.zeroshot",
-   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) — probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
+   "reason": "not applicable: mixedgemm kernel rejects K=2048 (1B hidden) \u2014 probe 2026-11-26, docs/rd_newacc_backfill/micromix_llama3.2-1b_missing.json"
   },
   {
    "where": "competitors.micromix.llama3-70b.wiki",

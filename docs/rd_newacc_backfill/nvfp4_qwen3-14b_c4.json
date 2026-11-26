@@ -1,0 +1,45 @@
+{
+ "cell": "competitors.nvfp4.qwen3-14b.c4",
+ "value_c4": 12.404,
+ "wiki_repro": {
+  "measured": 8.8953,
+  "committed": 8.898,
+  "abs_diff": 0.0027,
+  "gate": "<0.05 PASS"
+ },
+ "protocol": {
+  "wiki": "wikitext-2-raw-v1 TEST, '\\n\\n'.join, non-overlapping 2048-token chunks, token-pooled exp(mean NLL) (committed scoreboard protocol) (vLLM prompt_logprobs, bench_vllm convention)",
+  "c4": "allenai/c4 en/c4-validation.00000-of-00008 validation, 256 windows x seqlen 2048, seed 0 (verbatim promix/eval/data.py:get_c4 eval protocol)"
+ },
+ "harness": "promix/scripts/rd_qwenmid_vllm_ppl.py \u2014 vLLM prompt_logprobs PPL on llm-compressor NVFP4 ckpt",
+ "hardware": "RTX PRO 6000 Blackwell (SM120, CUDA 13.0), container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-26",
+ "model": "/home/luofan/baselines/quant/Qwen3-14B-NVFP4",
+ "quant": "NVFP4 W4A4 (llm-compressor/modelopt ckpt, vLLM)",
+ "raw_server_path": "/home/luofan/accmatrix/backfill2/nv_qwen3_14b_nvfp4_ppl.json",
+ "raw": {
+  "meta": {
+   "model": "/home/luofan/baselines/quant/Qwen3-14B-NVFP4",
+   "gpu": "0",
+   "time": "2026-11-26 10:16:22",
+   "seqlen": 2048,
+   "c4_seed": 0
+  },
+  "wikitext": {
+   "ppl": 8.895293563030288,
+   "nll": -653169.5727129359,
+   "scored_tokens": 298862,
+   "chunks": 146,
+   "missing_logprob_slots": 0,
+   "seconds": 11.647398233413696
+  },
+  "c4": {
+   "ppl": 12.404043672725976,
+   "nll": -1319524.3782960104,
+   "scored_tokens": 524032,
+   "chunks": 256,
+   "missing_logprob_slots": 0,
+   "seconds": 21.19177484512329
+  }
+ }
+}
