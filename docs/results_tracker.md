@@ -257,3 +257,8 @@ ForgeKernel SM121 全链路跑通(harness在Mac+ssh评测, hw_kb/sm121 开树, S
 32B 双 KV 11/11(kv16 8.511→7.688, kv4 8.521→7.693, 单调, KV4代价≤0.01, r≥0.1 全程压 NVFP4 8.000)。
 终止条件盘点: 块1 曲线✅ 块2 serving(1B/3B/8B)✅ 块3 算子双平台✅ 对手表B闭环✅。
 遗留(明确另立项/可选): 70B/32B 下游、serving backlog(batch512/长ctx/Qwen)、M31 可选Qwen扩展、KDA Round11 空间。
+
+## 对手缺口补格收官(2026-11-26, docs/rd_newacc_backfill/)
+批次① C4@3B/8B 全补(重测与 10-30 提交值一致到小数点后3-4位=管线零漂移): SharQ 11.29/9.58, ARC 11.55/9.79, NVFP4 11.64/9.87(+1B 21.58 新), MicroMix 12.28/10.56, CoQuant 12.82/10.79; 排序与 wiki 同序。
+批次② 1B 下游: SharQ MMLU42.89/zs57.83, ARC 40.79/56.15, NVFP4 42.62/56.28, CoQuant 36.97/53.43; 全<bf16 锚, wiki gate 全过。
+坏格仅 MicroMix-1B(其 kernel 硬拒 K=2048, 实锤 missing)。dashboard_data/表B 已同步。
