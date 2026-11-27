@@ -284,3 +284,10 @@ GB10 gap: median 1.081→**1.039**, worst 1.360→**1.232**, r=1 列 1.116→1.0
 遗留(log residuals): 8B/Q8B gate_up M8192 低 r walk 探针、r=0 castfold 列 fk 变体、M4096 窗口。
 协调项: serve 产出器未发射 K_high pad(已守卫; ring512 KH%128==0 不触发, 现 serve 不受影响)。
 曲线: ours_gb10_uniform11_tuned_v3.json。
+
+## M33-ext 收官(2026-11-27, docs/motivation_3_3_ext/, 160行)
+naive 2-launch r-sweep(10点×8shape×2M, 口径 verbatim 复用 h2h 生产脚本, GPU7 独占):
+**Prefill M8192**: 全程拱在理想线性上 1.14-1.67×(最差恒在 r=1/16), r≥0.375 起即超纯 MXFP8; +online dense rotation(0.72ms, 单项≈fp4 GEMM 2.1×)后 qkv/o/gate_up 全面超 BF16。
+**Decode M128**: qkv/o_proj 每个内部 r 都同时超 MXFP8 和 BF16(+rotation 后 qkv 2.35× BF16) → 双 launch 税+在线旋转税双重必要性成立。
+四税@8B qkv r=0.125 M8192: mix2 0.568 / dense_rot 0.719 / gather 0.177 / quant_pack 0.143 (bf16 1.078, fp4 0.338, ideal 0.372)。
+如实注记: 8B gate_up M128 为唯一例外(N=28672 权重读主导, 不超 fp8/bf16)——Fig.5(b) 用 qkv/o_proj 立论; Gate1 计算受限点 ≤3% PASS, M128 整体快 10-25% 系 11-03 以来 stack 漂移(manifest 已审计)。
