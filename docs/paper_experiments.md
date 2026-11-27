@@ -80,6 +80,8 @@ seed0;PPL seqlen2048;lm-eval 0.4.5;硬件 RTX Pro 6000 SM120。driver = `rd_mmlu
 
 ## 块 2:端到端 serving —— 同栈 vLLM(QServe 式,2026-11-20 重定义)
 
+> **GB10 对照组**: Spark/SM121 的 serving 实验另见 `docs/paper_experiments_gb10_serving.md`(同协议, 十进制六点主网格, 含调优前后对比与跟踪表 D-GB10)。
+
 > 诚实对标 = **同一推理栈(vLLM 0.32, RTX Pro 6000 SM120)下真跑**。torch-only / 只测单 block /
 > 无 vLLM kernel 的对手**不进 serving**(他们的 headline 虚高,见 `quant_e2e_methodology_survey.md`),
 > 改用跨论文表(自报加速比)+ BOPs。
