@@ -315,3 +315,7 @@ MMLU 严格随 wiki 排序✅; 0-shot lim25 噪声±3.5pp 已注记; NVFP4-70B �
 **重要修复**: plugin.py 从未给 serving 接 FK kernel(只在 eval 生效)——已修复+nsys 路由证据; FK 收益=prefill 高 r -2~-3%(与 gap 1.08→1.028 定量自洽)。
 **方法论教训**: GB10 两次自发重启, 机器状态对 decode 影响 +20-64% ≫ kernel 效应——对比一律用同机 nofk 基线隔离; decode 指标实例级不稳定(±9-18%)按此口径对待。
 后续项: FK/spg 窗口表按 serving 合并形状重测。
+
+## P0 零卡时两项核对(2026-11-28)
+① **TPOT 增幅口径核准**: 旧 "+3.7/+1.5/+4.5%" 的来源锁定 = **QServe(1024/512) b256 TPOT**(实算 +3.8/+1.5/+4.5, 逐一吻合); decode-heavy b256 为 +3.9/+2.7/+9.4, b16 小批 +41-46%(launch-bound)。论文统一用 QServe b256 并标注 batch。experiment_results_report §3 已更正。
+② **ShareGPT 数据确认干净**: sgpt_*.json 16 份 = vLLM bench_serving 实测(2026-11-06 同 session, 512 req 全完成 0 失败, 同栈同协议)。3B/8B 汇总: NVFP4 > FP8 > AdaMix(r1/16≈r1/8>r1/4) > GPTQ/AWQ > BF16(req/s); AdaMix r=1/8: 3B 67.6 req/s(TTFT-med 1369ms/TPOT 15.4ms), 8B 46.4(2247/21.0)——比 BF16 +17%/+43% 吞吐, 略逊纯 NVFP4(符合混合精度定位)。可直接入论文 §6.4。
