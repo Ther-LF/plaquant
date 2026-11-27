@@ -1,0 +1,41 @@
+{
+  "task": "M33-ext naive 2-launch r-sweep + 4-tax white-box breakdown",
+  "spec": "docs/paper_motivation_3_3_ext_experiments.md",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "driver": "580.173.02",
+  "torch": "2.13.0+cu130",
+  "cuda": "13.0",
+  "commit": "dec551289a5bb21a394249eec620e15c7e960bc5",
+  "r_grid": [
+    0.0,
+    0.0625,
+    0.125,
+    0.25,
+    0.375,
+    0.5,
+    0.625,
+    0.75,
+    0.875,
+    1.0
+  ],
+  "k_rule": "K_high = round(r*K/32)*32 (endpoints exact); K_low = K - K_high",
+  "torchmixed2_impl": "explicit elementwise add `lo + hi` after two torch._scaled_mm_v2 launches (NVFP4 BlockWise1x16 e4m3 scales on K_low + MXFP8 BlockWise1x32 unit e8m0 scales on K_high), SWIZZLE_32_4_4 \u2014 imported verbatim from promix/eval/gemm_h2h_torchfp4.py (producer of docs/rd_buildup_data/h2h_naive.json). NOT beta=1 epilogue.",
+  "endpoints": "r=0 row records torchmixed2:=pure NVFP4; r=1 row records torchmixed2:=pure MXFP8",
+  "timing": "bench_cell from gemm_h2h_torchfp4.py: 400ms bf16 clock warm-spin, warmup=10 per fn, iters=50, candidates interleaved round-robin per iteration, CUDA events, median+min reported. NO explicit L2 flush \u2014 identical cache treatment to h2h_naive.json. (Task spec suggested warmup=20; warmup=10 kept deliberately to match h2h_naive.json exactly.)",
+  "activation": "x = randn(M,K) seed 1 fp32; last K/8 channels *3.0 (same hi-variance boost as h2h, applied at the fixed r=1/8 split for all r so the input tensor is identical across the sweep); GEMM paths time prequantized activations (GEMM-only), matching h2h_naive.json.",
+  "taxes": {
+    "online_dense_rot_ms": "BF16 (M,K)@(K,K) torch.mm (cuBLAS); qkv/o_proj/gate_up only, null for down",
+    "online_gather_ms": "xbf.index_select(1, randperm(K))",
+    "standalone_quant_pack_ms": "two independent qpf CUDA kernel launches: quant_pack_float_fp4 over K_low + quant_pack_float_fp8 over K_high (col_off slices of the same (M,K) bf16 buffer); r=0/r=1 endpoints: single full-K fp4/fp8 pack",
+    "online_hadamard_ms": "down only: matmul_hadU_cuda(xbf, had_K, K, fold_scale=True) (fast_hadamard_transform; 8B K=14336 -> had28 kron, 3B K=8192 pure WHT)"
+  },
+  "anti_circularity": "AdaMix fused kernel (fused_ms) NOT measured; standard/naive paths only",
+  "models": "8B,3B",
+  "Ms": [
+    8192,
+    128
+  ],
+  "native_fp4_exact": true,
+  "native_fp4_cosine": 0.9999985694885254,
+  "gate1_vs_h2h_naive": "r=0.125 cross-check vs docs/rd_buildup_data/h2h_naive.json (recorded 2026-11-03): M=8192 compute-bound points match within ~0-3%% on 8B qkv/o_proj/gate_up (bf16/fp4/mix2 all; worst single field +13%% on 8B down bf16, 3B gate_up bf16 +23%% - known hot-cell variance shapes). M=128 launch-bound points run uniformly 10-25%% FASTER than the Nov-03 snapshot across ALL paths including bf16, with mix2/fp4 ratios preserved within ~5%% -> uniform driver/clock/stack shift (torch now 2.13.0+cu130), not an implementation difference in the mixed path."
+}
