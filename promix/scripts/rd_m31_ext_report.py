@@ -221,6 +221,52 @@ def main():
         w("")
 
     out = os.path.join(EXT, "report.md")
+    w("## Findings (as-measured, incl. results running against the spec's "
+      "expectations)")
+    w("")
+    w("1. **DD (across) does NOT fix the cross-layer collapse.** On 3B it "
+      "tracks MA (across): wiki PPL 17.6/18.3/17.1/18.6 at r=0.02-0.08 and "
+      "14.8-17.8 at 0.1-0.5, all worse than pure NVFP4 (14.33). On 8B the "
+      "same pattern is milder (7.35-7.90 vs r=0 baseline 7.78, while "
+      "within-scope reaches 6.48-6.58). SS (across) remains the only "
+      "non-collapsing across criterion (3B 8.11-8.23; 8B 6.44-6.53).")
+    w("2. **DD (across) also loses on its own same-unit objective**: its "
+      "held-out act_mse_global is HIGHER than MA/SS (across) at every r "
+      "(e.g. 3B r=0.1: 3.30e-3 vs 2.73e-3), and DD (within) is likewise "
+      "worse than MA/SS (within). The spec's expectation (sec 6.4.1: DD "
+      "across significantly lower act_mse_global) is contradicted. Cause: "
+      "the per-channel DD score is measured independently on the ORIGINAL "
+      "block layout, so it ignores the dominant interaction - moving a "
+      "high-magnitude channel OUT of an NVFP4 block16 shrinks that block's "
+      "scale and reduces every remaining element's error. MA/SS target "
+      "exactly those scale-poisoning outlier channels and therefore "
+      "minimize the realized post-packing error better than the "
+      "format-aware but interaction-blind DD.")
+    w("3. **Critical-layer protection**: DD (across) gives "
+      "layers.1.mlp.down_proj 0 channels at every reported r (same as MA); "
+      "SS (across) consistently gives it exactly 32 channels - and that "
+      "single 32-channel difference separates collapse (MA/DD) from "
+      "stability (SS). All three across criteria starve the down_proj "
+      "projection type as a whole (<=0.2% share).")
+    w("4. **Densified cliff**: on 3B the within-scope targeted criteria "
+      "recover almost the entire NVFP4->MXFP8 PPL gap with the FIRST 2% of "
+      "channels (14.33 -> 8.22-8.27 at r=0.02); RND (within) is far behind "
+      "and high-variance in the cliff region (seed-mean 10.5-15.2 over "
+      "0.02-0.08). Same shape on 8B (7.78 -> 6.53-6.58 at r=0.02 vs RND "
+      "7.36-7.80).")
+    w("5. **act-MSE-optimal != PPL-optimal**: at r>=0.2 the across criteria "
+      "all have clearly lower act_mse_global than within (e.g. 3B r=0.5: "
+      "1.02-1.11e-3 vs 1.71-1.86e-3), yet MA/DD (across) are "
+      "catastrophically worse in PPL - allocation quality is NOT summarized "
+      "by the global activation-MSE objective alone; layer-coverage "
+      "constraints matter.")
+    w("6. **P2 (1B) not started**: the 3B/8B cliff region is fully resolved "
+      "with large dynamic range between RND / targeted-within / across at "
+      "r=0.02-0.08, so the optional larger-headroom model was unnecessary. "
+      "DD_out (optional diagnostic variant) was likewise not run; the main "
+      "DD criterion already shows the failure mode is packing interaction, "
+      "not output weighting.")
+    w("")
     txt = "\n".join(lines) + "\n"
     open(out, "w").write(txt)
     print(txt)

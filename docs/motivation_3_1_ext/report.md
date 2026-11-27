@@ -19,7 +19,7 @@ Gate 2 over 30 (model, r) groups (raw-representation runs, legacy+ext): **PASS**
 
 ## Gate 3 — no NaN / completeness
 
-- ext runs: 96; with NaN layer errors: 0 
+- ext runs: 120; with NaN layer errors: 0 
 - non-ok ext runs: 0 
 - failures.csv rows: 0
 Gate 3: **PASS**
@@ -70,22 +70,22 @@ Endpoints: pure NVFP4 (r=0) wiki 7.7818, c4 10.5596, act_mse 0.00436966; pure MX
 
 | r | metric | rnd within | ma within | ss within | dd within | ma across | ss across | dd across |
 |---|---|---|---|---|---|---|---|---|
-| 0.02 | wiki | 7.4067 (n=3) | 6.5361 | - | 6.5808 | - | - | 7.4313 |
-| 0.02 | c4 | 10.5342 (n=3) | 9.5493 | - | 9.5887 | - | - | 10.3204 |
-| 0.02 | act_mse | 4.278e-03 (n=3) | 3.346e-03 | - | 3.904e-03 | - | - | 3.779e-03 |
-| 0.02 | emean | 6.987e-03 (n=3) | 5.998e-03 | - | 6.597e-03 | - | - | 6.556e-03 |
-| 0.04 | wiki | 7.7356 (n=3) | 6.5187 | - | 6.5662 | - | - | 7.6789 |
-| 0.04 | c4 | 11.1923 (n=3) | 9.4997 | - | 9.5773 | - | - | 10.5957 |
-| 0.04 | act_mse | 4.217e-03 (n=3) | 3.185e-03 | - | 3.776e-03 | - | - | 3.563e-03 |
-| 0.04 | emean | 6.853e-03 (n=3) | 5.718e-03 | - | 6.381e-03 | - | - | 6.304e-03 |
-| 0.06 | wiki | 7.3933 (n=2) | 6.4889 | - | 6.5556 | - | - | 7.3506 |
-| 0.06 | c4 | 10.9842 (n=2) | 9.4720 | - | 9.5516 | - | - | 10.6336 |
-| 0.06 | act_mse | 4.122e-03 (n=2) | 3.027e-03 | - | 3.606e-03 | - | - | 3.300e-03 |
-| 0.06 | emean | 6.679e-03 (n=2) | 5.451e-03 | - | 6.110e-03 | - | - | 6.004e-03 |
-| 0.08 | wiki | 7.3933 (n=2) | - | - | 6.5358 | - | - | 7.6276 |
-| 0.08 | c4 | 10.5356 (n=2) | - | - | 9.5335 | - | - | 10.9205 |
-| 0.08 | act_mse | 4.056e-03 (n=2) | - | - | 3.487e-03 | - | - | 3.115e-03 |
-| 0.08 | emean | 6.550e-03 (n=2) | - | - | 5.910e-03 | - | - | 5.793e-03 |
+| 0.02 | wiki | 7.4067 (n=3) | 6.5361 | 6.5280 | 6.5808 | 7.2783 | 6.5333 | 7.4313 |
+| 0.02 | c4 | 10.5342 (n=3) | 9.5493 | 9.5353 | 9.5887 | 10.1739 | 9.5148 | 10.3204 |
+| 0.02 | act_mse | 4.278e-03 (n=3) | 3.346e-03 | 3.346e-03 | 3.904e-03 | 3.198e-03 | 3.198e-03 | 3.779e-03 |
+| 0.02 | emean | 6.987e-03 (n=3) | 5.998e-03 | 5.997e-03 | 6.597e-03 | 6.007e-03 | 5.997e-03 | 6.556e-03 |
+| 0.04 | wiki | 7.7356 (n=3) | 6.5187 | 6.5265 | 6.5662 | 7.0490 | 6.5145 | 7.6789 |
+| 0.04 | c4 | 11.1923 (n=3) | 9.4997 | 9.5108 | 9.5773 | 10.2483 | 9.4964 | 10.5957 |
+| 0.04 | act_mse | 4.217e-03 (n=3) | 3.185e-03 | 3.184e-03 | 3.776e-03 | 3.005e-03 | 3.004e-03 | 3.563e-03 |
+| 0.04 | emean | 6.853e-03 (n=3) | 5.718e-03 | 5.717e-03 | 6.381e-03 | 5.766e-03 | 5.755e-03 | 6.304e-03 |
+| 0.06 | wiki | 7.7967 (n=3) | 6.4889 | 6.4994 | 6.5556 | 7.0257 | 6.4944 | 7.3506 |
+| 0.06 | c4 | 11.4206 (n=3) | 9.4720 | 9.4715 | 9.5516 | 10.1241 | 9.4633 | 10.6336 |
+| 0.06 | act_mse | 4.125e-03 (n=3) | 3.027e-03 | 3.026e-03 | 3.606e-03 | 2.848e-03 | 2.847e-03 | 3.300e-03 |
+| 0.06 | emean | 6.681e-03 (n=3) | 5.451e-03 | 5.448e-03 | 6.110e-03 | 5.560e-03 | 5.543e-03 | 6.004e-03 |
+| 0.08 | wiki | 7.3619 (n=3) | 6.4909 | 6.4776 | 6.5358 | 7.1367 | 6.4913 | 7.6276 |
+| 0.08 | c4 | 10.6237 (n=3) | 9.4475 | 9.4447 | 9.5335 | 10.2875 | 9.4592 | 10.9205 |
+| 0.08 | act_mse | 4.061e-03 (n=3) | 2.949e-03 | 2.949e-03 | 3.487e-03 | 2.744e-03 | 2.744e-03 | 3.115e-03 |
+| 0.08 | emean | 6.551e-03 (n=3) | 5.289e-03 | 5.287e-03 | 5.910e-03 | 5.423e-03 | 5.406e-03 | 5.793e-03 |
 | 0.1 | wiki | 7.2831 (n=3) | 6.4777 | 6.4804 | 6.5086 | 7.3245 | 6.4841 | 7.9006 |
 | 0.1 | c4 | 11.1366 (n=3) | 9.4294 | 9.4312 | 9.4944 | 10.4024 | 9.4244 | 10.8296 |
 | 0.1 | act_mse | 3.966e-03 (n=3) | 2.853e-03 | 2.852e-03 | 3.326e-03 | 2.622e-03 | 2.621e-03 | 2.884e-03 |
@@ -127,7 +127,11 @@ FP8 channel share given to each projection type under the ACROSS scope (fraction
 
 | r | strategy | q | k | v | gate | up | down | layers.1.mlp.down_proj h/d |
 |---|---|---|---|---|---|---|---|---|
+| 0.02 | ma (ext) | 0.038 | 0.038 | 0.038 | 0.036 | 0.035 | 0.001 | 0/14336 |
+| 0.02 | ss (ext) | 0.038 | 0.038 | 0.038 | 0.035 | 0.035 | 0.001 | 32/14336 |
 | 0.02 | dd (ext) | 0.037 | 0.037 | 0.037 | 0.038 | 0.038 | 0.000 | 0/14336 |
+| 0.08 | ma (ext) | 0.138 | 0.138 | 0.138 | 0.128 | 0.127 | 0.001 | 0/14336 |
+| 0.08 | ss (ext) | 0.137 | 0.137 | 0.137 | 0.127 | 0.127 | 0.001 | 32/14336 |
 | 0.08 | dd (ext) | 0.139 | 0.139 | 0.139 | 0.127 | 0.127 | 0.000 | 0/14336 |
 | 0.1 | ma (legacy) | 0.177 | 0.177 | 0.177 | 0.163 | 0.163 | 0.001 | 0/14336 |
 | 0.1 | ss (legacy) | 0.176 | 0.176 | 0.176 | 0.163 | 0.163 | 0.001 | 32/14336 |
@@ -138,4 +142,13 @@ FP8 channel share given to each projection type under the ACROSS scope (fraction
 | 0.5 | ma (legacy) | 0.882 | 0.882 | 0.882 | 0.799 | 0.799 | 0.001 | 0/14336 |
 | 0.5 | ss (legacy) | 0.885 | 0.885 | 0.885 | 0.795 | 0.795 | 0.002 | 32/14336 |
 | 0.5 | dd (ext) | 0.876 | 0.876 | 0.876 | 0.810 | 0.810 | 0.001 | 0/14336 |
+
+## Findings (as-measured, incl. results running against the spec's expectations)
+
+1. **DD (across) does NOT fix the cross-layer collapse.** On 3B it tracks MA (across): wiki PPL 17.6/18.3/17.1/18.6 at r=0.02-0.08 and 14.8-17.8 at 0.1-0.5, all worse than pure NVFP4 (14.33). On 8B the same pattern is milder (7.35-7.90 vs r=0 baseline 7.78, while within-scope reaches 6.48-6.58). SS (across) remains the only non-collapsing across criterion (3B 8.11-8.23; 8B 6.44-6.53).
+2. **DD (across) also loses on its own same-unit objective**: its held-out act_mse_global is HIGHER than MA/SS (across) at every r (e.g. 3B r=0.1: 3.30e-3 vs 2.73e-3), and DD (within) is likewise worse than MA/SS (within). The spec's expectation (sec 6.4.1: DD across significantly lower act_mse_global) is contradicted. Cause: the per-channel DD score is measured independently on the ORIGINAL block layout, so it ignores the dominant interaction - moving a high-magnitude channel OUT of an NVFP4 block16 shrinks that block's scale and reduces every remaining element's error. MA/SS target exactly those scale-poisoning outlier channels and therefore minimize the realized post-packing error better than the format-aware but interaction-blind DD.
+3. **Critical-layer protection**: DD (across) gives layers.1.mlp.down_proj 0 channels at every reported r (same as MA); SS (across) consistently gives it exactly 32 channels - and that single 32-channel difference separates collapse (MA/DD) from stability (SS). All three across criteria starve the down_proj projection type as a whole (<=0.2% share).
+4. **Densified cliff**: on 3B the within-scope targeted criteria recover almost the entire NVFP4->MXFP8 PPL gap with the FIRST 2% of channels (14.33 -> 8.22-8.27 at r=0.02); RND (within) is far behind and high-variance in the cliff region (seed-mean 10.5-15.2 over 0.02-0.08). Same shape on 8B (7.78 -> 6.53-6.58 at r=0.02 vs RND 7.36-7.80).
+5. **act-MSE-optimal != PPL-optimal**: at r>=0.2 the across criteria all have clearly lower act_mse_global than within (e.g. 3B r=0.5: 1.02-1.11e-3 vs 1.71-1.86e-3), yet MA/DD (across) are catastrophically worse in PPL - allocation quality is NOT summarized by the global activation-MSE objective alone; layer-coverage constraints matter.
+6. **P2 (1B) not started**: the 3B/8B cliff region is fully resolved with large dynamic range between RND / targeted-within / across at r=0.02-0.08, so the optional larger-headroom model was unnecessary. DD_out (optional diagnostic variant) was likewise not run; the main DD criterion already shows the failure mode is packing interaction, not output weighting.
 

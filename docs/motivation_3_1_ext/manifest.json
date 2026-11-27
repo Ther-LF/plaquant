@@ -1,0 +1,47 @@
+{
+  "task": "motivation 3.1 ext (M31-ext)",
+  "date": "2026-11-27",
+  "spec": "docs/paper_motivation_3_1_ext_experiments.md",
+  "code_commit": "0fe09508bc6b0298a756560b0f9ba6b82548d7db",
+  "legacy_manifest_commit": "d7e5164242ed9540a69ebb9b11cf48f8cd5408b9",
+  "frozen_protocol": "inherited verbatim from docs/motivation_3_1/manifest.json (models, eligible set, o_proj/lm_head/KV fp16, raw representation, NVFP4 blk16 two-level E4M3 act-MSE steps3-fast / MXFP8 blk32 E8M0 weight-A2, GPTQ nsamples=128 percdamp=0.01 w_clip act_order=false, fit 512x2048 seed0 / scores first 2 windows, held-out 32x2048 seed31001, quota F_l and packing [unselected asc | selected asc])",
+  "grid15": [
+    0.0,
+    0.02,
+    0.04,
+    0.06,
+    0.08,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    1.0
+  ],
+  "dd_score": "s_dd[l,j] = mean_t[(X-nvfp4(X))^2 - (X-mxfp8(X))^2] on the 4096-token fit prefix, original (unpermuted) channel layout, deployment fake_quantize_nvfp4/mxfp8, float64 accumulation, signed scores kept (no clamping)",
+  "dd_negative_fraction": {
+    "3b": {
+      "overall": 8.036927406832298e-05,
+      "per_module_max": 0.0009765625
+    },
+    "8b": {
+      "overall": 9.604061351102941e-05,
+      "per_module_max": 0.0018833705357142857
+    }
+  },
+  "act_metrics": "held-out act_SSE/act_ENERGY/act_MSE/act_rel_err per layer on the final packed quant path; run-level act_mse_global = sum act_SSE / sum n_tokens*d; act_sse_total; out_rel_err_weighted = sum SSE / sum ENERGY",
+  "backfill": "act_mse_backfill.csv (+_layers.csv): legacy MA/SS within+across and RND within s0/1/2 on the 11-pt coarse grid, masks rebuilt deterministically from frozen legacy scores, no GPTQ/PPL; same 32 held-out windows",
+  "gate1": "endpoint reruns (ss within r=0/1, 3b+8b) bit-exact vs legacy (all deltas 0.0 <= 1e-4): PASS",
+  "gate2": "H identical across strategies and scopes per (model,r), legacy raw + ext: PASS (see report.md)",
+  "gate3": "120 ext runs, 0 failures, 0 NaN layer errors: PASS",
+  "scores_files": {
+    "3b_dd_raw.pt": "439a56bce1f466d1",
+    "8b_dd_raw.pt": "450a9df8980fa25b"
+  },
+  "n_ext_runs": 120,
+  "isolation": "docs/motivation_3_1/ untouched (read-only reuse of scores + run jsons for merge)"
+}
