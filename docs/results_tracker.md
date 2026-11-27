@@ -298,3 +298,9 @@ median gap 1.039→**1.028**, worst 1.232→1.209, r=0 列 1.045→**1.011**(1B 
 **R16**: walk 窗口推广 +7 键(8B/Q8B/Q14B gate_up M8192 等 1.03-1.16x)。
 **R17 ForgeKernel gen-2**: 3 家族 run——F3(r=0 castfold) 达标并合入 **fk_spg_ext.cu**(独立重推出 gen-1 smem 暂存结构+单相 4-stage mainloop; SF 布局一个 index remap 直吃 physSF, byte-exact); F1/F2 被上游 API ToS 拒答挡住(任务保留等窗口)。hw_kb/sm121 +2 条 certified 机制。
 **剩余肉判断(NCU 证据)**: 中段列与大方阵已到硬件墙; 真肉= (a)MX-dominant down 家族(需新 mainloop, ~1.1-1.25x, 含 70B 尾 1.209) (b)A 簇 fk 1.15-1.19 (c)Q14B qkvo walk 候选; 全落地约 median ~1.01。
+
+## 70B 下游全线收官(2026-11-27, offload lm-eval 通路, docs/rd_newacc_backfill/)
+通路: bf16/fake-quant=双卡 parallelize(~6min/MMLU); 量化ckpt=llm-compressor现做+/dev/shm+vllm单卡; SharQ/ARC packed 40-45GB 单卡驻留(~30min/方法, "4-8h"预估退役); ProMix={58,88}map+bs1(ActQuantWrapper buffer 1.22×坑)。8B 校验 Δ≤0.12pp。
+数值(lim25): bf16 80.63/76.67 · FP8 80.35/78.0 · AWQ 79.79/75.3 · GPTQ 79.09/78.0 · SharQ 78.53/78.0 · ARC 77.47/71.3 · **ProMix r=1/8 77.33/78.0(表A欠格已补, wiki gate digit-exact)**。
+MMLU 严格随 wiki 排序✅; 0-shot lim25 噪声±3.5pp 已注记; NVFP4-70B 旧行为 FULL 协议 0-shot 不可直比(caveat 入档)。
+**related work 覆盖矩阵至此全部收官**: 可跑的全测, 不可跑的全定性。
