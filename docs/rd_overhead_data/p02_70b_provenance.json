@@ -1,0 +1,41 @@
+{
+  "70b_stage1_basis": {
+    "source_log": "ICT90:/home/luofan/rdscale/70b_basis.log",
+    "model": "/home/luofan/latches/models/Meta-Llama-3-70B-Instruct",
+    "method": "promix.quantize.basis, FP32 CPU-resident model, layer-by-layer streamed to 1 GPU (built-in layer offload)",
+    "nsamples": 512,
+    "seqlen": 2048,
+    "calib": "wikitext",
+    "covariance_collect_s": 57728,
+    "covariance_tqdm": "80/80 [16:02:08, ~717 s/layer]",
+    "eigendecomp": "per-layer basis 80/80 in ~5 s + 2x 30-chunk eig ~46 s each",
+    "total_wall_s_approx": 58000,
+    "file_mtime": "2026-11-04 02:36 UTC"
+  },
+  "70b_stage2_deltaD_alloc": {
+    "source_log": "ICT90:/home/luofan/rdscale/70b_up2.log (point 70b_ring512_measured_up2_g512, the shipping E2 recipe)",
+    "line": "ALLOC total_rings=10880 sel=1360 (frac=0.1250) (1763s)",
+    "includes": "build_base (ring512 substrate, offload) + deltaD collection 4096 tokens + allocation math",
+    "wall_s": 1763,
+    "crosscheck": "70b_ring512_measured.log: 1795s"
+  },
+  "70b_stage3_gptq_scales": {
+    "source_log": "ICT90:/home/luofan/rdscale/70b_up2.log",
+    "line": "BUILT avg_fp8=0.1250 (778240/6225920 ch) (10509s)",
+    "recipe": {
+      "gptq_nsamples": 512,
+      "percdamp": 0.01,
+      "act_mse_steps": 3,
+      "act_mse_steps_up": 2,
+      "weight_mse_steps": 3
+    },
+    "includes": "model load (30 shards ~114 s) + RMSNorm fold + rotation (80 layers, 22:53) + frozen-scale GPTQ + two-level scale + weight/act-MSE, CPU-resident layer offload",
+    "wall_s": 10509,
+    "crosscheck": "densesweep acc_70b_r0.10.log BUILT 10520s (same recipe, r=0.10)"
+  },
+  "70b_stage4_pack_export": {
+    "status": "not run (70B never exported: vLLM plugin is single-GPU, no TP; disk-blocked, see common.sh 70b lane)",
+    "estimate": "GPU pack throughput from 8B (12.4 s / 6.98e9 weights) scales to ~2 min GPU-side for 68.5e9 weights; offload + ~43 GB checkpoint write dominates, ~5-10 min total (estimate, not measured)"
+  },
+  "offload_note": "All 70B stages run with PROMIX_LOAD_DEVICE=cpu (CPU-resident weights, per-layer GPU streaming), single RTX PRO 6000."
+}
