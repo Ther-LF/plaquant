@@ -31,6 +31,21 @@ Subcommands:
   run       — one (model, strategy, scope, r, seed) point
   alloc     — dump the full allocation (stable channel ids) for one point
   aggregate — scan data/*.json -> runs.csv / layer_errors.csv / allocations.jsonl
+
+M31-ext (docs/paper_motivation_3_1_ext_experiments.md): this file now runs in
+EXTENSION mode — all new outputs go to docs/motivation_3_1_ext/ and the legacy
+docs/motivation_3_1/ tree is READ-ONLY (scores + merge inputs). Additions:
+
+  DD   format-aware per-channel score: mean over fit tokens of
+       (X - nvfp4(X))^2 - (X - mxfp8(X))^2, float64 accumulation, raw rep,
+       signed scores kept (negative fraction recorded for diagnostics).
+  DD_OUT (optional diagnostic) = DD * mean_j ||W[:,j]||^2 (output-MSE proxy).
+  act_* metrics: per-layer held-out activation fake-quant error on the final
+       packed layout (act_SSE/act_ENERGY/act_MSE/act_rel_err) + run-level
+       act_mse_global / act_sse_total / out_rel_err_weighted.
+  backfill — recompute act_* for legacy M31 coarse-grid allocations from the
+       frozen scores (no GPTQ, no PPL) -> act_mse_backfill*.csv
+  merge — legacy + ext run jsons -> merged_runs.csv / merged_layer_errors.csv
 """
 import argparse
 import glob
@@ -67,7 +82,10 @@ from promix.quantize.quant_utils import (
 )
 
 ELIGIBLE = ("q_proj", "k_proj", "v_proj", "gate_proj", "up_proj", "down_proj")
-OUT_DIR = os.path.join(REPO, "docs", "motivation_3_1")
+LEGACY_OUT = os.path.join(REPO, "docs", "motivation_3_1")        # READ-ONLY
+LEGACY_DATA = os.path.join(LEGACY_OUT, "data")
+LEGACY_SCORES = os.path.join(LEGACY_OUT, "scores")
+OUT_DIR = os.path.join(REPO, "docs", "motivation_3_1_ext")       # all new output
 DATA_DIR = os.path.join(OUT_DIR, "data")
 SCORES_DIR = os.path.join(OUT_DIR, "scores")
 NVFP4_BLK, MXFP8_BLK = 16, 32
@@ -212,10 +230,111 @@ def collect_scores(mk, rep, max_tokens=SCORE_TOKENS):
 
 
 def load_scores(mk, rep):
-    path = os.path.join(SCORES_DIR, f"{mk}_{rep}.pt")
-    if not os.path.exists(path):
-        collect_scores(mk, rep)
-    return torch.load(path, weights_only=False)
+    # legacy M31 scores are the frozen reference; reuse them read-only.
+    for d in (LEGACY_SCORES, SCORES_DIR):
+        p = os.path.join(d, f"{mk}_{rep}.pt")
+        if os.path.exists(p):
+            return torch.load(p, weights_only=False)
+    collect_scores(mk, rep)
+    return torch.load(os.path.join(SCORES_DIR, f"{mk}_{rep}.pt"),
+                      weights_only=False)
+
+
+@torch.no_grad()
+def collect_dd_scores(mk, max_tokens=SCORE_TOKENS):
+    """DD fit statistics (M31-ext section 3.1): per-channel float64 sums of
+    (X - nvfp4(X))^2 and (X - mxfp8(X))^2 over the same first-2-fit-window
+    4096 tokens as SS/MA, on the raw representation and the ORIGINAL channel
+    layout (no permutation). Also stores per-column mean squared weight norm
+    for the optional DD_OUT variant."""
+    os.makedirs(SCORES_DIR, exist_ok=True)
+    path = os.path.join(SCORES_DIR, f"{mk}_dd_raw.pt")
+    if os.path.exists(path):
+        print(f"[collect_dd] exists: {path}")
+        return path
+    model, cfg = build_float_model(mk, "raw")
+    model.to(DEV).eval()
+    tok = get_tokenizer(cfg)
+    nwin = math.ceil(max_tokens / 2048)
+    calib = get_wikitext2(nsamples=nwin, seed=cfg["calibration"].get("seed", 0),
+                          seqlen=2048, tokenizer=tok, eval_mode=False)
+    wrappers = eligible_wrappers(model)
+    stats, handles = {}, []
+
+    def mk_hook(name):
+        def hook(_m, inp):
+            x = inp[0].reshape(-1, inp[0].shape[-1])
+            st = stats.get(name)
+            if st is None:
+                d = x.shape[1]
+                st = dict(n=0, d=d,
+                          e4=torch.zeros(d, dtype=torch.float64),
+                          e8=torch.zeros(d, dtype=torch.float64))
+                stats[name] = st
+            take = min(x.shape[0], max_tokens - st["n"])
+            if take <= 0:
+                return
+            x = x[:take]
+            x64 = x.to(torch.float64)
+            xq4 = fake_quantize_nvfp4(x).to(torch.float64)
+            xq8 = fake_quantize_mxfp8(x).to(torch.float64)
+            st["e4"] += (x64 - xq4).pow(2).sum(0).cpu()
+            st["e8"] += (x64 - xq8).pow(2).sum(0).cpu()
+            st["n"] += take
+        return hook
+
+    module_order = list(wrappers.keys())
+    for name in module_order:
+        handles.append(wrappers[name].module.register_forward_pre_hook(mk_hook(name)))
+    for inp, _ in calib:
+        model(inp.to(DEV))
+    for h in handles:
+        h.remove()
+    assert all(stats[n]["n"] == max_tokens for n in module_order), \
+        {n: stats[n]["n"] for n in module_order}
+    neg = {}
+    for name in module_order:
+        st = stats[name]
+        W = wrappers[name].module.weight.data
+        st["wcol_sq_mean"] = (W.to(torch.float64).pow(2).sum(0) / W.shape[0]).cpu()
+        s = (st["e4"] - st["e8"]) / st["n"]
+        neg[name] = float((s < 0).double().mean())
+    meta = dict(model=mk, representation="raw", max_tokens=max_tokens,
+                nwindows=nwin, fit_seed=cfg["calibration"].get("seed", 0),
+                fit_nsamples=FIT_NSAMPLES, model_name=cfg["model"]["name"],
+                neg_fraction_per_module=neg,
+                neg_fraction_overall=sum(
+                    float(((stats[n]["e4"] - stats[n]["e8"]) < 0).sum())
+                    for n in module_order) / sum(stats[n]["d"] for n in module_order),
+                note="e4/e8 are float64 per-channel sums of squared activation "
+                     "fake-quant error (nvfp4 blk16 / mxfp8 blk32, deployment "
+                     "fake_quantize_* on the original layout); dd = (e4-e8)/n, "
+                     "signed scores kept; wcol_sq_mean = ||W[:,j]||^2 / m for "
+                     "the optional dd_out variant")
+    torch.save(dict(meta=meta, module_order=module_order, stats=stats), path)
+    print(f"[collect_dd] wrote {path} ({len(module_order)} modules) "
+          f"neg_overall={meta['neg_fraction_overall']:.4%}")
+    del model
+    cleanup_memory()
+    return path
+
+
+def load_scores_for(mk, strategy):
+    """Scores bundle for compute_alloc; DD stats are grafted onto the frozen
+    raw bundle (same module_order / d / n layout)."""
+    base = load_scores(mk, rep_for(strategy))
+    if strategy in ("dd", "dd_out"):
+        ddp = os.path.join(SCORES_DIR, f"{mk}_dd_raw.pt")
+        if not os.path.exists(ddp):
+            collect_dd_scores(mk)
+        dd = torch.load(ddp, weights_only=False)
+        assert dd["module_order"] == base["module_order"]
+        for n in base["module_order"]:
+            st, ds = base["stats"][n], dd["stats"][n]
+            assert st["d"] == ds["d"] and ds["n"] == st["n"], (n, ds["n"], st["n"])
+            st["dd_e4"], st["dd_e8"] = ds["e4"], ds["e8"]
+            st["wcol_sq_mean"] = ds["wcol_sq_mean"]
+    return base
 
 
 def module_scores(strategy, st, mk=None, name=None, seed=0):
@@ -227,6 +346,10 @@ def module_scores(strategy, st, mk=None, name=None, seed=0):
     if strategy == "av":
         mean = st["s1"] / n
         return (st["s2"] / n - mean * mean).clamp_min(0.0)
+    if strategy == "dd":
+        return (st["dd_e4"] - st["dd_e8"]) / n
+    if strategy == "dd_out":
+        return ((st["dd_e4"] - st["dd_e8"]) / n) * st["wcol_sq_mean"]
     if strategy == "rnd":
         d = st["d"]
         h = int(hashlib.md5(f"m31:{mk}:{name}:seed{seed}".encode()).hexdigest()[:8], 16)
@@ -492,7 +615,10 @@ def layer_errors(fmodel, qmodel, cfg, tok, fp16_control=False):
     fmodel.to(DEV).eval()
     fw = eligible_wrappers(fmodel)
     qw = eligible_wrappers(qmodel) if qmodel is not None else None
-    acc = {n: dict(sse=0.0, energy=0.0, n_tokens=0, out=fw[n].module.weight.shape[0])
+    acc = {n: dict(sse=0.0, energy=0.0, n_tokens=0,
+                   act_sse=0.0, act_energy=0.0,
+                   d=fw[n].module.weight.shape[1],
+                   out=fw[n].module.weight.shape[0])
            for n in fw}
     handles = []
 
@@ -523,6 +649,12 @@ def layer_errors(fmodel, qmodel, cfg, tok, fp16_control=False):
                     qz.free()
                 else:
                     xq = xc
+                # M31-ext 5.1: activation fake-quant error on the final packed
+                # layout (permutation-invariant SSE/ENERGY), float64.
+                a_ = acc[name]
+                a_["act_sse"] += float(
+                    (xc.to(torch.float64) - xq.to(torch.float64)).pow(2).sum())
+                a_["act_energy"] += float(x.to(torch.float64).pow(2).sum())
                 Wq = wq.module.weight
                 Yh = xq.float() @ Wq.float().t()
                 if wq.module.bias is not None:
@@ -543,12 +675,17 @@ def layer_errors(fmodel, qmodel, cfg, tok, fp16_control=False):
     out = {}
     for name, a in acc.items():
         nel = a["n_tokens"] * a["out"]
+        ain = a["n_tokens"] * a["d"]
         out[name] = dict(
             projection_type=name.split(".")[-1],
             n_tokens=a["n_tokens"], n_output_elements=nel,
             SSE=a["sse"], ENERGY=a["energy"],
             MSE=a["sse"] / nel,
-            relative_squared_error=a["sse"] / (a["energy"] + EPS))
+            relative_squared_error=a["sse"] / (a["energy"] + EPS),
+            d=a["d"], n_input_elements=ain,
+            act_SSE=a["act_sse"], act_ENERGY=a["act_energy"],
+            act_MSE=a["act_sse"] / ain,
+            act_rel_err=a["act_sse"] / (a["act_energy"] + EPS))
     return out, offs
 
 
@@ -616,7 +753,7 @@ def cmd_run(args):
     t_start = time.time()
     ptqmod.init_distributed_for_ptq_main_if_needed()
     transformers.set_seed(0)
-    scores = load_scores(mk, rep)
+    scores = load_scores_for(mk, strat)
     alloc, H, total, r_actual = compute_alloc(mk, strat, scope, args.ratio,
                                               seed, scores)
     ahash = alloc_hash(rep, alloc)
@@ -637,6 +774,9 @@ def cmd_run(args):
                     layer_errors=phys["layer_errors"],
                     error_mean_layers=phys["error_mean_layers"],
                     error_std_layers=phys["error_std_layers"],
+                    act_mse_global=phys.get("act_mse_global"),
+                    act_sse_total=phys.get("act_sse_total"),
+                    out_rel_err_weighted=phys.get("out_rel_err_weighted"),
                     bytes=phys["bytes"], heldout_offsets=phys["heldout_offsets"],
                     seconds=round(time.time() - t_start, 1))
         json.dump(base, open(run_path(rid), "w"), indent=1)
@@ -672,8 +812,15 @@ def cmd_run(args):
     qmodel.to(DEV)
     errs, offs = layer_errors(fmodel, qmodel, cfg, tok)
     emean, estd = layer_error_stats(errs)
+    act_sse_total = sum(v["act_SSE"] for v in errs.values())
+    act_den = sum(v["n_input_elements"] for v in errs.values())
     base.update(layer_errors=errs, error_mean_layers=emean,
-                error_std_layers=estd, heldout_offsets=offs)
+                error_std_layers=estd, heldout_offsets=offs,
+                act_sse_total=act_sse_total,
+                act_mse_global=act_sse_total / act_den,
+                out_rel_err_weighted=(
+                    sum(v["SSE"] for v in errs.values())
+                    / (sum(v["ENERGY"] for v in errs.values()) + EPS)))
     del fmodel
     cleanup_memory()
     t_err = time.time() - t0
@@ -697,7 +844,8 @@ def cmd_run(args):
     json.dump(base, open(run_path(rid), "w"), indent=1)
     print(f"M31_RESULT {rid} wiki={base['wiki']['ppl']:.4f} "
           f"c4={base['c4']['ppl']:.4f} r_act={r_actual:.4f} "
-          f"E_mean={emean:.6g} E_std={estd:.6g} nan={len(nan_layers)}")
+          f"E_mean={emean:.6g} E_std={estd:.6g} "
+          f"act_mse={base['act_mse_global']:.6g} nan={len(nan_layers)}")
     print("M31_DONE")
 
 
@@ -839,7 +987,7 @@ def cmd_selfcheck(args):
 # alloc dump (audit: reconstruct full stable channel ids for any point)
 # ---------------------------------------------------------------------------
 def cmd_alloc(args):
-    scores = load_scores(args.model, rep_for(args.strategy))
+    scores = load_scores_for(args.model, args.strategy)
     alloc, H, total, r_actual = compute_alloc(
         args.model, args.strategy, args.scope, args.ratio,
         args.assignment_seed, scores)
@@ -860,21 +1008,31 @@ def cmd_alloc(args):
 # ---------------------------------------------------------------------------
 # aggregate
 # ---------------------------------------------------------------------------
-def cmd_aggregate(_args):
-    runs, lerr, allo = [], [], []
-    for p in sorted(glob.glob(os.path.join(DATA_DIR, "*.json"))):
+RUNS_HEADER = ("model,strategy,scope,representation,target_ratio,actual_ratio,"
+               "seed,H,total_channels,weight_bytes,scale_bytes,padding_bytes,"
+               "metadata_bytes,wiki_ppl,c4_ppl,error_mean_layers,"
+               "error_std_layers,act_mse_global,act_sse_total,"
+               "out_rel_err_weighted,status,run_id\n")
+LERR_HEADER = ("run_id,module_id,projection_type,n_tokens,n_output_elements,"
+               "SSE,ENERGY,MSE,relative_squared_error,"
+               "act_SSE,act_ENERGY,act_MSE,act_rel_err\n")
+
+
+def _load_runs(data_dir):
+    runs = []
+    for p in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
         try:
             d = json.load(open(p))
         except Exception:
             continue
-        if "run_id" not in d:
-            continue
-        runs.append(d)
-    with open(os.path.join(OUT_DIR, "runs.csv"), "w") as f:
-        f.write("model,strategy,scope,representation,target_ratio,actual_ratio,"
-                "seed,H,total_channels,weight_bytes,scale_bytes,padding_bytes,"
-                "metadata_bytes,wiki_ppl,c4_ppl,error_mean_layers,"
-                "error_std_layers,status,run_id\n")
+        if "run_id" in d:
+            runs.append(d)
+    return runs
+
+
+def _write_tables(runs, runs_path, lerr_path, alloc_path=None):
+    with open(runs_path, "w") as f:
+        f.write(RUNS_HEADER)
         for d in runs:
             b = d.get("bytes") or {}
             f.write(",".join(str(x) for x in [
@@ -886,23 +1044,205 @@ def cmd_aggregate(_args):
                 (d.get("wiki") or {}).get("ppl", ""),
                 (d.get("c4") or {}).get("ppl", ""),
                 d.get("error_mean_layers", ""), d.get("error_std_layers", ""),
+                d.get("act_mse_global", ""), d.get("act_sse_total", ""),
+                d.get("out_rel_err_weighted", ""),
                 d.get("status"), d["run_id"]]) + "\n")
-    with open(os.path.join(OUT_DIR, "layer_errors.csv"), "w") as f:
-        f.write("run_id,module_id,projection_type,n_tokens,n_output_elements,"
-                "SSE,ENERGY,MSE,relative_squared_error\n")
+    with open(lerr_path, "w") as f:
+        f.write(LERR_HEADER)
         for d in runs:
             for n, v in (d.get("layer_errors") or {}).items():
                 f.write(f"{d['run_id']},{n},{v['projection_type']},"
                         f"{v['n_tokens']},{v['n_output_elements']},"
                         f"{v['SSE']!r},{v['ENERGY']!r},{v['MSE']!r},"
-                        f"{v['relative_squared_error']!r}\n")
-    with open(os.path.join(OUT_DIR, "allocations.jsonl"), "w") as f:
-        for d in runs:
-            for n, a in (d.get("alloc") or {}).items():
-                f.write(json.dumps(dict(run_id=d["run_id"], module_id=n, **a))
-                        + "\n")
-    print(f"aggregated {len(runs)} runs -> runs.csv / layer_errors.csv / "
+                        f"{v['relative_squared_error']!r},"
+                        f"{v.get('act_SSE', '')!r},{v.get('act_ENERGY', '')!r},"
+                        f"{v.get('act_MSE', '')!r},{v.get('act_rel_err', '')!r}"
+                        "\n")
+    if alloc_path:
+        with open(alloc_path, "w") as f:
+            for d in runs:
+                for n, a in (d.get("alloc") or {}).items():
+                    f.write(json.dumps(
+                        dict(run_id=d["run_id"], module_id=n, **a)) + "\n")
+
+
+def cmd_aggregate(_args):
+    runs = _load_runs(DATA_DIR)
+    _write_tables(runs, os.path.join(OUT_DIR, "runs.csv"),
+                  os.path.join(OUT_DIR, "layer_errors.csv"),
+                  os.path.join(OUT_DIR, "allocations.jsonl"))
+    print(f"aggregated {len(runs)} ext runs -> runs.csv / layer_errors.csv / "
           f"allocations.jsonl")
+
+
+def cmd_merge(_args):
+    """Legacy M31 + ext runs -> merged 15-point tables. Legacy run act_*
+    fields are joined from the backfill csvs when available. Where a logical
+    point exists in both trees (endpoint reruns from Gate 1), the LEGACY row
+    wins (frozen reference), the ext twin is kept with run_id suffix '@ext'."""
+    legacy = _load_runs(LEGACY_DATA)
+    ext = _load_runs(DATA_DIR)
+    bf_run, bf_layer = {}, {}
+    p = os.path.join(OUT_DIR, "act_mse_backfill.csv")
+    if os.path.exists(p):
+        import csv as _csv
+        for row in _csv.DictReader(open(p)):
+            bf_run[row["run_id"]] = row
+        lp = os.path.join(OUT_DIR, "act_mse_backfill_layers.csv")
+        if os.path.exists(lp):
+            for row in _csv.DictReader(open(lp)):
+                bf_layer[(row["run_id"], row["module_id"])] = row
+    for d in legacy:
+        r = bf_run.get(d["run_id"])
+        if r:
+            d["act_mse_global"] = float(r["act_mse_global"])
+            d["act_sse_total"] = float(r["act_sse_total"])
+            for n, v in (d.get("layer_errors") or {}).items():
+                lv = bf_layer.get((d["run_id"], n))
+                if lv:
+                    v["act_SSE"] = float(lv["act_SSE"])
+                    v["act_ENERGY"] = float(lv["act_ENERGY"])
+                    v["act_MSE"] = float(lv["act_MSE"])
+                    v["act_rel_err"] = float(lv["act_rel_err"])
+        if d.get("layer_errors"):
+            d["out_rel_err_weighted"] = (
+                sum(v["SSE"] for v in d["layer_errors"].values())
+                / (sum(v["ENERGY"] for v in d["layer_errors"].values()) + EPS))
+    seen = {d["run_id"] for d in legacy}
+    merged = list(legacy)
+    for d in ext:
+        if d["run_id"] in seen:
+            d = dict(d, run_id=d["run_id"] + "@ext")
+        merged.append(d)
+    merged.sort(key=lambda d: d["run_id"])
+    _write_tables(merged, os.path.join(OUT_DIR, "merged_runs.csv"),
+                  os.path.join(OUT_DIR, "merged_layer_errors.csv"))
+    print(f"merged {len(legacy)} legacy + {len(ext)} ext runs -> "
+          f"merged_runs.csv / merged_layer_errors.csv")
+
+
+# ---------------------------------------------------------------------------
+# act_MSE backfill for legacy coarse-grid points (M31-ext section 5.3)
+# ---------------------------------------------------------------------------
+BACKFILL_GRID = [i / 10 for i in range(11)]
+
+
+@torch.no_grad()
+def cmd_backfill(args):
+    """Recompute held-out activation fake-quant error for the legacy M31
+    raw-representation allocations (MA/SS x within/across + RND within s0/1/2,
+    11-point grid). Masks are rebuilt deterministically from the frozen
+    scores; no GPTQ, no PPL. Writes act_mse_backfill.csv (+ _layers.csv)."""
+    mk = args.model
+    ptqmod.init_distributed_for_ptq_main_if_needed()
+    transformers.set_seed(0)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    scores = load_scores(mk, "raw")
+    module_order = scores["module_order"]
+    specs = []
+    for strat in ("ma", "ss"):
+        for scope in ("within", "across"):
+            for r in BACKFILL_GRID:
+                specs.append((strat, scope, 0, r))
+    for seed in (0, 1, 2):
+        for r in BACKFILL_GRID:
+            specs.append(("rnd", "within", seed, r))
+    # config -> per-module unique (h, ids_sha) key; evaluate each unique key once
+    cfgmap, uniq = {}, {n: {} for n in module_order}
+    for strat, scope, seed, r in specs:
+        alloc, H, total, _ = compute_alloc(mk, strat, scope, r, seed, scores)
+        rid = f"{mk}_{strat}_{scope}_s{seed}_r{r:g}"
+        keys = {}
+        for n in module_order:
+            a = alloc[n]
+            k = (a["h"], ids_sha(a["sel"]))
+            keys[n] = k
+            if k not in uniq[n]:
+                d = a["d"]
+                mask = torch.zeros(d, dtype=torch.bool)
+                mask[a["sel"]] = True
+                order = torch.cat([torch.arange(d)[~mask],
+                                   torch.arange(d)[mask]])
+                uniq[n][k] = dict(h=a["h"], order=order,
+                                  sse=0.0)
+        cfgmap[rid] = keys
+    nuniq = sum(len(v) for v in uniq.values())
+    print(f"[backfill] {len(specs)} configs, {nuniq} unique (module,mask) "
+          f"evals", flush=True)
+
+    cfg = resolve(mk)
+    fmodel, cfg = build_float_model(mk, "raw", cfg)
+    fmodel.to(DEV).eval()
+    tok = get_tokenizer(cfg)
+    wins, offs = heldout_windows(cfg, tok)
+    fw = eligible_wrappers(fmodel)
+    energy = {n: 0.0 for n in module_order}
+    ntok = {n: 0 for n in module_order}
+    handles = []
+
+    def mk_hook(name):
+        def hook(_m, inp):
+            x = inp[0].reshape(-1, inp[0].shape[-1])
+            energy[name] += float(x.to(torch.float64).pow(2).sum())
+            ntok[name] += x.shape[0]
+            d = x.shape[1]
+            for k, u in uniq[name].items():
+                h = u["h"]
+                xc = x[:, u["order"].to(x.device)] if 0 < h < d else x
+                if h == 0:
+                    xq = fake_quantize_nvfp4(xc)
+                elif h == d:
+                    xq = fake_quantize_mxfp8(xc)
+                else:
+                    xq = torch.cat([fake_quantize_nvfp4(xc[:, :d - h]),
+                                    fake_quantize_mxfp8(xc[:, d - h:])], -1)
+                u["sse"] += float(
+                    (xc.to(torch.float64) - xq.to(torch.float64)).pow(2).sum())
+        return hook
+
+    for name in module_order:
+        handles.append(fw[name].module.register_forward_pre_hook(mk_hook(name)))
+    t0 = time.time()
+    for i, w_ in enumerate(wins):
+        fmodel(w_.to(DEV))
+        print(f"[backfill] window {i + 1}/{len(wins)} "
+              f"({time.time() - t0:.0f}s)", flush=True)
+    for h in handles:
+        h.remove()
+
+    lpath = os.path.join(OUT_DIR, "act_mse_backfill_layers.csv")
+    rpath = os.path.join(OUT_DIR, "act_mse_backfill.csv")
+    lnew = not os.path.exists(lpath)
+    rnew = not os.path.exists(rpath)
+    dims = {n: scores["stats"][n]["d"] for n in module_order}
+    with open(lpath, "a") as lf, open(rpath, "a") as rf:
+        if lnew:
+            lf.write("run_id,module_id,projection_type,d,h,n_tokens,"
+                     "act_SSE,act_ENERGY,act_MSE,act_rel_err\n")
+        if rnew:
+            rf.write("run_id,model,strategy,scope,seed,target_ratio,"
+                     "act_sse_total,act_mse_global\n")
+        for strat, scope, seed, r in specs:
+            rid = f"{mk}_{strat}_{scope}_s{seed}_r{r:g}"
+            tot_sse = tot_den = 0.0
+            for n in module_order:
+                u = uniq[n][cfgmap[rid][n]]
+                d = dims[n]
+                ain = ntok[n] * d
+                tot_sse += u["sse"]
+                tot_den += ain
+                lf.write(f"{rid},{n},{n.split('.')[-1]},{d},{u['h']},"
+                         f"{ntok[n]},{u['sse']!r},{energy[n]!r},"
+                         f"{u['sse'] / ain!r},"
+                         f"{u['sse'] / (energy[n] + EPS)!r}\n")
+            rf.write(f"{rid},{mk},{strat},{scope},{seed},{r:g},"
+                     f"{tot_sse!r},{tot_sse / tot_den!r}\n")
+    json.dump(dict(model=mk, heldout_offsets=offs, n_configs=len(specs),
+                   n_unique=nuniq),
+              open(os.path.join(OUT_DIR, f"backfill_meta_{mk}.json"), "w"),
+              indent=1)
+    print(f"[backfill] wrote {rpath} / {lpath} for {mk}")
+    print("M31_DONE")
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +1260,7 @@ def main():
     pr = sub.add_parser("run")
     pr.add_argument("--model", required=True, choices=list(MODELS))
     pr.add_argument("--strategy", required=True,
-                    choices=["rnd", "ss", "ma", "av"])
+                    choices=["rnd", "ss", "ma", "av", "dd", "dd_out"])
     pr.add_argument("--scope", required=True, choices=["within", "across"])
     pr.add_argument("--ratio", type=float, required=True)
     pr.add_argument("--assignment_seed", type=int, default=0)
@@ -936,13 +1276,21 @@ def main():
     pa = sub.add_parser("alloc")
     pa.add_argument("--model", required=True, choices=list(MODELS))
     pa.add_argument("--strategy", required=True,
-                    choices=["rnd", "ss", "ma", "av"])
+                    choices=["rnd", "ss", "ma", "av", "dd", "dd_out"])
     pa.add_argument("--scope", required=True, choices=["within", "across"])
     pa.add_argument("--ratio", type=float, required=True)
     pa.add_argument("--assignment_seed", type=int, default=0)
     pa.add_argument("--out", default=None)
 
+    pd = sub.add_parser("collect_dd")
+    pd.add_argument("--model", required=True, choices=list(MODELS))
+
+    pb = sub.add_parser("backfill")
+    pb.add_argument("--model", required=True, choices=list(MODELS))
+    pb.add_argument("--force", action="store_true")
+
     pg = sub.add_parser("aggregate")
+    pm = sub.add_parser("merge")
 
     args = ap.parse_args()
     if args.cmd == "collect":
@@ -950,6 +1298,18 @@ def main():
         transformers.set_seed(0)
         collect_scores(args.model, args.rep)
         print("M31_DONE")
+    elif args.cmd == "collect_dd":
+        ptqmod.init_distributed_for_ptq_main_if_needed()
+        transformers.set_seed(0)
+        collect_dd_scores(args.model)
+        print("M31_DONE")
+    elif args.cmd == "backfill":
+        meta = os.path.join(OUT_DIR, f"backfill_meta_{args.model}.json")
+        if os.path.exists(meta) and not args.force:
+            print(f"[backfill] {meta} exists, skip (use --force)")
+            print("M31_DONE")
+        else:
+            cmd_backfill(args)
     elif args.cmd == "selfcheck":
         cmd_selfcheck(args)
     elif args.cmd == "run":
@@ -960,6 +1320,8 @@ def main():
         cmd_alloc(args)
     elif args.cmd == "aggregate":
         cmd_aggregate(args)
+    elif args.cmd == "merge":
+        cmd_merge(args)
 
 
 if __name__ == "__main__":
