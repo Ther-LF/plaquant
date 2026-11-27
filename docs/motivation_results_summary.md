@@ -88,3 +88,24 @@ Direct vs Rotated（同 mask、同配方，wiki，rot seed0；seeds1/2 一致 �
 - 悬崖区加密（r=0.02-0.08）：targeted 选择在 r=0.02 即恢复几乎全部质量（3B 14.33→8.22）；Random 同区高方差落后 — Fig.3(a) 的悬崖证据
 - **逐通道格式感知分数（DD）的反例**：DD-across 与 MA-across 同构崩坏、且在 act_mse_global 上也输 — 逐通道独立误差测量忽略 block-scale 打包交互；**结论：跨层分数必须"同量纲 + 按打包单元聚合"，这正是正式方法 measured-ΔD 以 ring 为单位实测的设计理由**（Fig.3(c) 叙事据此精化）
 - act-MSE 最优 ≠ PPL 最优（across 系 act_mse 更低但 PPL 崩）→ 层覆盖约束必要性的又一证据
+
+
+## M33-ext 补充（2026-11-27，docs/motivation_3_3_ext/，160 行微基准）
+
+naive 2-launch 混合 GEMM r∈[0,1] 10 点延迟扫描（8B+3B × 4 shape × M∈{8192,128}，口径 verbatim 复用 h2h 生产脚本，GPU 独占）：
+
+- **Prefill M8192**：naive 2-launch 全程拱在理想线性插值上 **1.14-1.67×**，最差点恒在 r=1/16；r≥0.375 起不如纯 MXFP8；叠加在线稠密旋转税（0.719ms ≈ fp4 GEMM 2.1×）后 qkv/o/gate_up 全面超 BF16
+- **Decode M128**：qkv/o_proj 在每个内部 r 都同时超 MXFP8 与 BF16（+rotation 后 qkv 2.35× BF16）→ 单 launch 融合 + 离线吸收的双重系统必要性
+- **四类系统税白盒拆项**与 §4.3 融合消除项 1-to-1：2-launch 税 / 在线稠密旋转 0.719ms / gather 0.177ms / 独立量化打包 0.143ms（@8B qkv r=1/8 M8192；down 的独立 Hadamard 0.658ms）
+- 诚实注记：8B gate_up M128 为唯一例外（N=28672 权重读主导）——Fig.5(b) 用 qkv/o_proj 立论
+
+## 全线总账
+
+| 任务 | 配置/测点 | 状态 | 数据目录 |
+|---|---|---|---|
+| M31 主矩阵 | 202 | ✅ | docs/motivation_3_1/ |
+| M32 Direct/Rotated | 48 | ✅ | docs/motivation_3_2/ |
+| M31-ext（DD+悬崖加密）| 120 + 154 回填 | ✅ | docs/motivation_3_1_ext/ |
+| M33-ext（naive 2-launch）| 160 行 | ✅ | docs/motivation_3_3_ext/ |
+
+Fig.3（选择/跨层/悬崖）、Fig.4（表示/旋转粒度）、Fig.5（系统税）三图数据全闭环，横轴统一 r∈[0,1]。
