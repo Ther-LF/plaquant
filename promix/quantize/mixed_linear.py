@@ -172,8 +172,51 @@ _FK_TABLE_GB10 = {
     (2048, 2048): [(2048, 2048, 1 << 30, 1, 1)],
     (3072, 8192): [(2048, 2048, 1 << 30, 1, 1), (8192, 1 << 30, 1 << 30, 8, 1)],
     (8192, 3072): [(8192, 1 << 30, 1 << 30, 8, 1), (2048, 2048, 1 << 30, 4, 1)],
-    (3072, 3072): [(2048, 2048, 1 << 30, 4, 1)],   # r13d: 1.17-1.22x all r
-    (4096, 4096): [(2048, 2048, 1 << 30, 4, 1)],   # r13d: 1.14-1.17x all r
+    (3072, 3072): [(2048, 2048, 1 << 30, 4, 1),    # r13d: 1.17-1.22x all r
+                   # KDA-4 r16: M8192 s8m1 wins 1.03-1.09x at KHp>=384; KHp<=256
+                   # measured losing (0.96-0.99) -> swz=0 exclusion band.
+                   (8192, 1 << 30, 256, 0, 0), (8192, 1 << 30, 1 << 30, 8, 1)],
+    (4096, 4096): [(2048, 2048, 1 << 30, 4, 1),    # r13d: 1.14-1.17x all r
+                   # KDA-4 r16: M8192 s8m1 1.04-1.13x at KHp>=1024; <=512 ~tie.
+                   (8192, 1 << 30, 512, 0, 0), (8192, 1 << 30, 1 << 30, 8, 1)],
+    # ------------------------------------------------------------------
+    # KDA-4 r16 (NCU round): never-probed worst-gap shapes, idle-GB10
+    # interleaved walk probe (/tmp/kda_r16_probe.py 2026-11-27). swz=0 rows
+    # are measured-loss exclusion bands (route stays on the shipping kernel).
+    (14336, 4096): [(8192, 1 << 30, 1 << 30, 8, 1)],  # 8B gate_up: 1.03-1.08x all KH
+    (12288, 4096): [(8192, 1 << 30, 1 << 30, 8, 1)],  # Q8B gate_up: 1.03-1.07x
+    (17408, 5120): [(8192, 1 << 30, 1 << 30, 8, 1)],  # Q14B gate_up: 1.04-1.09x
+    (5120, 17408): [(2048, 2048, 1 << 30, 8, 1)],  # Q14B down M2048: 1.04-1.11x
+    (4096, 12288): [(2048, 2048, 2304, 1, 1),      # Q8B down M2048: s1 1.02-1.06x low-KH
+                    (2048, 2048, 3072, 0, 0),      # KH~3072 ~tie -> ship
+                    (2048, 2048, 1 << 30, 8, 1)],  # s8 1.06-1.16x high-KH
+    (2048, 8192): [(2048, 2048, 1 << 30, 4, 1)],   # 1B down M2048: s4 1.10-1.11x all KH
+    (4096, 14336): [(2048, 2048, 2688, 0, 0),      # KDA-4 r16b: 8B down — KH<=2688 ~tie/loss
+                    (2048, 2048, 1 << 30, 8, 1),   # M2048 s8 1.03-1.14x at KH>=3584
+                    (8192, 1 << 30, 7168, 8, 1)],  # M8192 s8 1.05-1.11x; KH14336 loses -> cap
+}
+
+# ---------------------------------------------------------------------------
+# KDA-4 r17: ForgeKernel-evolved SINGLE-phase NVFP4 kernel (fk_spg_ext) windows
+# for the r=0 (pure-NVFP4) column. (N, K) -> list of (m_lo, m_hi, swz_w,
+# serpentine), first match wins; measured >=3% wins from the idle-GB10
+# interleaved walk probe (/tmp/kda_r17_gate.py, confirmed /tmp/kda_r17_confirm):
+# the kernel's whole-tile output staging + in-flight bulk store wins exactly
+# where the castfold kernel is output-write-bound (small-K gate_up/qkvo) or
+# where its tile walk beats the CUTLASS auto swizzle (deep-K M2048 giants).
+# Losses everywhere else (0.87-0.98x) stay on the shipping castfold kernel.
+# ---------------------------------------------------------------------------
+_FK_SPG_TABLE_GB10 = {
+    (2048, 2048): [(8192, 1 << 30, 4, 1)],   # 1.24x eager / 1.20x graph
+    # (2048,2048) M2048 dropped: eager 1.10x but GRAPH 0.98x (confirm run) —
+    # the serving window rule (win on BOTH) excludes it.
+    (8192, 2048): [(8192, 1 << 30, 1, 0)],                       # 1.27x
+    (3072, 3072): [(2048, 2048, 4, 1), (8192, 1 << 30, 4, 1)],   # 1.08x / 1.11x
+    (8192, 3072): [(8192, 1 << 30, 1, 0)],                       # 1.07x
+    # (12288,4096) M8192 dropped: confirm 1.04x but the full-curve A/B lost 2.6%
+    # (inside noise both ways — the serving rule keeps the shipping castfold).
+    (5120, 17408): [(2048, 2048, 8, 1)],                         # 1.12x
+    (8192, 28672): [(2048, 2048, 8, 1)],                         # 1.11x
 }
 
 _SPLITK_TABLE_GB10 = {
@@ -288,7 +331,7 @@ def _splitk_env_scale():
 class MixedQuantLinear(nn.Module):
     def __init__(self, packed, nv, mx, cd, out_dtype=torch.float16, qpf=None, dg=None,
                  qpfm=None, hpk=None, cd_bias=None, arn=None, hpk28=None, had28=None,
-                 cd_sm=None, cd_sk=None, cd_fk=None):
+                 cd_sm=None, cd_sk=None, cd_fk=None, cd_fk_spg=None):
         """
         Args:
             packed: PackedWeight from pack_weight_mixed.
@@ -395,6 +438,11 @@ class MixedQuantLinear(nn.Module):
         # (GB10-only via _low_sm_device); consumes the SAME packed codes and
         # physical SF buffers as the codesign entries (run_prepacked).
         self._cd_fk = cd_fk
+        # KDA-4 r17: ForgeKernel-evolved SINGLE-phase NVFP4 GEMM ext
+        # (fk_spg_ext) for the r=0 column (the dual-phase fk kernel requires
+        # K_high >= 128). Routed by the measured _FK_SPG_TABLE_GB10 windows;
+        # consumes the same packed codes + physical SF buffers (run_prepacked).
+        self._cd_fk_spg = cd_fk_spg
         # vllm-perf r4 lever 1: Marlin W4A16 small-M route state (MarlinLow from
         # promix.vllm_integ.marlin_w4a16, attached by the vLLM plugin via
         # attach_marlin). Routed by the measured _MARLIN_TABLE windows; takes
@@ -595,13 +643,36 @@ class MixedQuantLinear(nn.Module):
             return None
         for m_lo, m_hi, kh_max, swz, along_m in _FK_TABLE_GB10.get((self.N, self.K), ()):
             if m_lo <= M <= m_hi and self.K_high_pad <= kh_max:
+                if swz == 0:            # KDA-4 r16: measured-loss exclusion band
+                    return None
                 return (swz, along_m)   # r13: per-window tile walk
+        return None
+
+    def _fk_spg_cfg(self, M):
+        """KDA-4 r17: route the r=0 column to the ForgeKernel single-phase
+        NVFP4 kernel inside the measured _FK_SPG_TABLE_GB10 windows."""
+        if self._cd_fk_spg is None or not self.is_pure_nvfp4 or not _low_sm_device():
+            return None
+        if (self.K_low_pad % 128 != 0 or M % 128 != 0 or self.N % 128 != 0):
+            return None
+        for m_lo, m_hi, swz_w, serp in _FK_SPG_TABLE_GB10.get((self.N, self.K), ()):
+            if m_lo <= M <= m_hi:
+                return (swz_w, serp)
         return None
 
     def _gemm(self, A_lo, pSFA_lo, A_hi, pSFA_hi, M):
         """Packed-activation -> GEMM. Uses the bias+cast epilogue (lever A) when
         available, else the validated bf16 GEMM + torch cast/bias."""
         if self.is_pure_nvfp4:
+            spg = self._fk_spg_cfg(M)
+            if spg is not None:
+                # KDA-4 r17: ForgeKernel single-phase kernel — same whole-tile
+                # smem output staging / in-flight bulk store as fk_smallk, with
+                # an r=0-only mainloop. Single launch; alpha carries g_w; adds
+                # bias in fp32 (no bf16 round-trip -> cosine equal-or-better).
+                return self._cd_fk_spg.run_prepacked(
+                    A_lo, pSFA_lo, self.W_lo_packed, self.physSFB_lo,
+                    self._bias_or_zero(A_lo.device), self.g_w, spg[0], spg[1])
             # Pure-NVFP4: single-phase NVFP4 GEMM (Phase-2 skipped at compile time),
             # reusing the fused kernel's tuned NVFP4 Phase-1. g_w rides the epilogue
             # alpha exactly as in the dual path.

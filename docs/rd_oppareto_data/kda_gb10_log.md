@@ -510,3 +510,138 @@ is documented but unnecessary.
    4096: probe before enabling there).
 5. With NCU now available via sudo, a ForgeKernel generation 2 run can use
    stall/timeline pricing (round-10 runs were CUPTI-only).
+
+# ============ KDA round 4 (KDA-4, first NCU-enabled round) ============
+
+## Round 15 — sudo-NCU survey: per-point bottleneck attribution (2026-11-27)
+
+First profiler-backed round: 32 full-metric single-kernel captures (sudo ncu,
+idle GB10) over the 14 worst gap clusters + their cuBLASLt fp4/fp8 counterparts
+at the SAME (M, N, K). Raw CSVs: docs/rd_oppareto_data/ncu_r15/. NCU notes:
+the CUTLASS codesign kernel demangles to `device_kernel<CodesignFusedKernel...>`
+(match `device_kernel`, not `Codesign`); `dram__*` metrics read n/a on this
+LPDDR part — use `gpu__compute_memory_throughput` instead; profiling and
+timing kept in separate runs (ncu replay distorts the process).
+
+### Bottleneck attribution table (dur us / TC-pipe % / mem % / L2 hit / occ % / top stalls per issue)
+
+| cluster | point | ours | cuBLASLt ref |
+|---|---|---|---|
+| A gate_up M8192 low-r | 8B r=1/8: 4271us TC61 mem59 L2 91 occ19 wait3.4 math2.3 | fp4 3312us TC69; fp8 5572us TC82 |
+| A | Q8B r=1/12: 3587 TC62; Q14B r=1/16: 5891 TC65 | fp4 TC72-75, fp8 TC81-83 |
+| B down M2048 high-r (MX-dominant) | Q8B r=1: 1771 TC56 mem48 L2 83 wait3.8 math3.7 | fp8 1521 TC65 |
+| B | Q14B r=3/16: 1868 TC56; 70B M8192 r=1: 36352 TC50 L2 78 | fp4 1340 TC65; fp8 28348 TC65 L2 83 |
+| C qkvo M8192 | 3B r=3/16: 802 TC58 L2 94 | fp4 621 TC60; fp8 1012 TC73 |
+| D r=0 castfold | 3B gu: 1888 TC52; 1B gu: 1323 TC50 | fp4 1512 TC65 / 1172 TC56 |
+| E fk-routed small-K | 1B gu r=1/32: 1359 TC54 lgsb1.5; r=1/2: 2184 TC45 | — |
+| G down M8192 | 8B r=1/8: 3668 TC71 L2 90; 3B r=1 (fk): 2587 TC77 | fp4 3110 TC74; fp8 6828/2526 |
+
+### Readings (the round's verdict)
+1. **Universal: issue-latency bound at 1 block/SM.** EVERY kernel (ours AND
+   cuBLASLt) runs occupancy 19-21% (smem+regs limited), top stalls wait +
+   math_pipe_throttle, memory % always below TC %. DRAM is NOT the wall;
+   occupancy cannot rise (round 4a/14: fewer stages always loses). The whole
+   remaining gap = sustained tensor-pipe % (ours 50-65 vs cuBLASLt 56-83).
+2. **L2 hit tracks the tile walk** and is the only memory-side separator
+   (70B down: 78 vs 83) — more walk tuning, not more bandwidth.
+3. The fk kernel's lgsb 1.5-1.8 (vs 0.5-0.9 CUTLASS) = its smem->reg feed
+   stalls; relevant only on long-K tiles.
+4. The two certified mechanisms were written to ForgeKernel hw_kb/cuda/sm121/
+   (issue_latency_bound_gemm.md ✅, tile_walk_l2_window.md ✅) — upstream-ready.
+
+## Round 16 — fk tile-walk windows for every never-probed worst shape
+
+NCU said clusters A/B/C differ from the fk-window shapes only in walk + size,
+so before any new kernel: walk probe (ship vs fk s1/s4/s8 along-m, interleaved,
+idle GPU) on 10 shapes x 4-7 KH x 2 M (/tmp/kda_r16_probe.py + r16b for
+(4096,14336)). Result: the round-13 finding generalizes —
+- 8B/Q8B/Q14B gate_up M8192 (cluster A): s8m1 wins 1.03-1.09x at EVERY KH.
+- 3B qkvo (3072,3072) M8192: s8m1 1.03-1.09x at KHp>=384 (<=256 loses -> band).
+- 8B qkvo (4096,4096) M8192: s8m1 1.04-1.13x at KHp>=1024 (<=512 tie -> band).
+- Q14B down (5120,17408) M2048: s8m1 1.04-1.11x; Q8B down (4096,12288) M2048:
+  s1 low-KH 1.02-1.06x / s8 high-KH 1.06-1.16x; 1B down M2048 s4 1.10-1.11x.
+- 8B down (4096,14336): M8192 s8 1.05-1.11x (KH<=7168), M2048 s8 1.03-1.14x at
+  KH>=3584; low-KH M2048 and KH14336 M8192 excluded (measured tie/loss).
+- 70B down: every fk walk LOSES (M2048 best 1.02x noise, M8192 0.37-0.76x) —
+  the long-K mainloop is the fk kernel's weak axis (NCU round-15 reading #3);
+  70B stays on the CUTLASS kernel. Cluster B's 70B tail is kernel-structural.
+
+Shipping: _FK_TABLE_GB10 extended with 6 new keys + M8192 rows for
+(3072,3072)/(4096,4096); swz=0 rows = measured-loss exclusion bands (route
+falls through to the shipping kernel). Gate (/tmp/kda_r16_gate.py): routing
+smoke 14/14, cosine equal-or-better per point (fk +1.2e-6..1.5e-6), PASS.
+
+## Round 17 — ForgeKernel gen-2: single-phase NVFP4 kernel (the r=0 column)
+
+ForgeKernel usage this round (3 family tasks prepared, 1 run completed):
+- F3 `promix_spg_nvfp4` (r=0 castfold family, reference = shipping castfold
+  kernel, NCU round-15 evidence embedded in the task): **run completed, stop:
+  target** — 3 student iterations + 1 recon round, best kernel confirmed
+  e2e 1.13x/1.07x/1.19x (gu1b_r0/gu3b_r0/qk3b_r0) over the reference.
+  The evolved kernel: persistent 48-CTA, 1 producer WG + 8 consumer warps on a
+  cooperative 128x128 tile, 4-stage TMA ring, mxf4nvf4 2X-k-step register
+  pipelining, whole-tile smem output staging with one bulk store group left in
+  flight across tiles, parameterized tile walk (width + serpentine) — it
+  independently re-derived the gen-1 fk store-overlap trick from the NCU
+  evidence and added a cleaner single-phase mainloop.
+- F1 `promix_dpg_smallk_g2` (gate_up K=4096 family, reference = fk s8m1) and
+  F2 `promix_dpg_mxheavy` (MX-dominant down family): tasks written (shapes,
+  per-family references, NCU evidence sections), F1 baseline measured
+  (3.6485 ms geomean), then **both runs blocked: the model gateway now refuses
+  the harness's teacher prompts** ("automated systems flagged ... Terms of
+  Service restrictions on developing competing model products", reproduced 3+3
+  attempts + a plain CLI probe; the F3 run completed before the block; a later
+  retry after a cleared window got ONE teacher recon turn through, then was
+  refused again mid-run — content-triggered and persistent for these prompts).
+  Evidence in /tmp/fk_f1_run*.log (Mac). The two tasks are committed-ready
+  under ~/ForgeKernel/tasks/ for a future window; their targets were partially
+  closed by the round-16 manual walk windows instead.
+
+Merge of the F3 kernel (kernels/mixed_gemm_sm120/fk_spg_ext.cu):
+- run_prepacked consumes the pipeline's physical 32_4_4 SF buffers DIRECTLY:
+  the evolved kernel's per-(128-row-panel, k-tile) 1024B SF block is the same
+  1024 bytes as two adjacent physSF 512B atoms; only the within-block index
+  changes ((row*8+ks*4) -> (ks*512+(row%32)*16+(row/32)*4)), verified
+  byte-exact (/tmp/kda_sfmap_probe.py: 0/4096 mismatches). Zero prep launches;
+  template<bool PHYS_SF> keeps the evolved row-major path for A/B probes.
+- epilogue alpha (g_w) added; fp32 bias add (no bf16 round-trip) -> cosine
+  measured +1.2e-6..+1.6e-6 BETTER per point, same class as fk_smallk.
+- walk probe over all 17 (N,K) at r=0 x2 M (/tmp/kda_r17_gate.py + confirm):
+  wins 1.07-1.27x exactly where the castfold kernel is output-write-bound
+  (small-K gate_up/qkvo) PLUS two deep-K M2048 giants via walk (Q14B/70B down
+  1.12x); losses elsewhere (0.87-0.98) -> windows. NCU after: 1B gu r=0
+  1157us TC56.5 wait2.63 (was castfold 1323-1411us TC50 wait3.2).
+- Shipping: _FK_SPG_TABLE_GB10 (6 keys), _fk_spg_cfg routing in the pure-NVFP4
+  branch, load_fk_spg() in vllm_integ/kernels.py, dispatch tag
+  `fk_spg_single_phase`. Serving rule enforced: a window ships only if it wins
+  BOTH eager and graph-replay ((2048,2048) M2048 dropped: graph 0.98x), and
+  the full-curve A/B dropped 2 more borderline cells ((12288,4096) M8192 spg;
+  8B down M2048 KH<=2688 fk band widened).
+
+### v4 curve (ours_gb10_uniform11_tuned_v4.json)
+13 shapes re-measured through the shipping dispatch (idle GPU, co-tenant 0,
+no ncu in timing runs), other rows carried from v3. 396 model-shape points:
+- overall median gap 1.039 -> **1.028**, worst 1.232 -> **1.209**, p90 1.128
+- r=0 column median 1.045 -> **1.011**; r=3/4 1.041 -> 1.018; r=1 1.058 -> 1.052
+- headline flips: 1B gate_up M8192 r=0 1.167 -> **0.940**; 1B qkvo M8192 r=0
+  1.084 -> 0.878; 8B/Q8B/Q14B down M2048 r=1 1.21-1.22 -> **1.00-1.03**;
+  Q14B down M2048 all r 1.14-1.20 -> 1.00-1.05; 3B gate_up M8192 r=0 1.20 -> 1.07;
+  A-cluster gate_up M8192 low-r 1.17-1.23 -> 1.03-1.19 (partially closed).
+- cosine regressions: **0** (96 re-routed points all +1e-6 better, others
+  bit-identical); launch sidecar ours_gb10_uniform11_tuned_v4.launch_verify.json:
+  20 cases covering every new r16/r16b/r17 window — ALL exactly 1 kernel/_gemm.
+
+### 还有多少肉 (NCU-backed residual assessment)
+- **At the hardware wall (stop pushing):** r>=1/4 mid columns (medians
+  1.01-1.04), squares >= 8192 (~1.0), everything the walk already flipped.
+  NCU says these run within a few % of cuBLASLt's own TC% at equal occupancy.
+- **Kernel-structural, needs a new mainloop (the F2 family):** MX-dominant
+  down shapes — ours TC 50-56 vs cuBLASLt fp8 63-65 at the same 19-21% occ;
+  stage space is closed (smem), so the meat is register-level k-pipelining /
+  fewer rendezvous in the MX phase. Worth ~1.1-1.25x on the r>=3/4 down
+  column incl. the 70B tail (worst 1.209). Blocked on the FK gateway refusal;
+  manual rewrite of the MX phase is the fallback.
+- **Small residue:** A-cluster low-r fk points at 1.15-1.19 (fk kernel's lgsb
+  feed stalls at 32 k-iters — F1 task, same blocker); Q14B qkvo M8192
+  1.15-1.16 (never walk-probed with a win; next probe candidate).
+- Remaining median headroom if all of the above landed: ~1.028 -> ~1.01.

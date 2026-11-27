@@ -24,7 +24,7 @@ sys.path.insert(0, REPO); sys.path.insert(0, KERN)
 os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
 
 from promix.eval.full_network_realkernel import load_kernels  # noqa: E402
-from promix.vllm_integ.kernels import load_smallm, load_splitk, load_cd_bias, load_fk_smallk  # noqa: E402
+from promix.vllm_integ.kernels import load_smallm, load_splitk, load_cd_bias, load_fk_smallk, load_fk_spg  # noqa: E402
 from promix.quantize.weight_pack import pack_weight_mixed  # noqa: E402
 from promix.quantize.mixed_linear import MixedQuantLinear  # noqa: E402
 
@@ -120,6 +120,8 @@ def cosine(a, b):
 def dispatch_tag(mql, M):
     """Replicate MixedQuantLinear._gemm routing to label which path fires."""
     if mql.is_pure_nvfp4:
+        if mql._fk_spg_cfg(M):
+            return "fk_spg_single_phase"
         if (mql._cd_bias is not None and mql.out_dtype == torch.float16
                 and hasattr(mql._cd_bias, "single_nvfp4_gemm_prepacked_bias")):
             return "single_phase_nvfp4_castfold"
@@ -162,6 +164,7 @@ def main():
 
     nv, mx, cd, qpf = load_kernels()
     cd_sm, cd_sk, cd_bias, cd_fk = load_smallm(), load_splitk(), load_cd_bias(), load_fk_smallk()
+    cd_fk_spg = load_fk_spg()
     print(f"kernels loaded (cd_sm={cd_sm is not None} cd_sk={cd_sk is not None} "
           f"cd_bias={cd_bias is not None})", flush=True)
 
@@ -178,7 +181,7 @@ def main():
                 packed = pack_weight_mixed(W, K_low, K_high, nv, mx, cd)
                 mql = MixedQuantLinear(packed, nv, mx, cd, qpf=qpf,
                                        cd_bias=cd_bias, cd_sm=cd_sm, cd_sk=cd_sk,
-                                       cd_fk=cd_fk)
+                                       cd_fk=cd_fk, cd_fk_spg=cd_fk_spg)
                 A_lo, pSFA_lo, A_hi, pSFA_hi = mql.pack_only(x)
 
                 def gemm():

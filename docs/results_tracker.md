@@ -291,3 +291,10 @@ naive 2-launch r-sweep(10点×8shape×2M, 口径 verbatim 复用 h2h 生产脚�
 **Decode M128**: qkv/o_proj 每个内部 r 都同时超 MXFP8 和 BF16(+rotation 后 qkv 2.35× BF16) → 双 launch 税+在线旋转税双重必要性成立。
 四税@8B qkv r=0.125 M8192: mix2 0.568 / dense_rot 0.719 / gather 0.177 / quant_pack 0.143 (bf16 1.078, fp4 0.338, ideal 0.372)。
 如实注记: 8B gate_up M128 为唯一例外(N=28672 权重读主导, 不超 fp8/bf16)——Fig.5(b) 用 qkv/o_proj 立论; Gate1 计算受限点 ≤3% PASS, M128 整体快 10-25% 系 11-03 以来 stack 漂移(manifest 已审计)。
+
+## KDA-4 (Round 15-17, 首轮 NCU) 收官(2026-11-27)
+median gap 1.039→**1.028**, worst 1.232→1.209, r=0 列 1.045→**1.011**(1B gate_up M8192 r=0 0.940 sub-theory); cosine 零回归, 20 例单 launch 复验。
+**R15 NCU 普查**(32 captures, ncu_r15/): 全场含 cuBLASLt 皆 1 block/SM、occupancy ~20%、tensor-pipe issue-latency bound——带宽不是墙, 剩余 gap=sustained TC% 差距; L2 hit 随 walk 变化是唯一内存侧分离项。
+**R16**: walk 窗口推广 +7 键(8B/Q8B/Q14B gate_up M8192 等 1.03-1.16x)。
+**R17 ForgeKernel gen-2**: 3 家族 run——F3(r=0 castfold) 达标并合入 **fk_spg_ext.cu**(独立重推出 gen-1 smem 暂存结构+单相 4-stage mainloop; SF 布局一个 index remap 直吃 physSF, byte-exact); F1/F2 被上游 API ToS 拒答挡住(任务保留等窗口)。hw_kb/sm121 +2 条 certified 机制。
+**剩余肉判断(NCU 证据)**: 中段列与大方阵已到硬件墙; 真肉= (a)MX-dominant down 家族(需新 mainloop, ~1.1-1.25x, 含 70B 尾 1.209) (b)A 簇 fk 1.15-1.19 (c)Q14B qkvo walk 候选; 全落地约 median ~1.01。

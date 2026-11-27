@@ -174,6 +174,24 @@ def load_fk_smallk():
         return None
 
 
+def load_fk_spg():
+    """KDA-4 r17: ForgeKernel-evolved SINGLE-phase NVFP4 GEMM (fk_spg_ext) for
+    the GB10 r=0 (pure-NVFP4) column — the regime the dual-phase fk kernel
+    cannot serve (it requires K_high >= 128). Evolved by the promix_spg_nvfp4
+    run against the shipping castfold kernel (confirmed e2e 1.07-1.19x on its
+    task shapes); the merge entry (run_prepacked) consumes the pipeline's
+    physical 32_4_4 SF buffers directly (verified byte-exact index remap), so
+    steady state is ONE launch, CUDA-graph capturable. Routed only inside the
+    measured _FK_SPG_TABLE_GB10 windows (low-SM gate). Disabled via
+    PROMIX_FK=0; a failed build returns None (shipping routes untouched)."""
+    if os.environ.get("PROMIX_FK", "1") == "0":
+        return None
+    try:
+        return _load_ext("fkspg", "fk_spg_ext.cu", extra_ldflags=["-lcuda"])
+    except Exception:
+        return None
+
+
 def load_had_pack():
     """vllm-perf r2 lever 2a: fused online-Hadamard + NVFP4/MXFP8 quant/pack for
     the down_proj input (hadamard_pack_mixed / hadamard28_pack_mixed).
