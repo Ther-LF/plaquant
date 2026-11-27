@@ -81,3 +81,10 @@ Direct vs Rotated（同 mask、同配方，wiki，rot seed0；seeds1/2 一致 �
 - §3.1 叙事：选择重要（RND 反例）→ 分数跨层可比性决定 across 成败（MA 灾难 + 指标背离）→ 引出 measured-ΔD 分配
 - §3.2 叙事：误差大小 ≠ 误差落点（PPL 交叉 + A 不变 + E 降）→ 引出"保持 PCA 结构 + 细粒度块对角旋转"的设计
 - 局限如实写：o_proj 排除、AV 混合点略差、E 降 PPL 升的背离均保留
+
+
+## M31-ext 补充（2026-11-27，docs/motivation_3_1_ext/）
+
+- 悬崖区加密（r=0.02-0.08）：targeted 选择在 r=0.02 即恢复几乎全部质量（3B 14.33→8.22）；Random 同区高方差落后 — Fig.3(a) 的悬崖证据
+- **逐通道格式感知分数（DD）的反例**：DD-across 与 MA-across 同构崩坏、且在 act_mse_global 上也输 — 逐通道独立误差测量忽略 block-scale 打包交互；**结论：跨层分数必须"同量纲 + 按打包单元聚合"，这正是正式方法 measured-ΔD 以 ring 为单位实测的设计理由**（Fig.3(c) 叙事据此精化）
+- act-MSE 最优 ≠ PPL 最优（across 系 act_mse 更低但 PPL 崩）→ 层覆盖约束必要性的又一证据
