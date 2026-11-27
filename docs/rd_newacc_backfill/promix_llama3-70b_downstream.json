@@ -1,0 +1,29 @@
+{
+ "cell": "ours.promix.llama3-70b.{mmlu,zeroshot} (ring512 measured r=1/8 — 表A欠格)",
+ "value_mmlu_micro": 77.33,
+ "value_zeroshot_avg6": 78.00,
+ "mmlu_groups": {
+  "mmlu": 0.7733333333333333,
+  "mmlu_stem": 0.7052631578947368,
+  "mmlu_other": 0.7723076923076924,
+  "mmlu_social_sciences": 0.85,
+  "mmlu_humanities": 0.803076923076923
+ },
+ "zeroshot_per_task": {
+  "piqa": {"acc": 0.88, "acc_norm": 0.84},
+  "arc_easy": {"acc": 0.76, "acc_norm": 0.72},
+  "arc_challenge": {"acc": 0.6, "acc_norm": 0.64},
+  "hellaswag": {"acc": 0.6, "acc_norm": 0.8},
+  "winogrande": {"acc": 0.8, "acc_norm": null},
+  "lambada_openai": {"acc": 0.88, "acc_norm": null}
+ },
+ "protocol": "MMLU 5-shot lim25 (n=1425) + 0-shot 6-task AVG6 lim25 (n=150), batch_size=1 — lim25 large-model protocol, same cells as the 70B competitor column",
+ "build": "rd_scale.py committed flow verbatim via rd_scale70b_lmeval.py: PROMIX_LOAD_DEVICE=cpu, ring512 measured alloc (sel 1360/10880 rings = committed), GPTQ nsamples 128 percdamp 0.01, avg_fp8 0.1250; config promix/configs/llama-3-70b-instruct-mxfp8-nvfp4.yaml",
+ "wiki_repro": {"measured": 5.973237, "committed": 5.9732, "gate": "PASS digit-exact, same invocation before lm-eval (reproduced in 3 independent rebuilds this campaign)"},
+ "eval_pathway": "fake-quant fp16 model (146 GiB with wrapper buffers) dispatched across 2x96GB via accelerate (max_memory {0:58GiB,1:88GiB} -> actual 70.9/75.3 GiB; device-map undercounts wrapper buffers ~1.22x — the reason r=batch>1 OOMs) + lm-eval 0.4.5 HFLM batch_size=1; MMLU 5700 reqs in 88 min, 0-shot in 12 min",
+ "sanity": "MMLU tracks the wiki-PPL field ordering at 70B: bf16 80.63 > FP8 80.35 > AWQ 79.79 > GPTQ 79.09 > SharQ 78.53 (wiki 5.769) > ARC 77.47 (6.183) ~ ProMix 77.33 (5.973; delta to ARC 0.14pp < lim25 SE ~1.1pp); 0-shot 78.00 = the recurring lim25 modal value (FP8/GPTQ/SharQ identical), > ARC 71.33",
+ "timing_total": "~3.3h end-to-end with stats cache (collect 29min first run; GPTQ build 99min; wiki gate 37min; dispatch 1min; lm-eval 100min)",
+ "hardware": "RTX PRO 6000 Blackwell x2 (SM120, CUDA 13.0) GPUs 6+7, container luofan-plaquant, server 10.208.130.90",
+ "date": "2026-11-27",
+ "raw_server_path": "/home/luofan/accmatrix/backfill70b/promix_70b_down.json"
+}
