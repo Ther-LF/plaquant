@@ -228,7 +228,8 @@ class PromixLinearMethod(LinearMethodBase):
         from promix.vllm_integ.kernels import (load_kernels, load_decode_gemv,
                                                load_smallm, load_qpfm, load_had_pack,
                                                load_splitk, load_norm_pack,
-                                               load_cd_bias)
+                                               load_cd_bias, load_fk_smallk,
+                                               load_fk_spg)
         cd, qpf = load_kernels()
         dg = load_decode_gemv()   # None when PROMIX_DECODE_GEMV=0
         # vllm-perf r2: small-M GEMM configs (lever 1), single-launch mixed pack
@@ -244,6 +245,12 @@ class PromixLinearMethod(LinearMethodBase):
         # Bit-identical epilogue (half(float(bf16(acc))+0)); PROMIX_CAST_FOLD=0
         # disables.
         cd_bias = load_cd_bias()  # None when PROMIX_CAST_FOLD=0
+        # KDA-3/4: ForgeKernel window routes in SERVING — dual-phase fk_smallk
+        # (_FK_TABLE_GB10) + single-phase r=0 fk_spg (_FK_SPG_TABLE_GB10).
+        # Same packed buffers (run_prepacked); None when PROMIX_FK=0 or the
+        # toolchain can't build them (routes silently stay on castfold).
+        cd_fk = load_fk_smallk()
+        cd_fk_spg = load_fk_spg()
         vrq = None
         if self.kind in ("qkv_proj", "gate_up_proj") and not self.reordered:
             # norm->pack fusion producer can't express the ring-reorder gather
@@ -319,7 +326,8 @@ class PromixLinearMethod(LinearMethodBase):
         mql = MixedQuantLinear(packed, nv=None, mx=None, cd=cd,
                                out_dtype=torch.float16, qpf=qpf, dg=dg,
                                qpfm=qpfm, cd_sm=cd_sm, cd_sk=cd_sk,
-                               cd_bias=cd_bias, hpk=hpk, hpk28=hpk28,
+                               cd_bias=cd_bias, cd_fk=cd_fk, cd_fk_spg=cd_fk_spg,
+                               hpk=hpk, hpk28=hpk28,
                                had28=None if had_K is None else had_K.cpu())
         layer.promix_mql = mql.to(dev)
 

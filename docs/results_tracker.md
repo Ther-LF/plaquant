@@ -309,3 +309,9 @@ MMLU 严格随 wiki 排序✅; 0-shot lim25 噪声±3.5pp 已注记; NVFP4-70B �
 **正面**: 悬崖区完全解析——3B targeted-within r=0.02 即 14.33→8.22(首 2% 通道吃掉几乎全部收益), RND 同区 10.5-15.2 高方差。
 **反预期(如实)**: ①逐通道 DD(across) 没避免跨层崩坏(3B 14.8-18.6, layers.1.mlp.down_proj 仍分 0 通道); ②DD 连自身目标 act_mse_global 都输给 MA/SS——机理: 逐通道独立测误差忽略 block-scale 交互(移出大幅值通道会缩小 block16 scale 降低全 block 误差), MA/SS 恰好瞄准污染 scale 的 outlier; ③act-MSE 最优≠PPL 最优(across 的 act_mse 更低但 PPL 崩)——强化"需层覆盖约束"; ④SS-across 不崩仅因恒给 down_proj 32 通道(崩/不崩=32 通道之差)。
 **论文叙事修正**: "格式感知"不能以逐通道独立口径做——必须按打包单元(block/ring)聚合测量交互后的误差。这正是我们 measured-ΔD 以 ring 为单位实测(而非逐通道)的理由: M31-ext 反例把 Fig.3(c) 的论点从"同量纲就够"精化为"同量纲+打包粒度感知才够"。
+
+## GB10 serving 正式收官(2026-11-28, gb10v2_*, 48 文件)
+7 点十进制网格全齐(gate 全过, PPL 随 r 单调 9.49→8.09)。TPOT b128 57-68ms / TTFT L2048 14.1→17.8s 随 r 单调 / QServe 3.3-3.5k tok/s。
+**重要修复**: plugin.py 从未给 serving 接 FK kernel(只在 eval 生效)——已修复+nsys 路由证据; FK 收益=prefill 高 r -2~-3%(与 gap 1.08→1.028 定量自洽)。
+**方法论教训**: GB10 两次自发重启, 机器状态对 decode 影响 +20-64% ≫ kernel 效应——对比一律用同机 nofk 基线隔离; decode 指标实例级不稳定(±9-18%)按此口径对待。
+后续项: FK/spg 窗口表按 serving 合并形状重测。
