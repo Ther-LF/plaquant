@@ -331,3 +331,10 @@ b=512 复现 gate float 逐位 PASS。主结论: **b=512 无取舍——同时�
 对比: llm-compressor GPTQ 108-457s、NVFP4 80s-26min——我们贵在 PCA+ΔD+MSE 搜索, 一次性成本换部署曲线。
 存储: vs BF16 -68.7/-68.5%、vs FP8 -37.5/-37.0%(与论文 ~69%/~38% 口径吻合); AdaMix 8B 单副本 vLLM 6.09GiB vs 默认含 GEMV+Marlin 副本 11.94GiB(空间换时间代价精确入档)。
 **口径发现**: exact-bytes 与 4.5+3.75r̄ 公式偏差 0.000%(gate过), 但字节加权 r̄(0.135-0.16)>名义0.125——ΔD 把 FP8 ring 移入宽 N 投影(down=0, qkv/gate/up 0.18-0.23)。**论文引用 bits 用 5.005(3B)/5.041(8B) 并注明 r̄ 定义**(非超预算, ring 条数恰 12.5%)。
+
+## P0-1 GB10 同机基线收官(2026-11-28, 表 D-GB10d, boot de09c9e5 单会话 4h 连续)
+锚点校验 ±1.2%(main 15 指标)/gate dPPL 逐位; checkpoint 溯源严格(FP8 data-free 复刻 450 tensor sha256 与 Pro6000 逐字节一致, GPTQ/NVFP4 直连传输 sha 一致)。
+**核心答案(审稿人必问"何时用 AdaMix 而非 FP8")**: GB10 带宽受限下 AdaMix r1/8 全负载段胜 FP8——decode b16 1.16×, qserve c256 1.11×, prefill TTFT 1.66×(FP8 的 quant 开销使其 prefill 慢于 BF16)。Pro6000 打平、GB10 胜出 = ~5bit 带宽红利的平台对照。
+NVFP4 SM121 可跑(吞吐高 4-10% 但 W4A4 精度档不可比 → "同速差精度/同精度差速")。意外发现: BF16 qserve 非单调塌陷(c64 2274→c256 1368, 3 runs 一致)已注记。
+**8B 未跑**(Spark 外网 0.4MB/s, 35GB≈24h+)——等带宽窗口/内网路线, 不阻塞投稿(spec 列为选跑)。
+**P0 四项全部收官: P0-1✅ P0-2✅ P0-3✅ 零卡时核对×2✅ — TACO 审稿防线闭合, §5/§6 可收口定稿。**
