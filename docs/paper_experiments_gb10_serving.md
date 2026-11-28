@@ -64,3 +64,33 @@
 - **fk_spg 在 3B serving 不命中**: 窗口表按 eval 拆分形状测, serving 合并形状(qkv 5120/gate_up 16384/down 8192)不在表; decode M≤128 低于全部窗口下界 → 后续项: 按 serving 合并形状重测窗口表。
 - GB10 decode 指标跨 engine 实例波动 ±9-18%(实例内 ±0.05%), decode 按实例级不稳定对待; prefill/qserve 稳定 ±1%。b256 饱和确认, b128 甜点。
 - 趋势与 Pro6000 同构(TPOT/TTFT 随 r 单调升, GB10 斜率更缓)。
+
+## 8. P0-1 · 同机基线对照组（gb10v3，2026-11-28 入档）
+
+协议：与 gb10v2 完全同栈（vLLM 0.33 · graphs ON · prefix caching OFF · greedy+ignore_eos · 1 warmup + median of 3 · mem-util 0.90 · max_num_seqs 512）。main b16/64/128 + prefill L2048；qserve 1024/512 加测 **c256**。
+**同 boot 硬约束达成**：boot_id `de09c9e5-681a-4c8a-b28b-795500f07782`，7 个 serve 点 + T2 gate 于 07:21–11:19 CST 连续跑完，无重启（session log 每点记 boot id）。
+
+Checkpoint 溯源（与 Pro6000 同 checkpoint）：
+- FP8：Spark 本地按同配方 data-free 重建（`gb10v3_make_fp8.py`），**全部 450 tensor 与 Pro6000 checkpoint sha256 逐字节一致**（需 fp32 除法 + 直接 RNE cast 才能复现 ct-0.19 行为）。
+- GPTQ/NVFP4：直连管道传输，model.safetensors 两端 sha256 一致。BF16 = 同 snapshot hash（d444645…）。
+
+锚点校验：gb10v3_pm3b_r0.125 vs gb10v2 同点 — main 全部 15 指标 ±1.2%，qserve ±3%（门 ±5% 过）；gate_t2 PPL 8.29126（dPPL +2.6e-4，与 gb10v2 gate 逐位一致）。
+
+### 表 D-GB10d · 3B 五方法同机对照（decode TPOT=128/1024；QServe=total tok/s）
+
+| 方法 | TPOT b16 (ms) | TPOT b128 (ms) | TTFT L2048 b128 (s) | QServe c64 | c128 | c256 | vs BF16 (TPOT b128 / QServe c256) | vs FP8 |
+|---|---|---|---|---|---|---|---|---|
+| BF16 | 34.0 | 72.2 | 21.18 | 2274 | 1983 | 1368 | 1.00x / 1.00x | 0.81x / 0.42x |
+| FP8-W8A8 | 21.8 | 58.4 | 24.86 | 2782 | 3138 | 3249 | 1.24x / 2.38x | 1.00x / 1.00x |
+| GPTQ-W4A16 | 15.7 | 56.3 | 24.87 | 3004 | 3189 | 3165 | 1.28x / 2.31x | 1.04x / 0.97x |
+| NVFP4-W4A4 | 16.8 | 53.1 | 11.30 | 3302 | 3637 | 3733 | 1.36x / 2.73x | 1.10x / 1.15x |
+| AdaMix r0.0 | 16.8 | 56.2 | 14.09 | 3156 | 3495 | 3610 | 1.28x / 2.64x | 1.04x / 1.11x |
+| **AdaMix r0.125** | 18.8 | 62.9 | 14.94 | 3131 | 3482 | 3599 | 1.15x / **2.63x** | 0.93x / **1.11x** |
+| AdaMix r1.0 | 22.4 | 60.7 | 17.68 | 2852 | 3248 | 3403 | 1.19x / 2.49x | 0.96x / 1.05x |
+
+### 发现
+- **"什么时候该用 AdaMix 而不是 FP8"**：GB10 带宽受限下，低批 decode（b16 TPOT 21.8→18.8ms，**-14%/1.16x**）与高并发连续批处理（qserve c256 **+11%**）AdaMix r0.125 均稳定快于 FP8；prefill TTFT 14.9s vs FP8 24.9s（**1.66x**，FP8 prefill 带 quant 开销反比 BF16 21.2s 慢）。即 ~5bit 的带宽红利在统一 LPDDR 平台全负载段兑现。
+- **NVFP4 可跑**：SM121 vLLM 0.33 经 `FlashInferCutlassNvFp4LinearKernel` 正常运行（非 runnability 缺口）；吞吐略高于 AdaMix（c256 +3.7%），但精度不可比（NVFP4 W4A4 PPL 显著劣于 AdaMix ~5bit，见质量册）。
+- **BF16 qserve 非单调**：c64 2274 → c128 1983 → c256 1368 total tok/s，3 runs 一致（±3%），无 preemption、KV 充裕（954k tokens）——BF16 大批 decode 在 GB10 上实测塌陷，量化方法均无此现象；BF16 行按实测入账。
+- **8B 未跑**：Spark 外网带宽实测 ~0.4MB/s（hf-mirror/pypi ~KB/s 级），8B 四基线 + BF16 base ≈ 35GB ≈ 24h+ 传输，且本机无 AdaMix-8B 导出包；3B 组先行入账，8B 待带宽窗口。
+- 数据：`docs/vllm_final_data/gb10v3_{pm3b_r0.0,pm3b_r0.125,pm3b_r1.0,bf3b,fp83b,gptq3b,nv3b}_{main,qserve}.json` + `gate_t2_gb10v3_pm3b_r0.125.json` + `gb10v3_session.log`（boot id/时间戳）；脚本 `docs/vllm_final_scripts/gb10v3_{serve_point,session}.sh`、`gb10v3_make_fp8.py`。
